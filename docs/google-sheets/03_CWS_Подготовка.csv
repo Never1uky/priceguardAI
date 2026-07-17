@@ -1,0 +1,15 @@
+﻿Раздел,Этап,ID,Задача,Инструкция,Ссылка / путь,Готово,Комментарий
+Аккаунт,1,A.1,Google-аккаунт разработчика,Нужен Google-аккаунт для входа в Chrome Web Store Developer Dashboard,https://chrome.google.com/webstore/devconsole,,
+Аккаунт,1,A.2,Регистрация разработчика,Оплатить единоразовый взнос $5 (если аккаунт новый),Developer Dashboard → Register,,Один раз на аккаунт
+Аккаунт,1,A.3,Верификация,Подтвердить email и принять соглашения разработчика,Dashboard → Account,,
+Аккаунт,1,A.4,Контакт поддержки,Указать email поддержки пользователей,Dashboard → Account details,,priceguardAlsupp0rt@yandex.ru
+Юридическое,2,L.1,Privacy Policy RU,Опубликовать на сайте / GitHub Pages,https://priceguard-landing.vercel.app/privacy · docs/privacy/index.html,,v2.0 · 17 июля 2026
+Юридическое,2,L.2,Privacy Policy EN,Английская версия,docs/privacy/en.html,,
+Юридическое,2,L.3,Деплой GitHub Pages (опц.),Settings → Pages → main /docs,https://USER.github.io/priceguard-ai/privacy/,,Основной URL — лендинг
+Юридическое,2,L.4,Проверка URL,Открыть privacy URL в инкогнито,Должен открываться без 404,,
+Юридическое,2,L.5,Контакт в политике,priceguardAlsupp0rt@yandex.ru уже в MD/HTML,docs/privacy/*.html,,не privacy@
+Сборка,3,B.1,Автотесты,npm run test,,,
+Сборка,3,B.2,Preflight,npm run qa:preflight,,,
+Сборка,3,B.3,Zip,npm run package:zip,priceguard-ai-v2.20.8.zip,,
+Сборка,3,B.4,Тест zip в Chrome,Загрузить zip или dist на Win + Mac,,,
+Сборка,3,B.5,Supabase Edge,"Деплой product-intel, reviews-fetch, telegram-webhook и др.",supabase functions deploy …,,

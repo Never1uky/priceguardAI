@@ -1,0 +1,22 @@
+﻿Поле,Значение
+Проект,PriceGuard AI
+Версия,2.20.8
+Тестировщик,
+Email тестировщика,
+Дата начала,
+Дата окончания,
+Windows Chrome версия,
+macOS Chrome версия,
+Zip для теста,priceguard-ai-v2.20.8.zip
+Privacy Policy URL,https://priceguard-landing.vercel.app/privacy
+,
+Итог QA,
+P0 пройдено (Win),
+P0 пройдено (Mac),
+Критические баги,
+Блокер релиза,ДА / НЕТ
+,
+Итог CWS,
+Аккаунт разработчика,
+Скриншоты готовы,
+Отправлено на review,

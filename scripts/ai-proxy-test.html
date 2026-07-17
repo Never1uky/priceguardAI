@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PriceGuard AI — тест ai-proxy</title>
+  <style>
+    :root {
+      --bg: #0f1216;
+      --card: #171b21;
+      --border: #262c35;
+      --text: #e7ecf2;
+      --muted: #93a1b1;
+      --accent: #4f8cff;
+      --ok: #3ecf8e;
+      --err: #ff6b6b;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+      padding: 32px 16px;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+    label:first-child { margin-top: 0; }
+    input, textarea, select {
+      width: 100%;
+      background: #0e1116;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 9px 11px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    textarea { resize: vertical; min-height: 64px; }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    button {
+      margin-top: 18px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .status { margin-top: 14px; font-size: 14px; font-weight: 600; min-height: 20px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .status.pending { color: var(--muted); }
+    pre {
+      background: #0e1116;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 12px 0 0;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    code { font-family: var(--mono); background: #0e1116; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Тест Edge Function <code>ai-proxy</code></h1>
+    <p class="sub">Отправляет POST-запрос на <code>{SUPABASE_URL}/functions/v1/ai-proxy</code> и показывает ответ.</p>
+
+    <div class="card">
+      <label for="url">Supabase URL</label>
+      <input id="url" type="text" placeholder="https://YOUR_PROJECT.supabase.co" />
+
+      <label for="key">Anon / publishable key</label>
+      <input id="key" type="password" placeholder="sb_publishable_... или eyJ..." />
+      <div class="hint">Ключ публичный (anon) — можно вставлять. Значения сохраняются локально в браузере.</div>
+
+      <div class="row">
+        <div>
+          <label for="provider">Провайдер</label>
+          <select id="provider">
+            <option value="grok">grok (grok-3-mini)</option>
+            <option value="openai">openai (gpt-4o-mini)</option>
+          </select>
+        </div>
+        <div>
+          <label for="maxTokens">max_tokens</label>
+          <input id="maxTokens" type="number" value="64" min="1" />
+        </div>
+      </div>
+
+      <label for="prompt">Промпт (user)</label>
+      <textarea id="prompt">Reply with exactly one word: OK</textarea>
+
+      <button id="send">Отправить запрос</button>
+      <div id="status" class="status"></div>
+      <pre id="output" hidden></pre>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const LS_URL = 'pg_ai_proxy_url';
+    const LS_KEY = 'pg_ai_proxy_key';
+
+    // Предзаполнение из .env проекта (anon key публичный).
+    const DEFAULTS = {
+      url: 'https://ihlfvpocwobvcpxbypsd.supabase.co',
+      key: 'sb_publishable_rWa5ylI92a_zefD36TO-rQ_cyUPnc2u',
+    };
+
+    $('url').value = localStorage.getItem(LS_URL) || DEFAULTS.url;
+    $('key').value = localStorage.getItem(LS_KEY) || DEFAULTS.key;
+
+    function setStatus(text, kind) {
+      const el = $('status');
+      el.textContent = text;
+      el.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    $('send').addEventListener('click', async () => {
+      const url = $('url').value.trim().replace(/\/$/, '');
+      const key = $('key').value.trim();
+      const provider = $('provider').value;
+      const prompt = $('prompt').value;
+      const maxTokens = Number($('maxTokens').value) || undefined;
+      const out = $('output');
+
+      out.hidden = true;
+      out.textContent = '';
+
+      if (!url || !key) {
+        setStatus('Укажите Supabase URL и anon key.', 'err');
+        return;
+      }
+
+      localStorage.setItem(LS_URL, url);
+      localStorage.setItem(LS_KEY, key);
+
+      const endpoint = url + '/functions/v1/ai-proxy';
+      const body = {
+        provider,
+        messages: [
+          { role: 'system', content: 'You are a connection test assistant.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        jsonMode: false,
+        deviceId: 'ai-proxy-test-html',
+      };
+
+      $('send').disabled = true;
+      setStatus('Отправка запроса…', 'pending');
+      const started = performance.now();
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + key,
+            apikey: key,
+          },
+          body: JSON.stringify(body),
+        });
+
+        const durationMs = Math.round(performance.now() - started);
+        const text = await response.text();
+        let data;
+        try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+        out.hidden = false;
+        out.textContent = JSON.stringify(data ?? text, null, 2);
+
+        if (response.ok && data && data.ok) {
+          setStatus(`✅ HTTP ${response.status} за ${durationMs} мс — провайдер ${data.provider} (${data.model})`, 'ok');
+        } else {
+          const err = (data && data.error) || ('HTTP ' + response.status);
+          setStatus(`❌ HTTP ${response.status} за ${durationMs} мс — ${err}`, 'err');
+        }
+      } catch (error) {
+        setStatus('❌ Сетевая ошибка: ' + (error && error.message ? error.message : error), 'err');
+      } finally {
+        $('send').disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Privacy Policy for PriceGuard AI — Chrome extension, website and Telegram bots" />
+  <title>Privacy Policy — PriceGuard AI</title>
+  <link rel="alternate" hreflang="ru" href="index.html" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="../">PriceGuard AI</a>
+      <nav class="lang-switch" aria-label="Language">
+        <a href="index.html">RU</a>
+        <strong>EN</strong>
+      </nav>
+    </header>
+
+    <article class="card">
+      <h1>Privacy Policy</h1>
+      <p class="meta">
+        <strong>Effective date:</strong> 17 July 2026 · <strong>Version:</strong> 2.0<br />
+        <strong>Contact:</strong> <a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a><br />
+        <strong>Support Telegram:</strong> @priceguard_supportbot
+      </p>
+      <p>Published page: <a href="https://priceguard-landing.vercel.app/privacy">priceguard-landing.vercel.app/privacy</a></p>
+
+      <h2>1. Overview</h2>
+      <p>This Policy explains how <strong>PriceGuard AI</strong> (Chrome extension, website, Edge backends, Telegram bots) processes data.</p>
+      <p>Operator: <strong>Kulikov Maxim Vladimirovich</strong> (self-employed, INN 504213122300, Russia).</p>
+      <p>By using the product you agree to this Policy. If you do not agree, do not install the extension or connect Telegram.</p>
+      <p>PriceGuard AI helps compare prices on Wildberries, Ozon and Yandex Market, run AI review analysis, track prices, and send alerts (browser and Telegram), including AI analysis from a product link in the alerts bot.</p>
+
+      <h2>2. Data we process</h2>
+
+      <h3>2.1 Product and price data</h3>
+      <p>Titles, SKUs, product URLs, prices/discounts, cross-marketplace comparisons, watchlists, target prices, alert thresholds.</p>
+      <p><strong>Where:</strong> primarily <code>chrome.storage.local</code>; with an account — also Supabase (<code>tracked_products</code>, and <code>product_price_history</code> when server monitoring is on).</p>
+
+      <h3>2.2 Reviews and AI analysis</h3>
+      <p>When you run AI analysis (extension or Telegram alerts bot), review texts and short product fields are sent via our Edge proxy to AI providers. Results may be stored in a shared <code>product_cache</code> (~7-day TTL) keyed by marketplace + product id (not by your email). AI API keys are never stored in the extension.</p>
+
+      <h3>2.3 Account (optional)</h3>
+      <p>Via Supabase Auth: email, user UUID, session tokens (local). We do not store plaintext passwords.</p>
+
+      <h3>2.4 device_id</h3>
+      <p>Random UUID for AI rate limits, license binding, anonymous telemetry. Not linked to identity until you sign in.</p>
+
+      <h3>2.5 Telegram (optional)</h3>
+      <p>If you provide a Chat ID: delivery of price alerts; product session for AI card buttons; AI chat threads (~48h TTL); support messages forwarded to the operator. Bots: <strong>@PriceGuardAlertsBot</strong>, <strong>@priceguard_supportbot</strong>. Chat ID is not sold.</p>
+
+      <h3>2.6 Server price monitoring (Bright Data)</h3>
+      <p>With Telegram server monitoring enabled, our servers fetch product pages/data. For antibot marketplaces we may use <strong>Bright Data Web Unlocker</strong> (product URL in, HTML/content out). Your browser cookies are <strong>not</strong> sent to Bright Data. Short price results may be cached (~2 hours).</p>
+
+      <h3>2.7 Telemetry</h3>
+      <p>Anonymous search metrics, AI request logs (provider, success, duration), authenticity events, extension version. No full browsing history or card PANs.</p>
+
+      <h3>2.8 Premium payments</h3>
+      <p>Processed by <strong>YooKassa</strong>. We receive payment status and license binding data only.</p>
+
+      <h3>2.9 Optional affiliate URL parameters</h3>
+      <p>Technical partner query params may be appended to product links from local settings. No separate sale of personal data for ads.</p>
+
+      <h3>2.10 Website</h3>
+      <p>Technical cookies/localStorage for payment/session pages. No marketing email without consent.</p>
+
+      <h2>3. Purposes</h2>
+      <p>Provide extension and bot features; AI analysis and caching; alerts and comparison; Premium billing; support and security; improve search/AI quality via aggregated telemetry.</p>
+
+      <h2>4. Storage and processors</h2>
+      <table>
+        <thead><tr><th>Category</th><th>Where / who</th></tr></thead>
+        <tbody>
+          <tr><td>Local settings &amp; history</td><td>Your browser</td></tr>
+          <tr><td>Account, sync, cache, logs</td><td>Supabase</td></tr>
+          <tr><td>AI requests</td><td>xAI (Grok), OpenAI, Perplexity (incl. via AITunnel)</td></tr>
+          <tr><td>Server scrape</td><td>Bright Data (page URL)</td></tr>
+          <tr><td>Payments</td><td>YooKassa</td></tr>
+          <tr><td>Bot messages</td><td>Telegram</td></tr>
+          <tr><td>Website</td><td>Hosting (e.g. Vercel)</td></tr>
+        </tbody>
+      </table>
+
+      <h2>5. Retention</h2>
+      <p>Account/license while active (+ reasonable period after); local data until uninstall/clear; product_cache ~7 days; scrape cache ~2 hours; Telegram AI threads ~48 hours; service logs typically up to 90 days unless security requires longer.</p>
+
+      <h2>6. Your rights and deletion</h2>
+      <p>You may request access, correction, restriction or deletion of account-related data.</p>
+      <p>Email <a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a> with subject “Data deletion” and your account email. Local data is removed with the extension. To stop Telegram: disconnect in Settings and/or delete the bot chat.</p>
+
+      <h2>7. Security</h2>
+      <p>HTTPS; secrets server-side only; access controls.</p>
+
+      <h2>8. Children</h2>
+      <p>Not intended for users under 18.</p>
+
+      <h2>9. Changes</h2>
+      <p>The current version is published on the website and in the docs repository.</p>
+
+      <h2>10. Contact</h2>
+      <p><a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a> · @priceguard_supportbot · <a href="https://priceguard-landing.vercel.app/privacy">https://priceguard-landing.vercel.app/privacy</a></p>
+    </article>
+
+    <footer>© PriceGuard AI · <a href="index.html">Русский</a></footer>
+  </div>
+</body>
+</html>

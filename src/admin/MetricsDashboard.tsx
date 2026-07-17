@@ -1,0 +1,202 @@
+import { useCallback, useEffect, useState } from 'react';
+import { fetchMetricsDashboard, type MetricsDashboardData } from '@/lib/supabase/metrics-dashboard';
+import { getAuthUser } from '@/lib/supabase/auth';
+import { isDeveloperEmail } from '@/lib/developer-access';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { AlertTriangle, BarChart3, Loader2, RefreshCw } from 'lucide-react';
+
+function MetricTable({
+  title,
+  rows,
+  columns,
+}: {
+  title: string;
+  rows: Record<string, unknown>[];
+  columns: { key: string; label: string }[];
+}) {
+  if (!rows.length) {
+    return (
+      <Card className="shadow-none">
+        <CardContent className="p-3">
+          <p className="mb-1 text-xs font-semibold">{title}</p>
+          <p className="text-[10px] text-muted-foreground">Нет данных</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="shadow-none">
+      <CardContent className="overflow-x-auto p-3">
+        <p className="mb-2 text-xs font-semibold">{title}</p>
+        <table className="w-full text-[10px]">
+          <thead>
+            <tr className="border-b text-left text-muted-foreground">
+              {columns.map((c) => (
+                <th key={c.key} className="px-1 py-1 font-medium">
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 30).map((row, i) => (
+              <tr key={i} className="border-b border-muted/40">
+                {columns.map((c) => (
+                  <td key={c.key} className="px-1 py-1">
+                    {String(row[c.key] ?? '—')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function MetricsDashboard() {
+  const [data, setData] = useState<MetricsDashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const user = await getAuthUser();
+      setEmail(user?.email ?? null);
+      if (!user) {
+        setError('Войдите в аккаунт для просмотра метрик');
+        setData(null);
+        return;
+      }
+      if (!isDeveloperEmail(user.email)) {
+        setError('Доступ только для разработчика');
+        setData(null);
+        return;
+      }
+      const result = await fetchMetricsDashboard();
+      if (!result.ok) {
+        setError(result.error ?? 'Не удалось загрузить метрики');
+        return;
+      }
+      setData(result);
+      if (result.alerts?.wbLowSuccessRate) {
+        console.warn(
+          `[PriceGuard Metrics] WB success rate ${result.alerts.wbSuccessRatePct}% < ${result.alerts.thresholdPct}%`,
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 dark:bg-slate-950">
+      <div className="mx-auto max-w-4xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-indigo-600" />
+            <div>
+              <h1 className="text-lg font-bold">PriceGuard — метрики</h1>
+              <p className="text-xs text-muted-foreground">{email ?? 'Не авторизован'}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Обновить
+          </Button>
+        </div>
+
+        {loading && (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        )}
+
+        {error && !loading && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
+        )}
+
+        {data?.alerts?.wbLowSuccessRate && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">Алерт: поиск Wildberries</p>
+              <p className="text-xs">
+                Success rate {data.alerts.wbSuccessRatePct}% за 24ч (порог {data.alerts.thresholdPct}%)
+              </p>
+            </div>
+          </div>
+        )}
+
+        {data && !loading && (
+          <>
+            {data.wbSuccessRate24h && (
+              <Card className="shadow-none">
+                <CardContent className="p-3">
+                  <p className="text-xs font-semibold">WB — последние 24 часа</p>
+                  <p className="mt-1 text-2xl font-bold text-indigo-600">
+                    {data.wbSuccessRate24h.success_rate_pct}%
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">
+                      ({data.wbSuccessRate24h.successful_requests}/{data.wbSuccessRate24h.total_requests})
+                    </span>
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            <MetricTable
+              title="Поиск — по дням (30 дней)"
+              rows={data.searchDaily as unknown as Record<string, unknown>[]}
+              columns={[
+                { key: 'day', label: 'День' },
+                { key: 'marketplace', label: 'МП' },
+                { key: 'total_requests', label: 'Запросы' },
+                { key: 'success_rate_pct', label: 'Success %' },
+                { key: 'avg_response_time_ms', label: 'Avg ms' },
+              ]}
+            />
+
+            <MetricTable
+              title="Поиск — по неделям (7 дней)"
+              rows={data.searchWeekly as unknown as Record<string, unknown>[]}
+              columns={[
+                { key: 'week_start', label: 'Неделя' },
+                { key: 'marketplace', label: 'МП' },
+                { key: 'total_requests', label: 'Запросы' },
+                { key: 'success_rate_pct', label: 'Success %' },
+              ]}
+            />
+
+            <MetricTable
+              title="AI-запросы"
+              rows={data.aiRequests as unknown as Record<string, unknown>[]}
+              columns={[
+                { key: 'day', label: 'День' },
+                { key: 'provider', label: 'Провайдер' },
+                { key: 'request_count', label: 'Запросы' },
+                { key: 'error_count', label: 'Ошибки' },
+                { key: 'avg_total_tokens', label: 'Avg tokens' },
+              ]}
+            />
+
+            <p className="text-[10px] text-muted-foreground">
+              Обновлено: {new Date(data.generatedAt).toLocaleString('ru-RU')}
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

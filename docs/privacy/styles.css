@@ -1,0 +1,143 @@
+:root {
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #6366f1;
+  --accent-dark: #4f46e5;
+  --border: #e2e8f0;
+  --code-bg: #f1f5f9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+  background: linear-gradient(160deg, #eef2ff 0%, var(--bg) 40%, #faf5ff 100%);
+  min-height: 100vh;
+}
+
+.wrap {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+header {
+  margin-bottom: 2rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--accent-dark);
+  text-decoration: none;
+}
+
+.brand:hover { text-decoration: underline; }
+
+.lang-switch {
+  float: right;
+  font-size: 0.875rem;
+}
+
+.lang-switch a {
+  color: var(--accent);
+  text-decoration: none;
+  margin-left: 0.75rem;
+}
+
+.lang-switch a:hover { text-decoration: underline; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem 2.25rem;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);
+}
+
+h1 {
+  font-size: 1.75rem;
+  line-height: 1.25;
+  margin: 0 0 0.5rem;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin: 2rem 0 0.75rem;
+  color: var(--accent-dark);
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1.25rem 0 0.5rem;
+}
+
+p { margin: 0.75rem 0; }
+
+ul { margin: 0.5rem 0 1rem; padding-left: 1.5rem; }
+li { margin: 0.35rem 0; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin: 1rem 0;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+
+code {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+strong { font-weight: 600; }
+
+.hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+footer {
+  margin-top: 2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .card { padding: 1.25rem 1rem; }
+  .lang-switch { float: none; display: block; margin-top: 0.75rem; }
+  table { font-size: 0.8rem; }
+}

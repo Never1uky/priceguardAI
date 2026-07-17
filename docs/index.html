@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PriceGuard AI — документация</title>
+  <link rel="stylesheet" href="privacy/styles.css" />
+  <style>
+    .links { display: grid; gap: 1rem; margin-top: 1.5rem; }
+    .links a {
+      display: block;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      text-decoration: none;
+      color: var(--text);
+      background: var(--code-bg);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .links a:hover {
+      border-color: var(--accent);
+      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.15);
+    }
+    .links a span { display: block; font-size: 0.85rem; color: var(--muted); margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <a class="brand" href="./">PriceGuard AI</a>
+    </header>
+    <div class="card">
+      <h1>Документация</h1>
+      <p class="meta">Публичные материалы · версия расширения 2.20.8 · Privacy Policy 2.0 (17 июля 2026)</p>
+      <div class="links">
+        <a href="privacy/">
+          Политика конфиденциальности (RU)
+          <span>Privacy Policy — Russian · v2.0</span>
+        </a>
+        <a href="privacy/en.html">
+          Privacy Policy (EN)
+          <span>English · v2.0</span>
+        </a>
+        <a href="https://priceguard-landing.vercel.app/privacy">
+          Актуальная политика на сайте
+          <span>priceguard-landing.vercel.app/privacy</span>
+        </a>
+        <a href="CHROME_WEB_STORE_LISTING.md">
+          Материалы Chrome Web Store
+          <span>Описания, What's New, чеклист публикации</span>
+        </a>
+      </div>
+      <p style="margin-top:2rem;font-size:0.875rem;color:var(--muted)">
+        Для Chrome Web Store укажите Privacy URL:<br />
+        <code>https://priceguard-landing.vercel.app/privacy</code><br />
+        или GitHub Pages: <code>https://&lt;username&gt;.github.io/priceguard-ai/privacy/</code>
+      </p>
+    </div>
+    <footer>PriceGuard AI · v2.20.8</footer>
+  </div>
+</body>
+</html>

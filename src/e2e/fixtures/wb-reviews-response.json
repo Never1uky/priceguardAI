@@ -1,0 +1,31 @@
+{
+  "feedbacks": [
+    {
+      "text": "Отличное качество звука, шумоподавление работает идеально",
+      "pros": "Комфорт, ANC",
+      "cons": "Тяжёлые",
+      "productValuation": 5,
+      "createdDate": "2024-08-23T14:33:10Z"
+    },
+    {
+      "text": "Пришли быстро, оригинал, всё работает",
+      "productValuation": 5,
+      "createdDate": "2024-09-01T10:00:00Z"
+    },
+    {
+      "text": "Цена высокая, но звук того стоит",
+      "productValuation": 4,
+      "createdDate": "2024-09-15T12:00:00Z"
+    },
+    {
+      "text": "Брак в одном наушнике, вернул",
+      "productValuation": 2,
+      "createdDate": "2024-10-01T08:00:00Z"
+    },
+    {
+      "text": "Нормальный товар, доставка 2 дня",
+      "productValuation": 4,
+      "createdDate": "2024-10-10T18:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,230 @@
+/**
+ * Local candidate pool + rejected blacklist for compare (Variant B).
+ */
+
+import type {
+  CompareProduct,
+  ComparisonMarketplace,
+  MarketplaceOffer,
+  SearchCandidateOffer,
+} from '@/types/comparison';
+import { isUrlExcluded, isProductPageUrl } from '@/lib/product-match';
+import { normalizeCompareUrl } from '@/utils/comparison-url';
+
+export const MAX_CANDIDATE_POOL = 3;
+export const MAX_REJECTED_URLS = 20;
+export const POOL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function normalizePoolUrl(url: string): string {
+  try {
+    return normalizeCompareUrl(url);
+  } catch {
+    return url.split('?')[0].split('#')[0];
+  }
+}
+
+export function getRejectedUrls(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+): string[] {
+  return product.rejectedOfferUrls?.[marketplace] ?? [];
+}
+
+export function capRejectedUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls) {
+    const n = normalizePoolUrl(raw);
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+    if (out.length >= MAX_REJECTED_URLS) break;
+  }
+  return out;
+}
+
+export function isPoolFresh(product: CompareProduct, marketplace: ComparisonMarketplace): boolean {
+  const at = product.poolFetchedAt?.[marketplace];
+  if (!at) return false;
+  return Date.now() - at < POOL_TTL_MS;
+}
+
+/** Пул: явное поле или searchCandidates на оффере */
+export function getCandidatePool(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+): SearchCandidateOffer[] {
+  const fromField = product.candidatePoolByMarketplace?.[marketplace];
+  if (fromField?.length) {
+    return fromField.filter((c) => c.url && isProductPageUrl(c.url));
+  }
+  const fromOffer = product.marketplaceOffers?.[marketplace]?.searchCandidates;
+  return (fromOffer ?? []).filter((c) => c.url && isProductPageUrl(c.url));
+}
+
+export function filterPoolExcluding(
+  pool: SearchCandidateOffer[],
+  excludedUrls: string[],
+): SearchCandidateOffer[] {
+  return pool
+    .filter((c) => c.url && !isUrlExcluded(c.url, excludedUrls))
+    .sort(
+      (a, b) =>
+        (b.priority ?? b.matchConfidence) - (a.priority ?? a.matchConfidence) ||
+        b.matchConfidence - a.matchConfidence,
+    )
+    .slice(0, MAX_CANDIDATE_POOL);
+}
+
+/** Следующий кандидат после reject (не rejected, не currentUrl) */
+export function pickNextPoolCandidate(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  rejectedUrl?: string,
+): SearchCandidateOffer | null {
+  const excluded = [
+    ...getRejectedUrls(product, marketplace),
+    ...(rejectedUrl ? [normalizePoolUrl(rejectedUrl)] : []),
+  ];
+  const pool = filterPoolExcluding(getCandidatePool(product, marketplace), excluded);
+  return pool[0] ?? null;
+}
+
+export function syncPoolOntoProduct(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  candidates: SearchCandidateOffer[] | undefined,
+): CompareProduct {
+  const cleaned = filterPoolExcluding(
+    candidates ?? [],
+    getRejectedUrls(product, marketplace),
+  ).slice(0, MAX_CANDIDATE_POOL);
+
+  return {
+    ...product,
+    candidatePoolByMarketplace: {
+      ...product.candidatePoolByMarketplace,
+      [marketplace]: cleaned.length ? cleaned : undefined,
+    },
+    poolFetchedAt: {
+      ...product.poolFetchedAt,
+      [marketplace]: Date.now(),
+    },
+  };
+}
+
+/** Снять привязку карточки, сохранив пул и rejected */
+export function clearBoundOffer(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+): CompareProduct {
+  const marketplaceUrls = { ...product.marketplaceUrls };
+  delete marketplaceUrls[marketplace];
+
+  const marketplaceOffers = { ...product.marketplaceOffers };
+  const prev = marketplaceOffers[marketplace];
+  if (prev) {
+    marketplaceOffers[marketplace] = {
+      ...prev,
+      url: '',
+      price: null,
+      found: false,
+      needsManualPick: false,
+      matchStatus: 'not_found',
+      searchCandidates: getCandidatePool(product, marketplace),
+      error: undefined,
+    };
+  }
+
+  const manualMarketplaces = { ...product.manualMarketplaces };
+  delete manualMarketplaces[marketplace];
+
+  return {
+    ...product,
+    marketplaceUrls,
+    marketplaceOffers,
+    manualMarketplaces,
+  };
+}
+
+/** Blacklist URL; сохранить пул без rejected; опционально bump variant */
+export function markOfferRejectedKeepPool(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  rejectedUrl: string,
+  options: { bumpSearchVariant?: boolean } = {},
+): CompareProduct {
+  const norm = normalizePoolUrl(rejectedUrl);
+  const rejected = capRejectedUrls([
+    ...(product.rejectedOfferUrls?.[marketplace] ?? []),
+    norm,
+  ]);
+
+  const pool = filterPoolExcluding(getCandidatePool(product, marketplace), rejected);
+
+  let next = clearBoundOffer(product, marketplace);
+  next = {
+    ...next,
+    rejectedOfferUrls: {
+      ...next.rejectedOfferUrls,
+      [marketplace]: rejected,
+    },
+    candidatePoolByMarketplace: {
+      ...next.candidatePoolByMarketplace,
+      [marketplace]: pool.length ? pool : undefined,
+    },
+  };
+
+  if (options.bumpSearchVariant) {
+    const variant = (product.searchVariantByMarketplace?.[marketplace] ?? 0) + 1;
+    next = {
+      ...next,
+      searchVariantByMarketplace: {
+        ...next.searchVariantByMarketplace,
+        [marketplace]: variant,
+      },
+    };
+  }
+
+  return next;
+}
+
+/** Очистить bound на всех target-площадках для «Найти заново» */
+export function clearAllBoundTargets(product: CompareProduct): CompareProduct {
+  const targets: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+  let next = product;
+  for (const mp of targets) {
+    if (mp === product.sourceMarketplace) continue;
+    next = clearBoundOffer(next, mp);
+  }
+  return next;
+}
+
+export function poolToOfferCandidates(
+  pool: SearchCandidateOffer[],
+  excludeUrl?: string,
+): SearchCandidateOffer[] {
+  const excluded = excludeUrl ? [normalizePoolUrl(excludeUrl)] : [];
+  return filterPoolExcluding(pool, excluded);
+}
+
+export function offerFromPoolCandidate(
+  marketplace: ComparisonMarketplace,
+  candidate: SearchCandidateOffer,
+  rest: SearchCandidateOffer[],
+): MarketplaceOffer {
+  return {
+    marketplace,
+    title: candidate.title,
+    price: candidate.price,
+    delivery: null,
+    rating: candidate.rating ?? null,
+    url: candidate.url,
+    imageUrl: candidate.imageUrl,
+    found: Boolean(candidate.price && candidate.price > 0),
+    matchConfidence: candidate.matchConfidence,
+    matchStatus: 'probable',
+    searchCandidates: rest.length ? rest : undefined,
+    needsManualPick: false,
+  };
+}

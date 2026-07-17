@@ -1,0 +1,11 @@
+﻿Поле CWS,Язык,Лимит,Текст для вставки,Символов,Готово
+Название,RU,45,PriceGuard AI,13,
+Краткое описание,RU,132,"AI-анализ отзывов, сравнение цен WB/Ozon/Маркет и алерты в Telegram — даже без открытого Chrome.",109,
+Краткое описание,EN,132,"AI review insights, cross-store prices on WB/Ozon/Yandex Market & Telegram alerts — even without Chrome open.",109,
+Single purpose,RU,—,"Помогает сравнивать цены, анализировать отзывы с помощью AI и получать уведомления о падении цены на Wildberries, Ozon и Яндекс.Маркет (браузер и Telegram).",,
+Single purpose,EN,—,"Helps compare prices, analyze reviews with AI, and get price-drop alerts on Wildberries, Ozon, and Yandex Market (browser and Telegram).",,
+Категория,—,—,Shopping,,
+Язык листинга,—,—,"Russian (primary), English",,
+Data disclosure,EN,—,"Collects product URLs, prices, review text for AI analysis; optional email account; optional Telegram chat id. Server scrape may use Bright Data (product URL only). Privacy: https://priceguard-landing.vercel.app/privacy",,
+What's New RU,—,—,"• AI по ссылке в Telegram · серверные отзывы Ozon/YM · история цен · мониторинг без Chrome · Privacy 2.0",,
+What's New EN,—,—,"• AI from product link in Telegram · Ozon/YM server reviews · price history · monitoring without Chrome · Privacy 2.0",,

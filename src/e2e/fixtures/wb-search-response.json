@@ -1,0 +1,26 @@
+{
+  "data": {
+    "products": [
+      {
+        "id": 292619464,
+        "name": "AirPods Max наушники беспроводные",
+        "brand": "Apple",
+        "salePriceU": 5499000,
+        "priceU": 6999000,
+        "reviewRating": 4.8,
+        "feedbacks": 1240,
+        "time1": 1,
+        "time2": 3
+      },
+      {
+        "id": 111111111,
+        "name": "Наушники TWS generic",
+        "brand": "NoName",
+        "salePriceU": 99000,
+        "priceU": 199000,
+        "reviewRating": 3.2,
+        "feedbacks": 12
+      }
+    ]
+  }
+}

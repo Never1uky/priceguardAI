@@ -1,0 +1,36 @@
+# Backup trigger for server-side Telegram price checks (every 6h UTC).
+# Primary schedule: pg_cron via supabase/scripts/setup-update-prices-cron.sql
+#
+# Repo secrets:
+#   SUPABASE_URL              e.g. https://ihlfvpocwobvcpxbypsd.supabase.co
+#   UPDATE_PRICES_CRON_SECRET same as Edge Function secret
+
+name: update-prices
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call update-prices
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          UPDATE_PRICES_CRON_SECRET: ${{ secrets.UPDATE_PRICES_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${UPDATE_PRICES_CRON_SECRET:-}" ]; then
+            echo "Missing SUPABASE_URL or UPDATE_PRICES_CRON_SECRET secrets"
+            exit 1
+          fi
+          BASE="${SUPABASE_URL%/}"
+          curl -fsS -X POST "${BASE}/functions/v1/update-prices" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${UPDATE_PRICES_CRON_SECRET}" \
+            -d '{}' \
+            -o /tmp/update-prices.json
+          cat /tmp/update-prices.json
+          python3 -c "import json,sys; d=json.load(open('/tmp/update-prices.json')); sys.exit(0 if d.get('ok') else 1)"

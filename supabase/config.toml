@@ -1,0 +1,129 @@
+# PriceGuard AI — Supabase config
+# Docs: https://supabase.com/docs/guides/cli/config
+#
+# Внимание: `supabase config push` применяет весь файл к remote.
+# Не оставляйте локальные дефолты (127.0.0.1) — они перезапишут production.
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+# Auth
+# Встроенная почта Supabase часто не доходит до Яндекс/Mail.ru.
+# Confirm email выключен — регистрация сразу создаёт сессию (нужно для Chrome-расширения).
+# Для надёжных писем (сброс пароля) подключите Custom SMTP: Dashboard → Authentication → SMTP.
+[auth]
+enabled = true
+site_url = "https://supabase.com/dashboard/project/ihlfvpocwobvcpxbypsd"
+additional_redirect_urls = []
+enable_signup = true
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[auth.mfa.phone]
+enroll_enabled = false
+verify_enabled = false
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+double_confirm_changes = true
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
+
+[storage]
+enabled = true
+
+[storage.analytics]
+enabled = false
+
+[storage.vector]
+enabled = false
+
+# Функции включаются автоматически, если есть папка supabase/functions
+# Убираем [functions] enabled = true
+
+# Настройки для конкретных функций (без JWT)
+[functions.ai-proxy]
+verify_jwt = false
+
+[functions.tracked-sync]
+verify_jwt = false
+
+[functions.search-metrics]
+verify_jwt = false
+
+[functions.metrics-dashboard]
+verify_jwt = false
+
+[functions.search-alerts]
+verify_jwt = false
+
+[functions.claim-device-tracked]
+verify_jwt = false
+
+[functions.weekly-metrics-digest]
+verify_jwt = false
+
+[functions.price-alert-notify]
+verify_jwt = false
+
+[functions.product-cache]
+verify_jwt = false
+
+[functions.cross-market-map]
+verify_jwt = false
+
+[functions.match-feedback]
+verify_jwt = false
+
+[functions.update-prices]
+verify_jwt = false
+
+[functions.sync-alert-settings]
+verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.product-intel]
+verify_jwt = false
+
+[functions.reviews-fetch]
+verify_jwt = false
+
+[functions.support-webhook]
+verify_jwt = false
+
+[functions.support-notify]
+verify_jwt = false
+
+[functions.create-payment]
+verify_jwt = false
+
+[functions.check-payment]
+verify_jwt = false
+
+[functions.yookassa-webhook]
+verify_jwt = false
+
+[functions.validate-license]
+verify_jwt = false
+
+[functions.restore-license]
+verify_jwt = false
