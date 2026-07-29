@@ -1,10 +1,13 @@
-﻿Тип,ID,Размер,Формат,Файл / содержание,Статус,Комментарий
-Store icon,G.1,128×128,PNG,public/icons/icon128.png,Есть в проекте,Обязательно
+Тип,ID,Размер,Формат,Файл / содержание,Статус,Комментарий
+Store icon,G.1,128×128,PNG,docs/store-assets/icons/store-icon-128.png,Есть,Shield + P + AI (master)
 Extension icons,G.2,16/32/48/128,PNG,public/icons/,Есть,В zip автоматически
-Скриншот 1,G.3,1280×800,PNG/JPEG,"Отслеживайте цены — popup на WB, кнопка Отслеживать",Сделать,Hero
-Скриншот 2,G.4,1280×800,PNG/JPEG,Сравнение на 3 площадках — таблица WB/Ozon/YM,Сделать,
-Скриншот 3,G.5,1280×800,PNG/JPEG,"AI-анализ отзывов — вердикт, плюсы/минусы",Сделать,
-Скриншот 4,G.6,1280×800,PNG/JPEG,Уведомления о скидках — push + список,Сделать,
-Скриншот 5,G.7,1280×800,PNG/JPEG,"Настройки и Premium — квота AI, уведомления",Сделать,
-Promo tile,G.8,440×280,PNG,Иконка + слоган + мини-скрин,Опционально,
-Marquee,G.9,1400×560,PNG,Featured баннер,Опционально,
+Small promo,G.2b,440×280,PNG,docs/store-assets/icons/small-promo-440x280.png,Есть,Опционально
+Скриншот 1,G.3,1280×800,PNG,docs/store-assets/01-compare.png,Есть,Где дешевле · таблица WB/Ozon/YM
+Скриншот 2,G.4,1280×800,PNG,docs/store-assets/02-ai-reviews.png,Есть,AI-анализ отзывов · вердикт
+Скриншот 3,G.5,1280×800,PNG,docs/store-assets/03-tracking.png,Есть,Мои товары · мониторинг
+Скриншот 4,G.6,1280×800,PNG,docs/store-assets/04-price-history.png,Есть,Скидка и история цен
+Скриншот 5,G.7,1280×800,PNG,docs/store-assets/05-full-analysis.png,Есть,Полный AI-разбор Premium
+Скриншот 6,G.7b,1280×800,PNG,docs/store-assets/06-telegram-ai.png,Есть опционально,Telegram без Chrome
+Скриншот 7,G.7c,1280×800,PNG,docs/store-assets/07-telegram-alert.png,Есть опционально,Алерты в @PriceGuardAlertsBot
+Promo tile,G.8,440×280,PNG,docs/store-assets/icons/small-promo-440x280.png,Есть,Логотип + слоган
+Marquee,G.9,1400×560,PNG,docs/store-assets/icons/marquee-1400x560.png,Есть,Featured баннер

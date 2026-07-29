@@ -1,7 +1,32 @@
+import { sanitizeMarketplaceButtonUrl } from './safe-url.ts';
+
 /**
  * Общие хелперы Telegram для @PriceGuardAlertsBot
  * HTML parse_mode + inline-кнопка «Открыть товар»
  */
+
+/** Публичная страница расширения в Chrome Web Store */
+export const CHROME_WEB_STORE_URL =
+  'https://chromewebstore.google.com/detail/priceguard-ai/ipaichogganccpnapdgkjldplllnjlpf';
+
+/** Страница отзывов в Chrome Web Store */
+export const CHROME_WEB_STORE_REVIEWS_URL = `${CHROME_WEB_STORE_URL}/reviews`;
+
+/**
+ * Server-side price sources (Telegram / update-prices / shared scrape cache).
+ * Not personal account prices from the user's Chrome session.
+ */
+export type TelegramPriceSource = 'cache' | 'scrappey' | 'legacy' | 'server';
+
+/** Short caption for TG messages */
+export function priceSourceCaption(source?: TelegramPriceSource | null): string {
+  if (source === 'cache') return 'из кэша (серверная проверка)';
+  return 'серверная проверка';
+}
+
+/** Disclaimer: bot price ≠ personal marketplace account price */
+export const SERVER_PRICE_DISCLAIMER =
+  'ℹ️ Цена по <b>серверной проверке</b>; в вашем аккаунте на площадке может отличаться (регион, скидки).';
 
 export interface TelegramSendResult {
   sent: boolean;
@@ -45,6 +70,7 @@ export function buildPriceDropMessage(input: {
   marketplace?: string | null;
   /** Premium: приоритетная проверка */
   priority?: boolean;
+  priceSource?: TelegramPriceSource | null;
 }): string {
   const title = escapeHtml(truncateTitle(input.title));
   const drop = input.oldPrice - input.newPrice;
@@ -54,8 +80,8 @@ export function buildPriceDropMessage(input: {
   const mp = marketplaceLabel(input.marketplace);
   const mpLine = mp ? `\n🏷 ${escapeHtml(mp)}` : '';
   const head = input.priority
-    ? '📉⚡ <b>Цена упала!</b> <i>(приоритет Premium)</i>'
-    : '📉 <b>Цена упала!</b>';
+    ? '📉⚡ <b>Цена упала на площадке!</b> <i>(приоритет Premium)</i>'
+    : '📉 <b>Цена упала на площадке!</b>';
 
   return [
     head,
@@ -65,6 +91,9 @@ export function buildPriceDropMessage(input: {
     `💸 Было: <s>${formatRub(input.oldPrice)}</s>`,
     `✅ Стало: <b>${formatRub(input.newPrice)}</b>`,
     `📊 Выгода: <b>−${formatRub(drop)}</b> (−${pct}%)`,
+    '',
+    `📡 ${escapeHtml(priceSourceCaption(input.priceSource ?? 'server'))}`,
+    SERVER_PRICE_DISCLAIMER,
     '',
     '⭐ <i>PriceGuard AI</i>',
   ].join('\n');
@@ -93,6 +122,8 @@ export function buildComparePriceDropMessage(input: {
     `💸 Было: <s>${formatRub(input.oldPrice)}</s>`,
     `✅ Стало: <b>${formatRub(input.newPrice)}</b>`,
     `📊 Выгода: <b>−${formatRub(drop)}</b> (−${pct}%)`,
+    '',
+    SERVER_PRICE_DISCLAIMER,
     '',
     '⭐ <i>PriceGuard AI</i>',
   ].join('\n');
@@ -134,72 +165,138 @@ export function buildTargetPriceMessage(input: {
   targetPrice: number;
   marketplace?: string | null;
   priority?: boolean;
+  priceSource?: TelegramPriceSource | null;
 }): string {
   const title = escapeHtml(truncateTitle(input.title));
   const mp = marketplaceLabel(input.marketplace);
   const mpLine = mp ? `\n🏷 ${escapeHtml(mp)}` : '';
   const head = input.priority
-    ? '🎯⚡ <b>Целевая цена достигнута!</b> <i>(приоритет Premium)</i>'
-    : '🎯 <b>Целевая цена достигнута!</b>';
+    ? '🎯⚡ <b>Целевая цена на площадке!</b> <i>(приоритет Premium)</i>'
+    : '🎯 <b>Целевая цена на площадке!</b>';
 
   return [
-    head,    '',
+    head,
+    '',
     `🛍 <b>${title}</b>${mpLine}`,
     '',
     `✅ Сейчас: <b>${formatRub(input.currentPrice)}</b>`,
     `🎯 Цель: ${formatRub(input.targetPrice)}`,
+    '',
+    `📡 ${escapeHtml(priceSourceCaption(input.priceSource ?? 'server'))}`,
+    SERVER_PRICE_DISCLAIMER,
     '',
     '⭐ <i>PriceGuard AI</i>',
   ].join('\n');
 }
 
 /** Приветствие /start — Chat ID пользователя */
+/** Reply keyboard labels (must match telegram-webhook text handlers). */
+export const REPLY_BTN_STATUS = '📦 Мои товары';
+export const REPLY_BTN_AI = '✨ AI-анализ';
+export const REPLY_BTN_FAQ = '❓ FAQ';
+export const REPLY_BTN_HELP = 'ℹ️ Помощь';
+
+export function alertsMainReplyKeyboard(): {
+  keyboard: Array<Array<{ text: string }>>;
+  resize_keyboard: true;
+  is_persistent: true;
+} {
+  return {
+    keyboard: [
+      [{ text: REPLY_BTN_STATUS }, { text: REPLY_BTN_AI }],
+      [{ text: REPLY_BTN_FAQ }, { text: REPLY_BTN_HELP }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
 export function buildStartWelcomeMessage(chatId: string | number): string {
   return [
-    '👋 <b>Добро пожаловать в PriceGuard Alerts!</b>',
+    '👋 <b>PriceGuard Alerts</b>',
     '',
-    'Я — <b>@PriceGuardAlertsBot</b>.',
-    'Анализ товара по ссылке · алерты о цене · AI-вопросы.',
+    'Цены WB / Ozon / Маркет · AI по ссылке · алерты без Chrome.',
     '',
-    '🔗 <b>Пришлите ссылку</b> на WB / Ozon / Яндекс.Маркет',
-    '→ фото/карточка, AI Score, кнопки (недостатки, где дешевле, история…)',
+    '✨ <b>Умею:</b>',
+    '• следить за ценой и писать при падении',
+    '• AI-разбор по ссылке (из кэша или заново)',
+    '• сравнение площадок из сохранённых данных',
     '',
-    '📉 Алерты работают <b>без открытого Chrome</b>, если Chat ID привязан в расширении.',
+    '🔗 <b>Отправьте ссылку</b> на товар — или выберите кнопку ниже.',
     '',
-    '📋 <b>Подключение алертов:</b>',
-    '1️⃣ Расширение → «Аккаунт» (вход)',
-    '2️⃣ Настройки → Telegram → <b>Вкл</b>',
-    `3️⃣ Chat ID: <code>${escapeHtml(String(chatId))}</code>`,
-    '4️⃣ «Подключить и проверить»',
+    '📋 Привязка: расширение → Аккаунт → Настройки → Telegram',
+    `Chat ID: <code>${escapeHtml(String(chatId))}</code> → «Подключить и проверить»`,
     '',
-    '❓ Расширение / ключ Premium: @priceguard_supportbot',
-    '',
-    '⌨️ /status · /add · /help · /chatid',
+    `⬇️ Установить расширение: ${CHROME_WEB_STORE_URL}`,
+    'Поддержка: @priceguard_supportbot',
   ].join('\n');
 }
 
 export function buildHelpMessage(): string {
   return [
-    'ℹ️ <b>Справка @PriceGuardAlertsBot</b>',
+    'ℹ️ <b>Справка</b>',
     '',
-    '🔗 Ссылка на товар — AI-карточка (кэш / серверный разбор WB·Ozon·YM)',
-    '/start — приветствие и Chat ID',
-    '/status — список товаров и цены',
-    '/add — только добавить в отслеживание',
-    '/chatid — показать Chat ID',
-    '/help — эта справка',
-    '/cancel — выйти из режима вопроса AI',
+    '🔗 Ссылка на товар → AI-карточка и кнопки',
+    '📦 «Мои товары» — список с анализом / сравнением / удалением',
+    '❓ FAQ — частые вопросы',
     '',
-    '📉 Алерты: Free до 5 товаров · Premium — без лимита + приоритет',
-    '🤖 Free AI в расширении: до 3 полных анализов/сутки (после входа)',
-    '💬 Вопросы по расширению — @priceguard_supportbot',
+    '/start · /status · /add · /help',
+    '',
+    '📉 Free: до 5 товаров · Premium: до 50 + приоритет',
+    '',
+    'Цена в боте — по серверной проверке (может отличаться от вашего аккаунта на Ozon/WB/Маркет).',
+    `⬇️ Chrome Web Store: ${CHROME_WEB_STORE_URL}`,
+    '💬 @priceguard_supportbot',
   ].join('\n');
+}
+
+/** Short status card body (one product message). */
+export function buildTrackedItemCardMessage(item: {
+  title: string;
+  marketplace?: string | null;
+  lastPrice?: number | null;
+  targetPrice?: number | null;
+  lastChecked?: string | null;
+  lastFetchError?: string | null;
+  minLine?: string | null;
+}): string {
+  const title = escapeHtml(truncateTitle(item.title || 'Товар', 80));
+  const mp = marketplaceLabel(item.marketplace);
+  const price =
+    item.lastPrice != null && item.lastPrice > 0
+      ? formatRub(Number(item.lastPrice))
+      : '—';
+  const target =
+    item.targetPrice != null && Number(item.targetPrice) > 0
+      ? ` · цель ${formatRub(Number(item.targetPrice))}`
+      : '';
+  const lines = [
+    `🛍 <b>${title}</b>`,
+    `💰 ${price}${target}${mp ? ` · ${escapeHtml(mp)}` : ''}`,
+    `🕒 ${escapeHtml(formatCheckedAge(item.lastChecked))}${escapeHtml(fetchErrorHint(item.lastFetchError))}`,
+    '📡 серверная проверка',
+  ];
+  if (item.minLine) lines.push(escapeHtml(item.minLine));
+  return lines.join('\n');
+}
+
+export function trackedItemInlineKeyboard(ref: string): Array<
+  Array<{ text: string; callback_data: string }>
+> {
+  return [
+    [
+      { text: '🤖 Анализ', callback_data: `st:ai:${ref}` },
+      { text: '📊 Сравнение', callback_data: `st:cmp:${ref}` },
+      { text: '🗑 Удалить', callback_data: `st:rm:${ref}` },
+    ],
+  ];
 }
 
 export function buildProductAddedMessage(input: {
   title: string;
   price: number;
   marketplace?: string | null;
+  priceSource?: TelegramPriceSource | null;
 }): string {
   const title = escapeHtml(truncateTitle(input.title));
   const mp = marketplaceLabel(input.marketplace);
@@ -209,9 +306,12 @@ export function buildProductAddedMessage(input: {
     '✅ <b>Товар добавлен в отслеживание!</b>',
     '',
     `🛍 <b>${title}</b>${mpLine}`,
-    `💰 Текущая цена: <b>${formatRub(input.price)}</b>`,
+    `💰 Цена на площадке: <b>${formatRub(input.price)}</b>`,
+    `📡 ${escapeHtml(priceSourceCaption(input.priceSource ?? 'server'))}`,
     '',
-    'Я сообщу, когда цена упадёт.',
+    SERVER_PRICE_DISCLAIMER,
+    '',
+    'Сообщу, когда цена на площадке упадёт (по серверной проверке).',
     'Список: /status',
     '',
     '⭐ <i>PriceGuard AI</i>',
@@ -247,6 +347,12 @@ export function buildStatusMessage(
     lastChecked?: string | null;
     lastFetchError?: string | null;
   }>,
+  options?: {
+    /** Всего active на сервере (может быть > items.length для Free) */
+    totalCount?: number;
+    /** Free: лимит мониторинга cron */
+    freeLimit?: number;
+  },
 ): string {
   if (items.length === 0) {
     return [
@@ -279,11 +385,30 @@ export function buildStatusMessage(
       ? `\n\n…и ещё ${items.length - 25} тов.`
       : '';
 
+  const total = options?.totalCount ?? items.length;
+  const freeLimit = options?.freeLimit;
+  const header =
+    freeLimit != null
+      ? `📋 <b>Отслеживание</b> · ${items.length} из ${freeLimit} (мониторинг)${total > freeLimit ? ` · на сервере ${total}` : ''}`
+      : `📋 <b>Отслеживание</b> · ${items.length} шт.`;
+
+  const orphanHint =
+    freeLimit != null && total > freeLimit
+      ? [
+          '',
+          `⚠️ На сервере ${total} товаров — лишние не мониторятся.`,
+          'Откройте расширение → «Мои товары» → «Обновить» для синхронизации.',
+        ].join('\n')
+      : '';
+
   return [
-    `📋 <b>Отслеживание</b> · ${items.length} шт.`,
+    header,
     '',
     ...lines,
     more,
+    orphanHint,
+    '',
+    SERVER_PRICE_DISCLAIMER,
     '',
     '⭐ <i>PriceGuard AI</i>',
   ].filter(Boolean).join('\n');
@@ -330,8 +455,7 @@ export function matchFaqReply(text: string): string | null {
       reply: [
         '🔗 <b>Ссылка на товар</b>',
         '',
-        'Пришлите ссылку WB / Ozon / Яндекс.Маркет — бот покажет карточку,',
-        'AI Score (из кэша или серверный анализ для WB) и кнопки.',
+        'Пришлите ссылку WB / Ozon / Яндекс.Маркет — разберу отзывы и покажу вердикт AI с кнопками.',
         '',
         'Следить за ценой: кнопка «🔔» или команда <code>/add</code>.',
       ].join('\n'),
@@ -342,9 +466,10 @@ export function matchFaqReply(text: string): string | null {
         '👑 <b>Premium</b>',
         '',
         'Free: до 5 товаров + алерты.',
-        'Premium: без лимита + приоритет проверки цен.',
+        'Premium: до 50 товаров + приоритет проверки цен.',
         '',
         'Сайт · тарифы: https://priceguard-landing.vercel.app/#pricing',
+        `⬇️ Расширение: ${CHROME_WEB_STORE_URL}`,
         'Оплата: расширение → вкладка Premium → ЮKassa.',
         'Алерты при закрытом Chrome — с Telegram (Free и Premium).',
         '',
@@ -402,6 +527,13 @@ export async function sendTelegramMessage(input: {
     | { text: string; callback_data: string }
     | { text: string; url: string }
   >>;
+  /** Persistent reply keyboard under the input field */
+  replyKeyboard?: {
+    keyboard: Array<Array<{ text: string }>>;
+    resize_keyboard?: boolean;
+    is_persistent?: boolean;
+  };
+  removeKeyboard?: boolean;
   /** Переопределить токен (для @priceguard_supportbot) */
   botToken?: string;
 }): Promise<TelegramSendResult> {
@@ -427,15 +559,22 @@ export async function sendTelegramMessage(input: {
 
   if (input.inlineKeyboard && input.inlineKeyboard.length > 0) {
     payload.reply_markup = { inline_keyboard: input.inlineKeyboard };
-  } else if (input.buttonUrl?.startsWith('http')) {
-    payload.reply_markup = {
-      inline_keyboard: [[
-        {
-          text: input.buttonText ?? '🛒 Открыть товар',
-          url: input.buttonUrl.slice(0, 2000),
-        },
-      ]],
-    };
+  } else if (input.replyKeyboard) {
+    payload.reply_markup = input.replyKeyboard;
+  } else if (input.removeKeyboard) {
+    payload.reply_markup = { remove_keyboard: true };
+  } else {
+    const safeButton = sanitizeMarketplaceButtonUrl(input.buttonUrl);
+    if (safeButton) {
+      payload.reply_markup = {
+        inline_keyboard: [[
+          {
+            text: input.buttonText ?? '🛒 Открыть товар',
+            url: safeButton,
+          },
+        ]],
+      };
+    }
   }
 
   try {

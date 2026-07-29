@@ -3,7 +3,7 @@
  *
  * Plan:
  * - Free: alerts yes, up to FREE_TRACK_LIMIT products
- * - Premium: unlimited + processed first (priority)
+ * - Premium: up to PREMIUM_TRACK_LIMIT + processed first (priority)
  *
  * Auth: Authorization Bearer (service_role) OR header x-cron-secret = UPDATE_PRICES_CRON_SECRET
  * Schedule: every 6h via pg_cron / GitHub Actions → POST this function.
@@ -14,23 +14,62 @@ import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import {
   fetchMarketplacePriceDetailed,
   isSignificantDrop,
+  effectiveServerDropThresholds,
   reconstructUrl,
   type Marketplace,
   type PriceSource,
 } from '../_shared/marketplace-prices.ts';
-import type { BrightDataCredentials } from '../_shared/brightdata.ts';
+import { projectScraperCredentials } from '../_shared/reviews-common.ts';
 import {
   buildPriceDropMessage,
   buildTargetPriceMessage,
   sendTelegramMessage,
 } from '../_shared/telegram.ts';
 import { appendPriceHistory } from '../_shared/price-history.ts';
+import {
+  fetchedPriceMatchesTracked,
+  logPriceIdentityReject,
+} from '../_shared/price-identity.ts';
+import { isPremiumRowActive, PREMIUM_ROW_SELECT } from '../_shared/premium-active.ts';
+import { invalidateProductCacheAnalysis } from '../_shared/product-cache-store.ts';
+import { toPrefixedProductId } from '../_shared/product-id.ts';
+
+/** Match client FULL_ANALYSIS_PRICE_DELTA_* — invalidate AI cache on big moves. */
+const AI_CACHE_PRICE_DELTA_PCT = 0.1;
+const AI_CACHE_PRICE_DELTA_ABS = 500;
+
+function isSignificantPriceChangeForAiCache(
+  previous: number | null,
+  next: number,
+): boolean {
+  if (previous == null || previous <= 0 || next <= 0) return false;
+  const abs = Math.abs(next - previous);
+  return abs >= AI_CACHE_PRICE_DELTA_ABS || abs >= previous * AI_CACHE_PRICE_DELTA_PCT;
+}
+
+/** Skip Telegram for freshly tracked products (Chrome notify is enough client-side). */
+const TELEGRAM_ALERT_GRACE_MS = 6 * 60 * 60 * 1000;
+
+function isWithinTelegramGrace(createdAt: string | null | undefined, nowMs: number): boolean {
+  if (!createdAt) return false;
+  const t = Date.parse(createdAt);
+  if (!Number.isFinite(t)) return false;
+  const age = nowMs - t;
+  return age >= 0 && age < TELEGRAM_ALERT_GRACE_MS;
+}
 
 /** Free: 3–5 товаров — верхняя граница плана */
 const FREE_TRACK_LIMIT = 5;
+const PREMIUM_TRACK_LIMIT = 50;
 
 /** Не спамить target-алертом чаще раза в сутки, пока цена ≤ цели */
 const TARGET_ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+/** Не слать повторный drop на ту же (или близкую) цену чаще этого */
+const DROP_ALERT_COOLDOWN_MS = 8 * 60 * 60 * 1000;
+/** Skip scrape when last_checked is fresher than this (Premium / priority) */
+const PRICE_FRESH_MS_PREMIUM = 3 * 60 * 60 * 1000;
+/** Free subscribers: rarer cron scrapes */
+const PRICE_FRESH_MS_FREE = 6 * 60 * 60 * 1000;
 
 interface AlertSettingsRow {
   user_id: string;
@@ -50,8 +89,11 @@ interface TrackedRow {
   target_price: number | null;
   last_price: number | null;
   updated_at?: string | null;
+  created_at?: string | null;
   last_checked?: string | null;
   last_target_notified_at?: string | null;
+  last_drop_notified_at?: string | null;
+  last_drop_notified_price?: number | null;
 }
 
 interface Stats {
@@ -145,13 +187,21 @@ function shouldSendTargetAlert(row: TrackedRow, nowMs: number): boolean {
   return nowMs - last >= TARGET_ALERT_COOLDOWN_MS;
 }
 
-/** Project-level Bright Data Web Unlocker (Supabase secrets). */
-function projectScraperCredentials(): BrightDataCredentials | null {
-  const apiKey = Deno.env.get('BRIGHTDATA_API_KEY')?.trim() ?? '';
-  const zone = Deno.env.get('BRIGHTDATA_ZONE')?.trim() ?? '';
-  if (!apiKey || !zone) return null;
-  return { apiKey, zone };
+function shouldSendDropAlert(row: TrackedRow, newPrice: number, nowMs: number): boolean {
+  if (!row.last_drop_notified_at) return true;
+  const last = Date.parse(row.last_drop_notified_at);
+  if (!Number.isFinite(last)) return true;
+  if (nowMs - last < DROP_ALERT_COOLDOWN_MS) {
+    const prevNotified = row.last_drop_notified_price != null
+      ? Number(row.last_drop_notified_price)
+      : null;
+    // Same price band → suppress; deeper drop can notify again
+    if (prevNotified != null && newPrice >= prevNotified * 0.98) return false;
+  }
+  return true;
 }
+
+/** Project-level Scrappey (Supabase secret SCRAPPEY_API_KEY). */
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -175,7 +225,7 @@ Deno.serve(async (req) => {
     notified: 0,
     errors: 0,
     errorsByMarketplace: {},
-    bySource: { cache: 0, brightdata: 0, legacy: 0 },
+    bySource: { cache: 0, scrappey: 0, legacy: 0 },
   };
 
   try {
@@ -208,14 +258,14 @@ Deno.serve(async (req) => {
 
     const { data: premiumRows, error: premiumError } = await supabase
       .from('user_premium')
-      .select('user_id, expires_at')
+      .select(PREMIUM_ROW_SELECT)
       .in('user_id', userIds);
 
     if (premiumError) throw premiumError;
 
     const premiumActive = new Set(
       (premiumRows ?? [])
-        .filter((p) => !p.expires_at || new Date(p.expires_at) > new Date())
+        .filter((p) => isPremiumRowActive(p))
         .map((p) => p.user_id as string),
     );
 
@@ -237,7 +287,7 @@ Deno.serve(async (req) => {
     const { data: products, error: productsError } = await supabase
       .from('tracked_products')
       .select(
-        'id, user_id, marketplace, product_id, product_title, product_url, target_price, last_price, updated_at, last_checked, last_target_notified_at',
+        'id, user_id, marketplace, product_id, product_title, product_url, target_price, last_price, updated_at, created_at, last_checked, last_target_notified_at, last_drop_notified_at, last_drop_notified_price',
       )
       .in('user_id', [...settingsByUser.keys()])
       .eq('deleted', false)
@@ -256,9 +306,7 @@ Deno.serve(async (req) => {
     for (const settingsRow of eligibleSettings) {
       const isPremium = premiumActive.has(settingsRow.user_id);
       let list = byUser.get(settingsRow.user_id) ?? [];
-      if (!isPremium) {
-        list = list.slice(0, FREE_TRACK_LIMIT);
-      }
+      list = list.slice(0, isPremium ? PREMIUM_TRACK_LIMIT : FREE_TRACK_LIMIT);
       for (const row of list) {
         workQueue.push({ row, priority: isPremium });
       }
@@ -266,136 +314,256 @@ Deno.serve(async (req) => {
 
     stats.products = workQueue.length;
 
-    for (const { row, priority } of workQueue) {
-      const settingsRow = settingsByUser.get(row.user_id);
-      if (!settingsRow) continue;
+    // Coalesce scrapes: one fetch per (marketplace, product_id), then fan-out
+    type SkuGroup = {
+      key: string;
+      marketplace: Marketplace;
+      productId: string;
+      productUrl: string | null;
+      priority: boolean;
+      rows: Array<{ row: TrackedRow; priority: boolean }>;
+    };
+    const skuGroups = new Map<string, SkuGroup>();
+    for (const item of workQueue) {
+      const mp = item.row.marketplace as Marketplace;
+      if (!['wildberries', 'ozon', 'yandex_market'].includes(mp)) continue;
+      const key = `${mp}:${item.row.product_id}`;
+      const existing = skuGroups.get(key);
+      if (existing) {
+        existing.rows.push(item);
+        existing.priority = existing.priority || item.priority;
+        if (!existing.productUrl && item.row.product_url) {
+          existing.productUrl = item.row.product_url;
+        }
+      } else {
+        skuGroups.set(key, {
+          key,
+          marketplace: mp,
+          productId: item.row.product_id,
+          productUrl: item.row.product_url,
+          priority: item.priority,
+          rows: [item],
+        });
+      }
+    }
 
-      try {
-        const mp = row.marketplace as Marketplace;
-        if (!['wildberries', 'ozon', 'yandex_market'].includes(mp)) continue;
+    for (const group of skuGroups.values()) {
+      const nowMsInner = Date.now();
+      const staleRows = group.rows.filter(({ row, priority }) => {
+        if (!row.last_checked) return true;
+        const t = Date.parse(row.last_checked);
+        const freshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
+        return !Number.isFinite(t) || nowMsInner - t >= freshMs;
+      });
 
-        const fetched = await fetchMarketplacePriceDetailed(
-          mp,
-          row.product_id,
-          row.product_url,
-          { scraper: projectScraper, supabase },
-        );
-        stats.checked += 1;
+      let fetched: Awaited<ReturnType<typeof fetchMarketplacePriceDetailed>> = null;
 
-        if (!fetched?.price || fetched.price <= 0) {
-          stats.errors += 1;
-          stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
-          await supabase
-            .from('tracked_products')
-            .update({
-              last_fetch_ok: false,
-              last_fetch_error: fetchFailReason(mp),
-              updated_at: nowIso,
-            })
-            .eq('id', row.id);
-          await delay(priority ? 300 : 500);
+      // E5: scrape only if at least one subscriber is stale (tier-aware)
+      if (staleRows.length > 0) {
+        try {
+          fetched = await fetchMarketplacePriceDetailed(
+            group.marketplace,
+            group.productId,
+            group.productUrl,
+            { scraper: projectScraper, supabase },
+          );
+          stats.checked += 1;
+          if (fetched?.source) {
+            stats.bySource[fetched.source] = (stats.bySource[fetched.source] ?? 0) + 1;
+          }
+        } catch (error) {
+          console.warn('[update-prices] sku fetch error', group.key, error);
+        }
+      }
+
+      for (const { row, priority } of group.rows) {
+        const settingsRow = settingsByUser.get(row.user_id);
+        if (!settingsRow) continue;
+        const mp = group.marketplace;
+        const freshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
+        const rowFresh =
+          row.last_checked &&
+          Number.isFinite(Date.parse(row.last_checked)) &&
+          nowMsInner - Date.parse(row.last_checked) < freshMs;
+
+        // Fresh row + no new scrape → skip (keep last_price)
+        if (rowFresh && !fetched) {
           continue;
         }
 
-        stats.bySource[fetched.source] = (stats.bySource[fetched.source] ?? 0) + 1;
-
-        const previous = row.last_price != null ? Number(row.last_price) : null;
-        const url = fetched.url || row.product_url || reconstructUrl(mp, row.product_id);
-        const title = (fetched.title || row.product_title || 'Товар').slice(0, 200);
-
-        const patch: Record<string, unknown> = {
-          last_price: fetched.price,
-          last_checked: nowIso,
-          product_title: title,
-          product_url: url,
-          updated_at: nowIso,
-          last_fetch_ok: true,
-          last_fetch_error: null,
-        };
-
-        void appendPriceHistory(supabase, {
-          userId: row.user_id,
-          marketplace: mp,
-          productId: row.product_id,
-          price: fetched.price,
-        });
-
-        const chatId = settingsRow.telegram_chat_id.trim();
-        const minRub = Number(settingsRow.min_drop_rub) || 100;
-        const minPct = Number(settingsRow.min_drop_percent) || 1;
-
-        if (
-          previous != null &&
-          previous > 0 &&
-          isSignificantDrop(previous, fetched.price, minRub, minPct)
-        ) {
-          const sent = await sendPriceDropAlert(
-            chatId,
-            title,
-            previous,
-            fetched.price,
-            mp,
-            url,
-            priority,
-          );
-          if (sent) stats.notified += 1;
-        }
-
-        if (
-          row.target_price != null &&
-          Number(row.target_price) > 0 &&
-          fetched.price <= Number(row.target_price) &&
-          shouldSendTargetAlert(row, nowMs)
-        ) {
-          const sent = await sendTargetAlert(
-            chatId,
-            title,
-            fetched.price,
-            Number(row.target_price),
-            mp,
-            url,
-            priority,
-          );
-          if (sent) {
-            stats.notified += 1;
-            patch.last_target_notified_at = nowIso;
-          }
-        }
-
-        await supabase
-          .from('tracked_products')
-          .update(patch)
-          .eq('id', row.id);
-
-        stats.updated += 1;
-
-        await delay(priority ? 500 : 800);
-      } catch (error) {
-        stats.errors += 1;
-        const mp = String(row.marketplace ?? 'unknown');
-        stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
-        console.warn('[update-prices] product error', row.id, error);
         try {
+          if (!fetched?.price || fetched.price <= 0) {
+            if (!rowFresh) {
+              stats.errors += 1;
+              stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
+              await supabase
+                .from('tracked_products')
+                .update({
+                  last_fetch_ok: false,
+                  last_fetch_error: fetchFailReason(mp),
+                  updated_at: nowIso,
+                })
+                .eq('id', row.id);
+            }
+            continue;
+          }
+
+          const previous = row.last_price != null ? Number(row.last_price) : null;
+          const url = fetched.url || row.product_url || reconstructUrl(mp, row.product_id);
+          const title = (fetched.title || row.product_title || 'Товар').slice(0, 200);
+
+          if (isSignificantPriceChangeForAiCache(previous, fetched.price)) {
+            const bare = row.product_id;
+            const prefixed = toPrefixedProductId(mp, bare);
+            void invalidateProductCacheAnalysis(supabase, mp, bare);
+            if (prefixed !== bare) {
+              void invalidateProductCacheAnalysis(supabase, mp, prefixed);
+            }
+          }
+
+          const identity = fetchedPriceMatchesTracked({
+            marketplace: mp,
+            productId: row.product_id,
+            productUrl: row.product_url,
+            fetchedUrl: fetched.url || url,
+            fetchedTitle: fetched.title,
+          });
+          if (!identity.ok) {
+            logPriceIdentityReject({
+              reason: identity.reason,
+              rowId: row.id,
+              productId: row.product_id,
+              marketplace: mp,
+              fetchedUrl: fetched.url,
+              title: title.slice(0, 80),
+            });
+            await supabase
+              .from('tracked_products')
+              .update({
+                last_fetch_ok: false,
+                last_fetch_error: `identity:${identity.reason}`,
+                updated_at: nowIso,
+              })
+              .eq('id', row.id);
+            stats.errors += 1;
+            continue;
+          }
+
+          const patch: Record<string, unknown> = {
+            last_price: fetched.price,
+            last_checked: nowIso,
+            product_title: title,
+            product_url: url,
+            updated_at: nowIso,
+            last_fetch_ok: true,
+            last_fetch_error: null,
+          };
+
+          void appendPriceHistory(supabase, {
+            userId: row.user_id,
+            marketplace: mp,
+            productId: row.product_id,
+            price: fetched.price,
+          });
+
+          const chatId = settingsRow.telegram_chat_id.trim();
+          const minRub = Number(settingsRow.min_drop_rub) || 100;
+          const minPct = Number(settingsRow.min_drop_percent) || 1;
+          const { minDropRub, minDropPercent } = effectiveServerDropThresholds(
+            mp,
+            minRub,
+            minPct,
+          );
+
+          const alertTitle = (row.product_title || title).slice(0, 200);
+          const skipTelegram = isWithinTelegramGrace(row.created_at, nowMs);
+          if (skipTelegram) {
+            console.info('[PriceGuard] telegram grace skip', {
+              rowId: row.id,
+              created_at: row.created_at,
+            });
+          }
+
+          if (
+            !skipTelegram &&
+            previous != null &&
+            previous > 0 &&
+            isSignificantDrop(previous, fetched.price, minDropRub, minDropPercent) &&
+            shouldSendDropAlert(row, fetched.price, nowMs)
+          ) {
+            const sent = await sendPriceDropAlert(
+              chatId,
+              alertTitle,
+              previous,
+              fetched.price,
+              mp,
+              url,
+              priority,
+            );
+            if (sent) {
+              stats.notified += 1;
+              patch.last_drop_notified_at = nowIso;
+              patch.last_drop_notified_price = fetched.price;
+            }
+          }
+
+          if (
+            !skipTelegram &&
+            row.target_price != null &&
+            Number(row.target_price) > 0 &&
+            fetched.price <= Number(row.target_price) &&
+            shouldSendTargetAlert(row, nowMs)
+          ) {
+            const sent = await sendTargetAlert(
+              chatId,
+              alertTitle,
+              fetched.price,
+              Number(row.target_price),
+              mp,
+              url,
+              priority,
+            );
+            if (sent) {
+              stats.notified += 1;
+              patch.last_target_notified_at = nowIso;
+            }
+          }
+
           await supabase
             .from('tracked_products')
-            .update({
-              last_fetch_ok: false,
-              last_fetch_error: error instanceof Error
-                ? error.message.slice(0, 200)
-                : 'fetch_exception',
-              updated_at: nowIso,
-            })
+            .update(patch)
             .eq('id', row.id);
-        } catch {
-          // ignore secondary write failure
+
+          stats.updated += 1;
+        } catch (error) {
+          stats.errors += 1;
+          stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
+          console.warn('[update-prices] product error', row.id, error);
+          try {
+            await supabase
+              .from('tracked_products')
+              .update({
+                last_fetch_ok: false,
+                last_fetch_error: error instanceof Error
+                  ? error.message.slice(0, 200)
+                  : 'fetch_exception',
+                updated_at: nowIso,
+              })
+              .eq('id', row.id);
+          } catch {
+            // ignore secondary write failure
+          }
         }
       }
+
+      await delay(group.priority ? 400 : 700);
     }
 
     return jsonResponse({
       ok: true,
       stats,
-      brightdataConfigured: Boolean(projectScraper),
+      scrappeyConfigured: Boolean(projectScraper),
+      uniqueSkus: skuGroups.size,
     });
   } catch (error) {
     console.error('[update-prices]', error);

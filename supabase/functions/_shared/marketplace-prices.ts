@@ -1,17 +1,15 @@
 /**
  * HTTP-парсеры цен для Deno Edge (без Chrome / DOM).
- * WB — card.wb.ru; Ozon / YM — публичные JSON API + Bright Data Unlocker (opt).
+ * WB — card.wb.ru; Ozon / YM — Scrappey Unlocker + legacy JSON/HTML fallback.
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-import {
-  fetchViaBrightData,
-  type BrightDataCredentials,
-} from './brightdata.ts';
+import { fetchViaScrappey, type ScraperCredentials } from './scrappey.ts';
 import { getCachedPrice, setCachedPrice } from './price-scrape-cache.ts';
+import { fetchedPriceMatchesTracked, logPriceIdentityReject } from './price-identity.ts';
 
 export type Marketplace = 'wildberries' | 'ozon' | 'yandex_market';
-export type PriceSource = 'cache' | 'brightdata' | 'legacy';
+export type PriceSource = 'cache' | 'scrappey' | 'legacy';
 
 export interface FetchedPrice {
   price: number;
@@ -26,7 +24,7 @@ export interface FetchPriceResult extends FetchedPrice {
 }
 
 export interface FetchMarketplacePriceOptions {
-  scraper?: BrightDataCredentials | null;
+  scraper?: ScraperCredentials | null;
   supabase?: SupabaseClient | null;
   skipCacheRead?: boolean;
 }
@@ -598,7 +596,7 @@ function findYmPrice(node: unknown, depth = 0): { price: number; title?: string 
   return null;
 }
 
-function parseWbPriceFromHtml(html: string, productUrl: string): FetchedPrice | null {
+export function parseWbPriceFromHtml(html: string, productUrl: string): FetchedPrice | null {
   const saleMatch = html.match(/"salePriceU"\s*:\s*(\d+)/);
   const priceMatch = html.match(/"priceU"\s*:\s*(\d+)/);
   const sale = normalizeKopecks(saleMatch?.[1] ? Number(saleMatch[1]) : undefined);
@@ -616,7 +614,7 @@ function parseWbPriceFromHtml(html: string, productUrl: string): FetchedPrice | 
 async function fetchViaUnlocker(
   marketplace: Marketplace,
   productUrl: string,
-  scraper: BrightDataCredentials,
+  scraper: ScraperCredentials,
 ): Promise<FetchedPrice | null> {
   const candidates =
     marketplace === 'ozon'
@@ -626,7 +624,7 @@ async function fetchViaUnlocker(
         : [productUrl];
 
   for (const candidate of candidates.slice(0, 2)) {
-    const unlocked = await fetchViaBrightData(candidate, scraper, { country: 'ru' });
+    const unlocked = await fetchViaScrappey(candidate, scraper, { country: 'ru' });
     if (!unlocked.html) continue;
 
     if (marketplace === 'ozon') {
@@ -664,19 +662,33 @@ export async function fetchMarketplacePriceDetailed(
     : reconstructUrl(marketplace, productId);
 
   const supabase = options?.supabase ?? null;
-  const scraper = options?.scraper?.apiKey && options.scraper.zone
-    ? options.scraper
-    : null;
+  const scraper = options?.scraper?.apiKey ? options.scraper : null;
 
   if (supabase && !options?.skipCacheRead) {
     const cached = await getCachedPrice(supabase, marketplace, productId);
     if (cached?.price) {
-      return {
-        price: cached.price,
-        title: cached.title,
-        url: cached.url || url,
-        source: 'cache',
-      };
+      const identity = fetchedPriceMatchesTracked({
+        marketplace,
+        productId,
+        productUrl: url,
+        fetchedUrl: cached.url || url,
+        fetchedTitle: cached.title,
+      });
+      if (!identity.ok) {
+        logPriceIdentityReject({
+          reason: identity.reason,
+          marketplace,
+          productId,
+          cachedUrl: cached.url,
+        });
+      } else {
+        return {
+          price: cached.price,
+          title: cached.title,
+          url: cached.url || url,
+          source: 'cache',
+        };
+      }
     }
   }
 
@@ -687,12 +699,12 @@ export async function fetchMarketplacePriceDetailed(
     result = await fetchWb(productId);
     if (!result && scraper) {
       result = await fetchViaUnlocker(marketplace, url, scraper);
-      if (result) source = 'brightdata';
+      if (result) source = 'scrappey';
     }
   } else if (scraper) {
     result = await fetchViaUnlocker(marketplace, url, scraper);
     if (result) {
-      source = 'brightdata';
+      source = 'scrappey';
     } else {
       result = await fetchLegacy(marketplace, productId, url);
       source = 'legacy';
@@ -709,6 +721,24 @@ export async function fetchMarketplacePriceDetailed(
     url: result.url || url,
     source,
   };
+
+  const identity = fetchedPriceMatchesTracked({
+    marketplace,
+    productId,
+    productUrl: url,
+    fetchedUrl: fetched.url,
+    fetchedTitle: fetched.title,
+  });
+  if (!identity.ok) {
+    logPriceIdentityReject({
+      reason: identity.reason,
+      marketplace,
+      productId,
+      fetchedUrl: fetched.url,
+      fetchedTitle: fetched.title?.slice(0, 80),
+    });
+    return null;
+  }
 
   if (supabase) {
     await setCachedPrice(supabase, marketplace, productId, fetched, source);
@@ -735,6 +765,28 @@ export async function fetchMarketplacePrice(
 
 export function formatRub(n: number): string {
   return new Intl.NumberFormat('ru-RU').format(Math.round(n)) + ' ₽';
+}
+
+/** Ozon server scrapes: extra safety margin on top of user thresholds (personal prices differ). */
+export const OZON_SERVER_DROP_MARGIN_RUB = 100;
+export const OZON_SERVER_DROP_MARGIN_PCT = 2;
+
+/**
+ * Effective drop thresholds for server-side alerts (Telegram cron).
+ * Ozon: user mins + margin. WB / YM: unchanged.
+ */
+export function effectiveServerDropThresholds(
+  marketplace: Marketplace,
+  minDropRub: number,
+  minDropPercent: number,
+): { minDropRub: number; minDropPercent: number } {
+  if (marketplace === 'ozon') {
+    return {
+      minDropRub: minDropRub + OZON_SERVER_DROP_MARGIN_RUB,
+      minDropPercent: minDropPercent + OZON_SERVER_DROP_MARGIN_PCT,
+    };
+  }
+  return { minDropRub, minDropPercent };
 }
 
 export function isSignificantDrop(
