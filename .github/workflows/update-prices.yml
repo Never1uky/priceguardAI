@@ -27,10 +27,39 @@ jobs:
             exit 1
           fi
           BASE="${SUPABASE_URL%/}"
-          curl -fsS -X POST "${BASE}/functions/v1/update-prices" \
+          HTTP_CODE="$(curl -sS -X POST "${BASE}/functions/v1/update-prices" \
             -H "Content-Type: application/json" \
             -H "x-cron-secret: ${UPDATE_PRICES_CRON_SECRET}" \
             -d '{}' \
-            -o /tmp/update-prices.json
-          cat /tmp/update-prices.json
-          python3 -c "import json,sys; d=json.load(open('/tmp/update-prices.json')); sys.exit(0 if d.get('ok') else 1)"
+            -o /tmp/update-prices.json \
+            -w "%{http_code}")"
+          echo "HTTP status: ${HTTP_CODE}"
+          cat /tmp/update-prices.json || true
+          HTTP_CODE="${HTTP_CODE}" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          code_raw = os.environ.get("HTTP_CODE", "")
+          try:
+            code = int(code_raw)
+          except Exception:
+            print(f"Invalid HTTP code: {code_raw!r}")
+            sys.exit(1)
+
+          try:
+            payload = json.load(open("/tmp/update-prices.json"))
+          except Exception as exc:
+            print(f"Invalid JSON response: {exc}")
+            sys.exit(1)
+
+          if code < 200 or code >= 300:
+            print(f"Request failed with HTTP {code}")
+            sys.exit(1)
+
+          if not payload.get("ok"):
+            print("Function returned ok=false")
+            sys.exit(1)
+
+          print("update-prices succeeded")
+          PY

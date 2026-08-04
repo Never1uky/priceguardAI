@@ -33,6 +33,15 @@ import {
 import { isPremiumRowActive, PREMIUM_ROW_SELECT } from '../_shared/premium-active.ts';
 import { invalidateProductCacheAnalysis } from '../_shared/product-cache-store.ts';
 import { toPrefixedProductId } from '../_shared/product-id.ts';
+import { authorizeCronOrServiceRoleDetailed } from '../_shared/cron-auth.ts';
+import {
+  DEFAULT_UPDATE_PRICES_MAX_GROUPS,
+  DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
+  isUnavailablePriceResult,
+  OOS_REASON,
+  parsePositiveIntEnv,
+  shouldStopByRuntimeBudget,
+} from '../_shared/update-prices-policy.ts';
 
 /** Match client FULL_ANALYSIS_PRICE_DELTA_* — invalidate AI cache on big moves. */
 const AI_CACHE_PRICE_DELTA_PCT = 0.1;
@@ -104,6 +113,7 @@ interface Stats {
   checked: number;
   updated: number;
   notified: number;
+  unavailable: number;
   errors: number;
   errorsByMarketplace: Record<string, number>;
   bySource: Record<PriceSource, number>;
@@ -114,18 +124,6 @@ function serviceClient() {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
-}
-
-function authorizeCron(req: Request): boolean {
-  const cronSecret = Deno.env.get('UPDATE_PRICES_CRON_SECRET')?.trim();
-  const headerSecret = req.headers.get('x-cron-secret')?.trim();
-  if (cronSecret && headerSecret && headerSecret === cronSecret) return true;
-
-  const auth = req.headers.get('Authorization') ?? '';
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
-  if (serviceKey && auth === `Bearer ${serviceKey}`) return true;
-
-  return false;
 }
 
 async function sendPriceDropAlert(
@@ -174,12 +172,6 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function fetchFailReason(marketplace: Marketplace): string {
-  if (marketplace === 'ozon') return 'ozon_fetch_blocked_or_empty';
-  if (marketplace === 'yandex_market') return 'ym_fetch_blocked_or_empty';
-  return 'wb_fetch_empty';
-}
-
 function shouldSendTargetAlert(row: TrackedRow, nowMs: number): boolean {
   if (!row.last_target_notified_at) return true;
   const last = Date.parse(row.last_target_notified_at);
@@ -211,9 +203,25 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
   }
 
-  if (!authorizeCron(req)) {
+  const auth = authorizeCronOrServiceRoleDetailed(req);
+  if (!auth.ok) {
+    console.warn('[update-prices] unauthorized', {
+      reason: auth.reason,
+      hasCronHeader: Boolean(req.headers.get('x-cron-secret')),
+      hasAuthHeader: Boolean(req.headers.get('Authorization')),
+    });
     return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
   }
+
+  const startedAtMs = Date.now();
+  const runtimeBudgetMs = parsePositiveIntEnv(
+    Deno.env.get('UPDATE_PRICES_RUNTIME_BUDGET_MS'),
+    DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
+  );
+  const maxGroupsPerRun = parsePositiveIntEnv(
+    Deno.env.get('UPDATE_PRICES_MAX_GROUPS_PER_RUN'),
+    DEFAULT_UPDATE_PRICES_MAX_GROUPS,
+  );
 
   const stats: Stats = {
     users: 0,
@@ -223,6 +231,7 @@ Deno.serve(async (req) => {
     checked: 0,
     updated: 0,
     notified: 0,
+    unavailable: 0,
     errors: 0,
     errorsByMarketplace: {},
     bySource: { cache: 0, scrappey: 0, legacy: 0 },
@@ -347,7 +356,24 @@ Deno.serve(async (req) => {
       }
     }
 
-    for (const group of skuGroups.values()) {
+    const groups = [...skuGroups.values()];
+    const totalGroups = groups.length;
+    const groupsForRun = groups.slice(0, maxGroupsPerRun);
+    let processedGroups = 0;
+    let earlyStopped = false;
+    let stopReason: 'time_budget' | 'max_groups' | null = null;
+
+    if (groupsForRun.length < totalGroups) {
+      earlyStopped = true;
+      stopReason = 'max_groups';
+    }
+
+    for (const group of groupsForRun) {
+      if (shouldStopByRuntimeBudget(startedAtMs, runtimeBudgetMs)) {
+        earlyStopped = true;
+        stopReason = 'time_budget';
+        break;
+      }
       const nowMsInner = Date.now();
       const staleRows = group.rows.filter(({ row, priority }) => {
         if (!row.last_checked) return true;
@@ -392,15 +418,14 @@ Deno.serve(async (req) => {
         }
 
         try {
-          if (!fetched?.price || fetched.price <= 0) {
+          if (isUnavailablePriceResult(fetched)) {
             if (!rowFresh) {
-              stats.errors += 1;
-              stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
+              stats.unavailable += 1;
               await supabase
                 .from('tracked_products')
                 .update({
                   last_fetch_ok: false,
-                  last_fetch_error: fetchFailReason(mp),
+                  last_fetch_error: OOS_REASON,
                   updated_at: nowIso,
                 })
                 .eq('id', row.id);
@@ -556,14 +581,28 @@ Deno.serve(async (req) => {
         }
       }
 
-      await delay(group.priority ? 400 : 700);
+      processedGroups += 1;
+      // Keep a small jitter to avoid burst spikes, but not enough to hit 150s runtime limits.
+      await delay(group.priority ? 20 : 40);
     }
 
+    const elapsedMs = Date.now() - startedAtMs;
+    const remainingGroups = Math.max(0, totalGroups - processedGroups);
     return jsonResponse({
       ok: true,
       stats,
       scrappeyConfigured: Boolean(projectScraper),
       uniqueSkus: skuGroups.size,
+      elapsed_ms: elapsedMs,
+      runtime_budget_ms: runtimeBudgetMs,
+      batch: {
+        max_groups_per_run: maxGroupsPerRun,
+        total_groups: totalGroups,
+        processed_groups: processedGroups,
+        remaining_groups: remainingGroups,
+        early_stopped: earlyStopped,
+        stop_reason: stopReason,
+      },
     });
   } catch (error) {
     console.error('[update-prices]', error);
