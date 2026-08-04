@@ -9,7 +9,7 @@ import {
   applyPriceAlertSettingsLocal,
   getPriceAlertSettings,
 } from '@/lib/compare-price-alerts';
-import { getSubscription, isPremium } from '@/lib/subscription';
+import { getSubscription, isPremium, restorePremiumFromAccount } from '@/lib/subscription';
 import {
   mergeAlertSettingsFromCloud,
   type CloudAlertSettings,
@@ -96,6 +96,25 @@ export async function pullAlertSettingsFromCloud(): Promise<PullAlertSettingsRes
 }
 
 /**
+ * Удалить claim Premium на сервере (user_premium), чтобы cron не слал «приоритет Premium».
+ * Локальный Free после deactivate / expired license.
+ */
+export async function clearPremiumClaimOnServer(): Promise<{ ok: boolean; error?: string } | null> {
+  if (!(await canUseCloudFeatures())) {
+    return { ok: false, error: 'Нет входа в Аккаунт' };
+  }
+
+  const res = await callEdgeSafe<{ ok?: boolean; error?: string }>('sync-alert-settings', {
+    clearPremium: true,
+  });
+
+  if (!res) {
+    return { ok: false, error: 'Не удалось сбросить Premium на сервере' };
+  }
+  return { ok: Boolean(res.ok), error: res.error };
+}
+
+/**
  * Отправить локальные настройки алертов в Supabase.
  * Free и Premium с Telegram → серверный мониторинг;
  * Premium дополнительно получает приоритет в cron.
@@ -159,6 +178,12 @@ export async function syncAlertSettingsToCloud(options?: {
       error: 'Не удалось связаться с сервером настроек (sync-alert-settings)',
     };
   }
+
+  // Сервер говорит Premium, локально Free → восстановить (не после clearPremium)
+  if (res.ok && res.premiumActive && !premium) {
+    void restorePremiumFromAccount();
+  }
+
   return {
     ok: Boolean(res.ok),
     serverMonitoring: active,

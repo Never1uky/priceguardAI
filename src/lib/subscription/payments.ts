@@ -3,6 +3,7 @@ import {
   createPaymentRemote,
   isSupabaseConfigured,
 } from '@/lib/supabase/client';
+import { getAuthUser } from '@/lib/supabase/auth';
 import { AI_AUTH_REQUIRED_MESSAGE, canUseCloudFeatures } from '@/lib/supabase/auth-guard';
 import type { PremiumPlanId } from '@/types/subscription';
 
@@ -41,7 +42,6 @@ export async function startCheckout(plan: PremiumPlanId): Promise<{
   }
 
   try {
-    const { getAuthUser } = await import('@/lib/supabase/auth');
     const user = await getAuthUser();
     if (!user?.id) {
       return { ok: false, error: AI_AUTH_REQUIRED_MESSAGE };

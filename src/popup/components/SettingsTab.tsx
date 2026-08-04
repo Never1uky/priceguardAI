@@ -12,8 +12,21 @@ import { getAiQuotaStats, FREE_DAILY_AI_LIMIT } from '@/lib/api/ai-quota';
 import { getPriceAlertSettings, type PriceAlertSettings } from '@/lib/compare-price-alerts';
 import { savePriceAlertSettings } from '@/lib/notification-settings';
 import { isDeveloperUser } from '@/lib/developer-access';
-import { isAuthenticated } from '@/lib/supabase/auth';
+import { getAuthUser, isAuthenticated } from '@/lib/supabase/auth';
+import { RUNNING_IDS_KEY, RUNNING_KEY, SEARCHING_MP_KEY } from '@/lib/compare-jobs';
+import { normalizeRunningIds } from '@/lib/compare-running-state';
 import type { UiTheme } from '@/lib/ui-theme';
+import {
+  diagnosticsJsonString,
+  ensureSessionId,
+  loadTelemetrySettings,
+  saveTelemetrySettings,
+  countTelemetryByLevel,
+  getSessionIdSync,
+  type TelemetryMode,
+} from '@/lib/telemetry';
+import { pipelineMetrics } from '@/lib/pipeline-metrics';
+import { getSupabaseConfig } from '@/lib/supabase/config';
 import {
   Scale,
   Bell,
@@ -30,12 +43,16 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Star,
   Sun,
   Wifi,
   XCircle,
+  ChevronDown,
+  ExternalLink,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { CHROME_WEB_STORE_REVIEWS_URL } from '@/lib/chrome-store';
 import { isPremium } from '@/lib/subscription';
 import {
   isServerPriceMonitoringActive,
@@ -43,6 +60,18 @@ import {
   syncAlertSettingsToCloud,
 } from '@/lib/supabase/alert-settings-sync';
 import { sendTelegramPriceAlert } from '@/lib/telegram-price-alert';
+import {
+  CLOUD_NETWORK_WARN_MESSAGE,
+  CLOUD_NETWORK_WARN_STORAGE_KEY,
+  clearCloudNetworkWarning,
+  getCloudNetworkWarning,
+  isCloudNetworkError,
+  noteCloudNetworkFailure,
+} from '@/lib/supabase/cloud-reachability';
+
+const PRIVACY_POLICY_URL = 'https://priceguard-landing.vercel.app/privacy';
+const ACCOUNT_DELETION_MAIL =
+  'mailto:priceguardAlsupp0rt@yandex.ru?subject=%D0%A3%D0%B4%D0%B0%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5%20%D0%B4%D0%B0%D0%BD%D0%BD%D1%8B%D1%85';
 
 interface SettingsTabProps {
   onOpenPremium?: () => void;
@@ -114,20 +143,70 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     remaining: FREE_DAILY_AI_LIMIT,
     serverAvailable: false,
   });
+  const [devOpen, setDevOpen] = useState(false);
+  const [cloudNetworkWarn, setCloudNetworkWarn] = useState(false);
+  const [diagVersion, setDiagVersion] = useState('');
+  const [diagEmailMask, setDiagEmailMask] = useState<string | null>(null);
+  const [diagRunningId, setDiagRunningId] = useState<string | null>(null);
+  const [diagSearchingMp, setDiagSearchingMp] = useState<string | null>(null);
+  const [diagSessionId, setDiagSessionId] = useState('');
+  const [diagTelMode, setDiagTelMode] = useState<TelemetryMode>('normal');
+  const [diagRemote, setDiagRemote] = useState(false);
+  const [diagCounts, setDiagCounts] = useState({ info: 0, warn: 0, error: 0 });
+  const [diagPipeline, setDiagPipeline] = useState<string>('');
+  const [diagSupabase, setDiagSupabase] = useState(false);
+  const [diagBusy, setDiagBusy] = useState(false);
+  const [diagCopyStatus, setDiagCopyStatus] = useState<string | null>(null);
 
   const load = async () => {
-    const [prem, alerts, dev, monitoring, loggedIn] = await Promise.all([
-      isPremium(),
-      getPriceAlertSettings(),
-      isDeveloperUser(),
-      isServerPriceMonitoringActive(),
-      isAuthenticated(),
-    ]);
+    const [prem, alerts, dev, monitoring, loggedIn, cloudWarn, user, runningStore] =
+      await Promise.all([
+        isPremium(),
+        getPriceAlertSettings(),
+        isDeveloperUser(),
+        isServerPriceMonitoringActive(),
+        isAuthenticated(),
+        getCloudNetworkWarning(),
+        getAuthUser(),
+        chrome.storage.local.get([RUNNING_KEY, RUNNING_IDS_KEY, SEARCHING_MP_KEY]),
+      ]);
     setPremium(prem);
     setAlertSettings(alerts);
     setIsDev(dev);
     setServerMonitoring(monitoring);
     setAuthed(loggedIn);
+    setCloudNetworkWarn(cloudWarn);
+    setDiagVersion(chrome.runtime.getManifest().version);
+    const email = user?.email?.trim() ?? '';
+    setDiagEmailMask(
+      email
+        ? `${email.slice(0, 1)}***@${email.split('@')[1] ?? '…'}`
+        : loggedIn
+          ? '(нет email)'
+          : null,
+    );
+    const fromIds = normalizeRunningIds(runningStore[RUNNING_IDS_KEY]);
+    const runningIds = fromIds.length
+      ? fromIds
+      : normalizeRunningIds(runningStore[RUNNING_KEY]);
+    setDiagRunningId(runningIds.length ? runningIds.join(', ') : null);
+    const mp = runningStore[SEARCHING_MP_KEY];
+    setDiagSearchingMp(typeof mp === 'string' ? mp : null);
+
+    const [telSettings, sessionId, counts, metrics] = await Promise.all([
+      loadTelemetrySettings(),
+      ensureSessionId(),
+      countTelemetryByLevel(),
+      pipelineMetrics.get(),
+    ]);
+    setDiagTelMode(telSettings.mode);
+    setDiagRemote(telSettings.remoteEnabled);
+    setDiagSessionId(sessionId || getSessionIdSync());
+    setDiagCounts(counts);
+    setDiagSupabase(getSupabaseConfig().configured);
+    setDiagPipeline(
+      `HB ${metrics.hiddenBrowserSuccess}/${metrics.hiddenBrowserAttempts} · API ${metrics.apiSearchSuccess} · map ${metrics.mappingHits} · AI cache ${metrics.aiCacheLocalHits + metrics.aiCacheRemoteHits}/${metrics.aiCacheMisses}`,
+    );
 
     // После reinstall: подтянуть Chat ID с аккаунта
     if (loggedIn && !alerts.telegramChatId.trim()) {
@@ -153,6 +232,21 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
 
   useEffect(() => {
     void load();
+  }, []);
+
+  useEffect(() => {
+    const onStorage = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      area: string,
+    ) => {
+      if (area !== 'local' || !changes[CLOUD_NETWORK_WARN_STORAGE_KEY]) return;
+      const v = changes[CLOUD_NETWORK_WARN_STORAGE_KEY].newValue as
+        | { active?: boolean }
+        | undefined;
+      setCloudNetworkWarn(Boolean(v?.active));
+    };
+    chrome.storage.onChanged.addListener(onStorage);
+    return () => chrome.storage.onChanged.removeListener(onStorage);
   }, []);
 
   const handleConnectTelegram = async () => {
@@ -192,7 +286,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     let listSynced = false;
     try {
       const { syncTrackedProductsWithCloud } = await import('@/lib/storage');
-      listSynced = await syncTrackedProductsWithCloud();
+      listSynced = await syncTrackedProductsWithCloud({ reconcile: true });
     } catch {
       // не блокируем подключение Telegram
     }
@@ -209,11 +303,20 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     });
 
     if (!sync?.ok || !sync.serverMonitoring) {
+      const networkFail =
+        isCloudNetworkError(sync?.error) ||
+        /failed to fetch|dns|сеть|network/i.test(String(sync?.error ?? ''));
+      if (networkFail || (!sync?.ok && !sync?.error && !listSynced)) {
+        noteCloudNetworkFailure('telegram-connect', sync?.error);
+        setCloudNetworkWarn(true);
+      }
       setTelegramStatus(
         [
           'Сервер не включён.',
           sync?.error ? `Причина: ${sync.error}` : null,
-          'Проверьте: вход в «Аккаунт» на этом Mac, Telegram Вкл, Chat ID, интернет.',
+          networkFail
+            ? 'Проверьте VPN/Zapret и DNS — supabase.co должен открываться.'
+            : 'Проверьте: вход в «Аккаунт» на этом Mac, Telegram Вкл, Chat ID, интернет.',
           test.sent ? 'Тест-сообщение в Telegram ушло, но привязка к аккаунту не сохранилась.' : null,
         ]
           .filter(Boolean)
@@ -226,6 +329,8 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
           : `Привязка OK. Тест Telegram: ${test.error ?? 'ошибка'}. Напишите боту /start.`,
       );
     } else {
+      clearCloudNetworkWarning();
+      setCloudNetworkWarn(false);
       setTelegramStatus(
         [
           premium
@@ -257,6 +362,20 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
 
   return (
     <div className="space-y-4">
+      <Surface variant="subtle" padding="sm" className="space-y-1">
+        <p className="pg-subtitle">
+          v{typeof chrome !== 'undefined' ? chrome.runtime.getManifest().version : '0.9.0'} · Beta
+        </p>
+        <p className="pg-hint">
+          Бета: поиск и матчинг товаров будем улучшать по мере развития приложения. О неточностях
+          пишите в поддержку.
+        </p>
+        <p className="pg-hint">
+          Если поиск пустой — отключите VPN/adblock или выберите сервер в РФ: магазины могут
+          блокировать запросы и показывать другие цены.
+        </p>
+      </Surface>
+
       <Button
         variant="ghost"
         size="sm"
@@ -283,6 +402,18 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
         <span className="ml-auto max-w-[55%] truncate pg-caption">
           priceguardAlsupp0rt@yandex.ru
         </span>
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-start gap-2 text-muted-foreground"
+        onClick={() => {
+          void chrome.tabs.create({ url: CHROME_WEB_STORE_REVIEWS_URL });
+        }}
+      >
+        <Star className="h-4 w-4" strokeWidth={1.75} />
+        Оставить отзыв в Chrome Web Store
       </Button>
 
       <section className="space-y-2">
@@ -387,7 +518,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                       minDropPercent: alertSettings.minDropPercent,
                     });
                   }}
-                  className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none ring-primary focus:ring-1"
+                  className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </label>
               <label className="space-y-1">
@@ -410,10 +541,13 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                       minDropPercent: alertSettings.minDropPercent,
                     });
                   }}
-                  className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none ring-primary focus:ring-1"
+                  className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </label>
             </div>
+            <p className="pg-caption text-foreground/70">
+              Уведомим, если падение не меньше указанного ₽ и не меньше указанного %
+            </p>
             <button
               type="button"
               disabled={alertSettings?.notificationsEnabled === false}
@@ -443,99 +577,218 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
           variant="raised"
           className={`space-y-3 p-3 ${alertSettings?.notificationsEnabled === false ? 'opacity-50' : ''}`}
         >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="pg-body font-medium">Уведомления в Telegram</p>
-              <p className="pg-caption text-muted-foreground">Сервер + backup в Chrome при устаревших ценах</p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-primary/10">
+                <Send className="h-4 w-4 text-primary" strokeWidth={1.75} aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="pg-title">Telegram</p>
+                <p className="pg-hint mt-0.5">
+                  Подключите Telegram для уведомлений о снижении цен
+                </p>
+              </div>
+            </div>
+            <Badge
+              variant={serverMonitoring ? 'success' : 'secondary'}
+              className="shrink-0 gap-1"
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${serverMonitoring ? 'bg-success' : 'bg-muted-foreground'}`}
+                aria-hidden
+              />
+              Сервер {serverMonitoring ? 'Вкл' : 'Выкл'}
+            </Badge>
+          </div>
+
+          <label className="block space-y-1">
+            <span className="pg-caption font-medium text-foreground/80">Chat ID</span>
+            <input
+              type="text"
+              placeholder="123456789"
+              aria-label="Telegram Chat ID"
+              disabled={alertSettings?.notificationsEnabled === false || !alertSettings?.telegramEnabled}
+              value={alertSettings?.telegramChatId ?? ''}
+              onChange={(e) =>
+                setAlertSettings((prev) =>
+                  prev ? { ...prev, telegramChatId: e.target.value } : prev,
+                )
+              }
+              onBlur={() => {
+                if (!alertSettings) return;
+                const chatId = alertSettings.telegramChatId.trim();
+                void (async () => {
+                  const saved = await savePriceAlertSettings(
+                    { telegramChatId: alertSettings.telegramChatId },
+                    { clearTelegram: chatId.length === 0 },
+                  );
+                  setAlertSettings(saved);
+                  if (chatId.length === 0 && saved.cloudSyncOk === false) {
+                    setTelegramStatus(
+                      `Chat ID очищен локально. Сервер: ${saved.cloudSyncError ?? 'ошибка'} — войдите и нажмите «Отключить».`,
+                    );
+                  }
+                })();
+              }}
+              className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <p className="pg-caption">Ваш Telegram Chat ID для отправки уведомлений</p>
+          </label>
+
+          <div className="flex items-center justify-between gap-3 rounded-sm bg-muted/40 px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="pg-caption font-medium text-foreground/80">Статус</p>
+              <p className="pg-hint mt-0.5">
+                {alertSettings?.telegramEnabled
+                  ? 'Уведомления через Telegram включены'
+                  : 'Уведомления через Telegram выключены'}
+              </p>
             </div>
             <button
               type="button"
-              disabled={alertSettings?.notificationsEnabled === false}
+              role="switch"
+              disabled={alertSettings?.notificationsEnabled === false || telegramBusy}
+              aria-checked={alertSettings?.telegramEnabled ?? false}
+              aria-label="Уведомления в Telegram"
               onClick={() => {
                 const next = !(alertSettings?.telegramEnabled ?? false);
-                void savePriceAlertSettings(
-                  { telegramEnabled: next },
-                  { clearTelegram: !next },
-                ).then(setAlertSettings);
-                if (!next) setServerMonitoring(false);
-              }}
-              className={`rounded-full px-2.5 py-1 pg-caption font-medium pg-transition ${
-                alertSettings?.telegramEnabled ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-              }`}
-            >
-              {alertSettings?.telegramEnabled ? 'Вкл' : 'Выкл'}
-            </button>
-          </div>
-          <input
-            type="text"
-            placeholder="Chat ID, например 123456789"
-            disabled={alertSettings?.notificationsEnabled === false || !alertSettings?.telegramEnabled}
-            value={alertSettings?.telegramChatId ?? ''}
-            onChange={(e) =>
-              setAlertSettings((prev) =>
-                prev ? { ...prev, telegramChatId: e.target.value } : prev,
-              )
-            }
-            onBlur={() => {
-              if (!alertSettings) return;
-              const chatId = alertSettings.telegramChatId.trim();
-              void savePriceAlertSettings(
-                { telegramChatId: alertSettings.telegramChatId },
-                { clearTelegram: chatId.length === 0 },
-              ).then(setAlertSettings);
-            }}
-            className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none ring-primary focus:ring-1"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              className="gap-1.5 text-[11px]"
-              disabled={telegramBusy || alertSettings?.notificationsEnabled === false}
-              onClick={() => void handleConnectTelegram()}
-            >
-              {telegramBusy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-              ) : (
-                <Send className="h-3.5 w-3.5" strokeWidth={1.75} />
-              )}
-              Подключить и проверить
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="gap-1.5 text-[11px]"
-              disabled={telegramBusy || !alertSettings?.telegramChatId?.trim()}
-              onClick={() => {
                 void (async () => {
                   setTelegramBusy(true);
+                  setTelegramStatus(null);
                   const saved = await savePriceAlertSettings(
-                    { telegramEnabled: false, telegramChatId: '' },
-                    { clearTelegram: true },
+                    { telegramEnabled: next },
+                    { clearTelegram: !next, awaitCloudSync: !next },
                   );
                   setAlertSettings(saved);
-                  setServerMonitoring(false);
-                  setTelegramStatus('Telegram отключён, привязка Chat ID снята с аккаунта.');
+                  if (!next) {
+                    setServerMonitoring(false);
+                    if (saved.cloudSyncOk === false) {
+                      setTelegramStatus(
+                        `Локально выкл. Сервер: ${saved.cloudSyncError ?? 'не удалось снять Chat ID'} — войдите в «Аккаунт» и нажмите «Отключить».`,
+                      );
+                    } else {
+                      setTelegramStatus('Telegram выключен, Chat ID снят с аккаунта.');
+                    }
+                  }
                   setTelegramBusy(false);
                 })();
               }}
+              className={`relative h-6 w-11 shrink-0 rounded-full pg-transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${
+                alertSettings?.telegramEnabled ? 'bg-primary' : 'bg-muted-foreground/30'
+              }`}
             >
-              Отключить
-            </Button>
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-soft pg-transition ${
+                  alertSettings?.telegramEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          <Button
+            size="lg"
+            className="w-full gap-1.5"
+            disabled={telegramBusy || alertSettings?.notificationsEnabled === false}
+            onClick={() => void handleConnectTelegram()}
+          >
+            {telegramBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+            ) : (
+              <Send className="h-4 w-4" strokeWidth={1.75} />
+            )}
+            {alertSettings?.telegramChatId?.trim()
+              ? 'Проверить и сохранить'
+              : 'Подключить'}
+          </Button>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <a
+                href="https://t.me/pricealertbot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 pg-hint font-medium text-primary hover:underline"
+              >
+                Как получить Chat ID?
+              </a>
+              <a
+                href="https://t.me/PriceGuardAlertsBot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 pg-hint font-medium text-muted-foreground hover:text-primary hover:underline"
+              >
+                @PriceGuardAlertsBot
+              </a>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-[11px]"
+                disabled={telegramBusy || alertSettings?.notificationsEnabled === false}
+                onClick={() => void handleConnectTelegram()}
+              >
+                <Wifi className="h-3.5 w-3.5" strokeWidth={1.75} />
+                Проверить подключение
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gap-1.5 text-[11px] text-muted-foreground"
+                disabled={telegramBusy || !alertSettings?.telegramChatId?.trim()}
+                onClick={() => {
+                  void (async () => {
+                    setTelegramBusy(true);
+                    setTelegramStatus(null);
+                    const saved = await savePriceAlertSettings(
+                      { telegramEnabled: false, telegramChatId: '' },
+                      { clearTelegram: true },
+                    );
+                    setAlertSettings(saved);
+                    setServerMonitoring(false);
+                    if (saved.cloudSyncOk === false) {
+                      setTelegramStatus(
+                        `Локально отключён. Сервер: ${saved.cloudSyncError ?? 'не удалось снять Chat ID'} — войдите в «Аккаунт» и повторите «Отключить».`,
+                      );
+                    } else {
+                      setTelegramStatus('Telegram отключён, привязка Chat ID снята с аккаунта.');
+                    }
+                    setTelegramBusy(false);
+                  })();
+                }}
+              >
+                Отключить
+              </Button>
+            </div>
+          </div>
+
+          {cloudNetworkWarn && (
+            <p
+              role="status"
+              className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-snug text-amber-900 dark:text-amber-100"
+            >
+              {CLOUD_NETWORK_WARN_MESSAGE}
+            </p>
+          )}
+
+          <div className="flex flex-wrap gap-1.5">
             <Badge variant={authed ? 'success' : 'secondary'} className="text-[10px]">
               Аккаунт: {authed ? 'Вход' : 'Нет'}
             </Badge>
-            <Badge variant={serverMonitoring ? 'success' : 'secondary'} className="text-[10px]">
-              Сервер: {serverMonitoring ? 'Вкл' : 'Выкл'}
-            </Badge>
           </div>
+
           {telegramStatus && (
-            <p className="rounded-sm bg-muted/60 px-2.5 py-2 pg-caption leading-relaxed text-foreground">
+            <p
+              role="status"
+              aria-live="polite"
+              className="rounded-sm bg-muted/60 px-2.5 py-2 pg-caption leading-relaxed text-foreground"
+            >
               {telegramStatus}
             </p>
           )}
           <p className="pg-caption leading-relaxed text-muted-foreground">
             {authed
-              ? 'Бот @PriceGuardAlertsBot: алерты о цене и AI по ссылке на товар. /start → Chat ID → Вкл → «Подключить». Free — до 5 товаров; Premium — без лимита и приоритет. Chrome для алертов не обязателен.'
+              ? 'Бот алертов @PriceGuardAlertsBot · Chat ID: @pricealertbot (/start). Вставьте ID выше → «Проверить и сохранить». Free — до 5 товаров; Premium — до 50. Chrome для алертов не обязателен.'
               : 'Сначала войдите во вкладку «Аккаунт» на этом устройстве — без входа Chat ID не привяжется к серверу.'}
           </p>
         </Surface>
@@ -543,19 +796,33 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
 
       {isDev && (
         <section className="space-y-2">
-          <SectionLabel>Dev</SectionLabel>
-          <Surface variant="raised" className="space-y-3 p-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-purple/10 text-purple">
-                <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.75} />
+          <SectionLabel>Для разработчиков</SectionLabel>
+          <Surface variant="raised" className="overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setDevOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-3 p-3 text-left pg-transition hover:bg-muted/30"
+              aria-expanded={devOpen}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-purple/10 text-purple">
+                  <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </div>
+                <div className="min-w-0">
+                  <p className="pg-body font-medium">AI и метрики</p>
+                  <p className="pg-caption text-muted-foreground">
+                    AI сегодня: {quota.used} / {premium ? '∞' : quota.limit}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="pg-body font-medium">AI и метрики</p>
-                <p className="pg-caption text-muted-foreground">
-                  AI сегодня: {quota.used} / {premium ? '∞' : quota.limit}
-                </p>
-              </div>
-            </div>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${devOpen ? 'rotate-180' : ''}`}
+                strokeWidth={1.75}
+                aria-hidden
+              />
+            </button>
+            {devOpen && (
+              <div className="space-y-3 border-t border-border/50 p-3">
             <div className="space-y-2">
               <p className="pg-caption font-medium text-muted-foreground">Приоритет AI</p>
               <div className="grid grid-cols-2 gap-2">
@@ -645,9 +912,231 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                 Открыть
               </Button>
             </div>
+              </div>
+            )}
           </Surface>
         </section>
       )}
+
+      {isDev && (
+        <details className="rounded-sm border border-border/40 bg-muted/20 px-3 py-2">
+          <summary className="cursor-pointer select-none pg-caption font-medium text-muted-foreground">
+            Диагностика (dev)
+          </summary>
+          <dl className="mt-2 space-y-1 pg-caption text-muted-foreground">
+            <div className="flex justify-between gap-2">
+              <dt>Версия</dt>
+              <dd className="font-mono text-foreground">{diagVersion || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Supabase</dt>
+              <dd className="text-foreground">{diagSupabase ? 'ok' : 'не настроен'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Cloud network</dt>
+              <dd className="text-foreground">{cloudNetworkWarn ? 'warn' : 'ok'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Server monitoring</dt>
+              <dd className="text-foreground">{serverMonitoring ? 'active' : 'off'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Вход</dt>
+              <dd className="truncate text-foreground">
+                {authed ? diagEmailMask ?? 'да' : 'нет'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Session</dt>
+              <dd className="max-w-[55%] truncate font-mono text-foreground">
+                {diagSessionId || '—'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Events (i/w/e)</dt>
+              <dd className="font-mono text-foreground">
+                {diagCounts.info}/{diagCounts.warn}/{diagCounts.error}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Pipeline</dt>
+              <dd className="max-w-[60%] truncate text-foreground">{diagPipeline || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Compare running</dt>
+              <dd className="max-w-[55%] truncate font-mono text-foreground">
+                {diagRunningId ?? '—'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Searching MP</dt>
+              <dd className="font-mono text-foreground">{diagSearchingMp ?? '—'}</dd>
+            </div>
+          </dl>
+
+          <div className="mt-3 space-y-2 border-t border-border/30 pt-2">
+            <p className="pg-caption font-medium text-foreground">Режим логов</p>
+            <div className="flex gap-1">
+              {(['silent', 'normal', 'verbose'] as TelemetryMode[]).map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  size="sm"
+                  variant={diagTelMode === mode ? 'default' : 'outline'}
+                  className="flex-1 text-[10px]"
+                  disabled={diagBusy}
+                  onClick={() => {
+                    void (async () => {
+                      setDiagBusy(true);
+                      const next = await saveTelemetrySettings({ mode });
+                      setDiagTelMode(next.mode);
+                      setDiagBusy(false);
+                    })();
+                  }}
+                >
+                  {mode}
+                </Button>
+              ))}
+            </div>
+            <label className="flex items-center justify-between gap-2 rounded-sm bg-muted/40 px-2 py-1.5">
+              <span className="pg-caption text-foreground">
+                Отправлять WARN/ERROR в облако (opt-in)
+              </span>
+              <input
+                type="checkbox"
+                checked={diagRemote}
+                disabled={diagBusy}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  void (async () => {
+                    setDiagBusy(true);
+                    const next = await saveTelemetrySettings({ remoteEnabled: enabled });
+                    setDiagRemote(next.remoteEnabled);
+                    setDiagBusy(false);
+                  })();
+                }}
+              />
+            </label>
+            <div className="flex flex-col gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full text-xs"
+                disabled={diagBusy}
+                onClick={() => {
+                  void (async () => {
+                    setDiagBusy(true);
+                    setDiagCopyStatus(null);
+                    try {
+                      const json = await diagnosticsJsonString();
+                      await navigator.clipboard.writeText(json);
+                      setDiagCopyStatus('Скопировано в буфер');
+                    } catch {
+                      setDiagCopyStatus('Не удалось скопировать');
+                    }
+                    setDiagBusy(false);
+                  })();
+                }}
+              >
+                Copy diagnostics
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full text-xs"
+                disabled={diagBusy}
+                onClick={() => {
+                  void (async () => {
+                    setDiagBusy(true);
+                    setDiagCopyStatus(null);
+                    try {
+                      const json = await diagnosticsJsonString();
+                      const blob = new Blob([json], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `priceguard-diagnostics-${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      setDiagCopyStatus('Файл diagnostics.json скачан');
+                    } catch {
+                      setDiagCopyStatus('Не удалось экспортировать');
+                    }
+                    setDiagBusy(false);
+                  })();
+                }}
+              >
+                Export diagnostics.json
+              </Button>
+              {diagCopyStatus && (
+                <p className="pg-caption text-muted-foreground">{diagCopyStatus}</p>
+              )}
+            </div>
+          </div>
+        </details>
+      )}
+
+      <section className="space-y-2 border-t border-border/40 pt-3">
+        <SectionLabel>Конфиденциальность</SectionLabel>
+        <Surface className="space-y-2 p-3">
+          <a
+            href={PRIVACY_POLICY_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-between gap-2 rounded-sm px-1 py-1 text-xs font-medium text-foreground hover:bg-muted/50"
+          >
+            <span>Политика конфиденциальности</span>
+            <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+          </a>
+          <a
+            href={ACCOUNT_DELETION_MAIL}
+            className="block rounded-sm px-1 py-1 pg-caption text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          >
+            Запрос на удаление данных — priceguardAlsupp0rt@yandex.ru
+          </a>
+          {!isDev && (
+            <div className="space-y-1.5 border-t border-border/30 pt-2">
+              <p className="pg-caption text-muted-foreground">
+                При сбое скачайте отчёт и приложите к письму в поддержку. Без промптов и паролей.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full text-xs"
+                disabled={diagBusy}
+                onClick={() => {
+                  void (async () => {
+                    setDiagBusy(true);
+                    setDiagCopyStatus(null);
+                    try {
+                      const json = await diagnosticsJsonString();
+                      const blob = new Blob([json], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `priceguard-diagnostics-${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      setDiagCopyStatus('Отчёт скачан — приложите к письму в поддержку');
+                    } catch {
+                      setDiagCopyStatus('Не удалось скачать отчёт');
+                    }
+                    setDiagBusy(false);
+                  })();
+                }}
+              >
+                Скачать отчёт для поддержки
+              </Button>
+              {diagCopyStatus && (
+                <p className="pg-caption text-muted-foreground">{diagCopyStatus}</p>
+              )}
+            </div>
+          )}
+        </Surface>
+      </section>
     </div>
   );
 }

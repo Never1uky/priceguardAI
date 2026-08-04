@@ -1,9 +1,9 @@
 /**
  * Webhook для @priceguard_support
  *
- * Команды: /start /help /status /premium /mykey /feedback
- * Inline-меню: Premium · Проблема · Отзыв · Товары · Справка
- * FAQ автоответы; остальное → TELEGRAM_SUPPORT_CHAT_ID
+ * Команды: /start /help /premium /mykey /feedback
+ * /status — soft-redirect на @PriceGuardAlertsBot (без дубля списка)
+ * Inline: Premium · Проблема · Отзыв CWS · Написать нам · Справка · Бот алертов
  *
  * Secrets:
  *   TELEGRAM_SUPPORT_BOT_TOKEN  — токен @priceguard_support
@@ -27,10 +27,12 @@ import {
   buildSupportPremiumHowMessage,
   buildSupportPremiumMessage,
   buildSupportStartMessage,
-  buildSupportStatusMessage,
+  buildSupportStatusRedirectMessage,
   extractUserChatIdFromForward,
   matchSupportFaqReply,
   supportAfterForwardKeyboard,
+  supportAlertsRedirectKeyboard,
+  supportFeedbackThanksKeyboard,
   supportMainMenuKeyboard,
   supportPremiumKeyboard,
   type InlineKeyboard,
@@ -158,30 +160,6 @@ async function resolveUserId(
   return active?.user_id ?? null;
 }
 
-async function loadTrackedForUser(supabase: SupabaseClient, userId: string) {
-  const { data: rows, error } = await supabase
-    .from('tracked_products')
-    .select('product_title, marketplace, last_price, target_price, last_checked, last_fetch_error, updated_at')
-    .eq('user_id', userId)
-    .eq('deleted', false)
-    .order('updated_at', { ascending: false })
-    .limit(40);
-
-  if (error) {
-    console.error('[support-webhook] status', error);
-    return [];
-  }
-
-  return (rows ?? []).map((r) => ({
-    title: String(r.product_title ?? 'Товар'),
-    marketplace: r.marketplace as string | null,
-    lastPrice: r.last_price == null ? null : Number(r.last_price),
-    targetPrice: r.target_price == null ? null : Number(r.target_price),
-    lastChecked: (r.last_checked as string | null) ?? null,
-    lastFetchError: (r.last_fetch_error as string | null) ?? null,
-  }));
-}
-
 async function reply(
   chatId: string,
   text: string,
@@ -227,28 +205,12 @@ async function forwardToAdmin(input: {
   });
 }
 
-async function handleStatus(supabase: SupabaseClient | null, chatId: string) {
-  if (!supabase) {
-    return reply(chatId, '⚠️ Сервер временно недоступен.', supportMainMenuKeyboard());
-  }
-  const userId = await resolveUserId(supabase, chatId);
-  if (!userId) {
-    return reply(
-      chatId,
-      [
-        '🔗 <b>Telegram ещё не привязан</b>',
-        '',
-        '1. @PriceGuardAlertsBot → /start → скопируйте Chat ID',
-        '2. Расширение → Аккаунт → Настройки → Telegram',
-        '3. Вставьте тот же Chat ID → «Подключить и проверить»',
-        '',
-        'После привязки /status покажет ваши товары.',
-      ].join('\n'),
-      supportMainMenuKeyboard(),
-    );
-  }
-  const items = await loadTrackedForUser(supabase, userId);
-  return reply(chatId, buildSupportStatusMessage(items), supportMainMenuKeyboard());
+async function handleStatusRedirect(chatId: string) {
+  return reply(
+    chatId,
+    buildSupportStatusRedirectMessage(),
+    supportAlertsRedirectKeyboard(),
+  );
 }
 
 async function handleMyKey(supabase: SupabaseClient | null, chatId: string) {
@@ -437,7 +399,7 @@ async function deliverFeedback(input: {
     text: input.text,
   });
   if (fwd.sent) {
-    await reply(input.chatId, buildSupportFeedbackThanks(), supportMainMenuKeyboard());
+    await reply(input.chatId, buildSupportFeedbackThanks(), supportFeedbackThanksKeyboard());
     return { action: 'forwarded', sent: true };
   }
   await reply(
@@ -470,7 +432,7 @@ async function handleCallback(
     case 'menu:help':
       return reply(chatId, buildSupportHelpMessage(), supportMainMenuKeyboard());
     case 'menu:status':
-      return handleStatus(supabase, chatId);
+      return handleStatusRedirect(chatId);
     case 'menu:problem':
       setPending(chatId, 'проблема');
       return reply(chatId, buildSupportFeedbackPrompt('problem'), supportAfterForwardKeyboard());
@@ -500,7 +462,8 @@ Deno.serve(async (req) => {
       match:
         identity.username === 'priceguard_supportbot' ||
         identity.username === 'priceguard_support',
-      commands: ['/start', '/help', '/status', '/premium', '/mykey', '/feedback', '/reply'],
+      commands: ['/start', '/help', '/premium', '/mykey', '/feedback', '/reply'],
+      hiddenCommands: ['/status'],
       adminConfigured: Boolean(adminChatId()),
       adminReply: 'Reply to forward or /reply <chatId> text',
     });
@@ -511,11 +474,13 @@ Deno.serve(async (req) => {
   }
 
   const expectedSecret = Deno.env.get('TELEGRAM_SUPPORT_WEBHOOK_SECRET')?.trim();
-  if (expectedSecret) {
-    const got = req.headers.get('X-Telegram-Bot-Api-Secret-Token')?.trim();
-    if (got !== expectedSecret) {
-      return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
-    }
+  if (!expectedSecret) {
+    console.error('[support-webhook] TELEGRAM_SUPPORT_WEBHOOK_SECRET is not set');
+    return jsonResponse({ ok: false, error: 'misconfigured' }, 503);
+  }
+  const got = req.headers.get('X-Telegram-Bot-Api-Secret-Token')?.trim();
+  if (got !== expectedSecret) {
+    return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
   }
 
   try {
@@ -581,7 +546,7 @@ Deno.serve(async (req) => {
     }
 
     if (command === '/status') {
-      await handleStatus(supabase, chatId);
+      await handleStatusRedirect(chatId);
       return jsonResponse({ ok: true, action: '/status' });
     }
 
@@ -605,7 +570,7 @@ Deno.serve(async (req) => {
     if (text.startsWith('/')) {
       await reply(
         chatId,
-        'Неизвестная команда.\n/start · /help · /status · /premium · /mykey · /feedback',
+        'Неизвестная команда.\n/start · /help · /premium · /mykey · /feedback',
         supportMainMenuKeyboard(),
       );
       return jsonResponse({ ok: true, action: 'unknown_command' });

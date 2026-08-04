@@ -60,7 +60,6 @@ export interface StorageSchema {
 /** Сообщения между content script, background и popup */
 export type ContentMessage =
   | { type: 'SCRAPE_PRODUCT' }
-  | { type: 'GET_CURRENT_PRODUCT' }
   | { type: 'PRODUCT_SCRAPED'; payload: Product }
   | { type: 'PRICE_DROP'; payload: { product: Product; previousPrice: number } }
   | {

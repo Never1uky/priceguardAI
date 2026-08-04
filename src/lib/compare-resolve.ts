@@ -1,9 +1,13 @@
-import { findDuplicateCompareProduct, mergeCompareProducts } from '@/lib/compare-merge';
+import { findDuplicateCompareProduct, mergeCompareProducts, getBestTitle } from '@/lib/compare-merge';
 import { canAddCompareProduct } from '@/lib/subscription';
 import { getCompareProducts, saveCompareProducts } from '@/lib/comparison-storage';
 import { applyOffersToCompareProduct, isOfferWithPrice } from '@/lib/compare-offers';
 import { resolveOfferForUrl } from '@/lib/marketplace-search';
-import { inferProductModel } from '@/lib/model-extract';
+import { inferProductModel, areBrandsCompatible } from '@/lib/model-extract';
+import {
+  computeMatchConfidence,
+  MANUAL_LINK_CONFIRM_CONFIDENCE,
+} from '@/lib/product-match';
 import type {
   CompareProduct,
   CompareProductHint,
@@ -15,8 +19,32 @@ import {
   detectComparisonMarketplace,
   extractComparisonArticle,
   normalizeCompareUrl,
+  resolveCompareCandidateUrl,
 } from '@/utils/comparison-url';
+import { rememberCrossMarketMapping, resolveSourceProductId } from '@/lib/cross-market-map';
+import { recordMatchFeedback } from '@/lib/match-feedback';
+import { rememberPickHistory } from '@/lib/pick-history';
+import { ensureCompareProductImage } from '@/lib/product-image';
+import { clearPriceHistory } from '@/lib/storage-local';
+import { stableProductStorageId } from '@/lib/price-identity';
+import type { Marketplace } from '@/types/product';
 
+export class ManualLinkNeedsConfirmError extends Error {
+  readonly code = 'MANUAL_LINK_NEEDS_CONFIRM' as const;
+  readonly referenceTitle: string;
+  readonly fetchedTitle: string;
+  readonly confidence: number;
+
+  constructor(referenceTitle: string, fetchedTitle: string, confidence: number) {
+    super(
+      `Это тот же товар, что «${referenceTitle.slice(0, 80)}»?\nСейчас по ссылке: «${fetchedTitle.slice(0, 80)}»`,
+    );
+    this.name = 'ManualLinkNeedsConfirmError';
+    this.referenceTitle = referenceTitle;
+    this.fetchedTitle = fetchedTitle;
+    this.confidence = confidence;
+  }
+}
 function offerFromHint(
   marketplace: ComparisonMarketplace,
   url: string,
@@ -116,7 +144,11 @@ export async function buildCompareProductFromUrl(
     authenticity: hint?.authenticity,
   };
 
-  return base;
+  try {
+    return await ensureCompareProductImage(base, { force: !base.sourceOffer?.imageUrl });
+  } catch {
+    return base;
+  }
 }
 
 export async function resolveAndAddCompareProduct(
@@ -134,9 +166,9 @@ export async function resolveAndAddCompareProduct(
     return merged;
   }
 
-  const { allowed, limit } = await canAddCompareProduct(products.length);
+  const { allowed, limit } = await canAddCompareProduct();
   if (!allowed) {
-    throw new Error(`Лимит бесплатной версии: ${limit} товаров в сравнении. Оформите Premium.`);
+    throw new Error(`Лимит бесплатной версии: ${limit} товаров в «Мои товары». Оформите Premium.`);
   }
   await saveCompareProducts([incoming, ...products]);
   return incoming;
@@ -147,8 +179,9 @@ export async function linkMarketplaceOffer(
   productId: string,
   marketplace: ComparisonMarketplace,
   url: string,
+  options?: { confirmed?: boolean },
 ): Promise<CompareProduct> {
-  const trimmedUrl = url.trim();
+  const trimmedUrl = resolveCompareCandidateUrl(url, marketplace).trim();
   const detected = detectComparisonMarketplace(trimmedUrl);
 
   if (!detected) {
@@ -170,10 +203,48 @@ export async function linkMarketplaceOffer(
   const offer = await resolveOfferForUrl(normalizedUrl, marketplace);
 
   if (!offer || !isOfferWithPrice(offer)) {
-    throw new Error('Не удалось загрузить данные с этой карточки');
+    const errMsg =
+      offer?.error === 'Нет в наличии'
+        ? 'Товар недоступен / нет в наличии по этой ссылке'
+        : 'Не удалось загрузить данные с этой карточки';
+    throw new Error(errMsg);
+  }
+
+  const referenceTitle = getBestTitle(product);
+  const fetchedTitle = offer.title?.trim() || 'Товар';
+  const existing = product.marketplaceOffers?.[marketplace];
+  const replacingPriced = isOfferWithPrice(existing);
+  const confidence = computeMatchConfidence(
+    referenceTitle,
+    fetchedTitle,
+    product.sourceOffer?.specs ?? existing?.specs,
+  );
+  const brandsOk = areBrandsCompatible(referenceTitle, fetchedTitle);
+  const needsConfirm =
+    !options?.confirmed &&
+    (replacingPriced ||
+      !brandsOk ||
+      confidence < MANUAL_LINK_CONFIRM_CONFIDENCE);
+
+  if (needsConfirm && referenceTitle !== 'Товар') {
+    throw new ManualLinkNeedsConfirmError(referenceTitle, fetchedTitle, confidence);
   }
 
   const article = extractComparisonArticle(normalizedUrl, marketplace) || undefined;
+  const oldArticle =
+    product.articlesByMarketplace?.[marketplace] ||
+    (existing?.url
+      ? extractComparisonArticle(existing.url, marketplace) || undefined
+      : undefined);
+  if (oldArticle && article && oldArticle !== article) {
+    const oldKey = stableProductStorageId({
+      marketplace: marketplace as Marketplace,
+      article: oldArticle,
+      url: existing?.url,
+    });
+    if (oldKey) void clearPriceHistory(oldKey);
+  }
+
   const cleaned: MarketplaceOffer = {
     ...offer,
     found: true,
@@ -181,6 +252,9 @@ export async function linkMarketplaceOffer(
     needsManualPick: false,
     searchCandidates: undefined,
     error: undefined,
+    matchConfidence: confidence,
+    matchStatus:
+      confidence < MANUAL_LINK_CONFIRM_CONFIDENCE ? 'unverified_manual' : 'verified',
   };
   const updated = applyOffersToCompareProduct(product, [cleaned]);
 
@@ -196,5 +270,41 @@ export async function linkMarketplaceOffer(
   };
 
   await saveCompareProducts([withUrl, ...products.filter((p) => p.id !== productId)]);
+
+  // X1: manual link is a strong cross-market signal
+  if (marketplace !== product.sourceMarketplace) {
+    void rememberPickHistory({
+      referenceTitle,
+      marketplace,
+      url: normalizedUrl,
+      title: fetchedTitle,
+    });
+    const sourceId = resolveSourceProductId({
+      sourceMarketplace: product.sourceMarketplace,
+      sourceUrl: product.sourceUrl,
+      article: product.article,
+      articlesByMarketplace: product.articlesByMarketplace,
+    });
+    if (sourceId) {
+      void rememberCrossMarketMapping({
+        sourceMarketplace: product.sourceMarketplace,
+        sourceProductId: sourceId,
+        sourceUrl: product.sourceUrl,
+        targetMarketplace: marketplace,
+        targetUrl: normalizedUrl,
+        confidence: Math.max(confidence, 90),
+        evidence: 'manual',
+      });
+      void recordMatchFeedback({
+        sourceMarketplace: product.sourceMarketplace,
+        sourceProductId: sourceId,
+        targetMarketplace: marketplace,
+        candidateUrl: normalizedUrl,
+        accepted: true,
+        matchConfidence: confidence,
+      });
+    }
+  }
+
   return withUrl;
 }

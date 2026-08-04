@@ -106,12 +106,17 @@ async function main() {
     fail('Expected manifest_version 3');
   }
 
-  const requiredPerms = ['storage', 'activeTab', 'notifications', 'alarms'];
+  const requiredPerms = ['storage', 'notifications', 'alarms', 'scripting', 'webNavigation'];
   for (const p of requiredPerms) {
     if (manifest.permissions?.includes(p)) {
       pass(`Permission: ${p}`);
     } else {
       fail(`Missing permission: ${p}`);
+    }
+  }
+  for (const p of ['activeTab', 'tabs', 'windows']) {
+    if (manifest.permissions?.includes(p)) {
+      fail(`Unexpected permission (CWS minimize): ${p}`);
     }
   }
 

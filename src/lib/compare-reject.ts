@@ -15,14 +15,22 @@ import {
 } from '@/lib/cross-market-map';
 import { recordMatchFeedback } from '@/lib/match-feedback';
 import {
+  capRejectedUrls,
+  filterPoolExcluding,
   getCandidatePool,
   markOfferRejectedKeepPool,
+  normalizePoolUrl,
   offerFromPoolCandidate,
   pickNextPoolCandidate,
   poolToOfferCandidates,
   syncPoolOntoProduct,
 } from '@/lib/candidate-pool';
 import { ensureOfferWithPrice, isOfferWithPrice } from '@/lib/compare-offers';
+import { getBestTitle } from '@/lib/compare-merge';
+import {
+  isAcceptableProductMatch,
+  MIN_COMPARE_MATCH_CONFIDENCE,
+} from '@/lib/product-match';
 import type { CompareProduct, ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 
 export function markOfferRejected(
@@ -69,6 +77,122 @@ async function disputeRejected(
   });
 }
 
+/**
+ * Отклонить кандидата из needs_choice picker: blacklist + оставить остальных,
+ * либо not_found если кандидатов не осталось. Без auto-bind и без нового SERP.
+ * Пишет оффер напрямую (не через mergeMarketplaceOffers), иначе pending needs_choice
+ * не даст перейти в not_found.
+ */
+export function applyRejectCompareCandidate(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  rejectedUrl: string,
+): { product: CompareProduct; offer: MarketplaceOffer } {
+  const norm = normalizePoolUrl(rejectedUrl);
+  const rejected = capRejectedUrls([
+    ...(product.rejectedOfferUrls?.[marketplace] ?? []),
+    norm,
+  ]);
+
+  const prevOffer = product.marketplaceOffers?.[marketplace];
+  const fromCandidates = prevOffer?.searchCandidates ?? [];
+  const fromPool = product.candidatePoolByMarketplace?.[marketplace] ?? [];
+  const sourceList = fromCandidates.length
+    ? fromCandidates
+    : fromPool.length
+      ? fromPool
+      : getCandidatePool(product, marketplace);
+  const remaining = filterPoolExcluding(sourceList, rejected);
+
+  let offer: MarketplaceOffer;
+  if (remaining.length > 0) {
+    offer = {
+      marketplace,
+      title: prevOffer?.title ?? 'Выберите товар',
+      price: null,
+      delivery: null,
+      rating: null,
+      url: prevOffer?.url && !isOfferWithPrice(prevOffer) ? prevOffer.url : '',
+      imageUrl: prevOffer?.imageUrl,
+      found: false,
+      needsManualPick: true,
+      matchStatus: 'needs_choice',
+      searchCandidates: remaining,
+      error: undefined,
+    };
+  } else {
+    offer = {
+      marketplace,
+      title: prevOffer?.title ?? '',
+      price: null,
+      delivery: null,
+      rating: null,
+      url: '',
+      found: false,
+      needsManualPick: false,
+      matchStatus: 'not_found',
+      searchCandidates: undefined,
+      error: undefined,
+    };
+  }
+
+  const marketplaceUrls = { ...product.marketplaceUrls };
+  if (remaining.length === 0) {
+    delete marketplaceUrls[marketplace];
+  }
+
+  let next: CompareProduct = {
+    ...product,
+    rejectedOfferUrls: {
+      ...product.rejectedOfferUrls,
+      [marketplace]: rejected,
+    },
+    marketplaceUrls,
+    marketplaceOffers: {
+      ...product.marketplaceOffers,
+      [marketplace]: offer,
+    },
+    candidatePoolByMarketplace: {
+      ...product.candidatePoolByMarketplace,
+      [marketplace]: remaining.length ? remaining : undefined,
+    },
+    comparedAt: Date.now(),
+  };
+
+  if (remaining.length) {
+    next = syncPoolOntoProduct(next, marketplace, remaining);
+  }
+
+  const finalOffer = next.marketplaceOffers?.[marketplace] ?? offer;
+  return { product: next, offer: finalOffer };
+}
+
+/** Persist picker reject to chrome.storage.local */
+export async function rejectCompareCandidate(
+  productId: string,
+  marketplace: ComparisonMarketplace,
+  rejectedUrl: string,
+): Promise<{ product: CompareProduct; offer: MarketplaceOffer }> {
+  const products = await getCompareProducts();
+  const product = products.find((p) => p.id === productId);
+  if (!product) throw new Error('Товар не найден в списке сравнения');
+
+  await disputeRejected(product, marketplace, rejectedUrl);
+
+  const { product: withOffer, offer } = applyRejectCompareCandidate(
+    product,
+    marketplace,
+    rejectedUrl,
+  );
+
+  await saveCompareProducts([
+    withOffer,
+    ...products.filter((p) => p.id !== productId),
+  ]);
+
+  return { product: withOffer, offer };
+}
+
 /** Отклонить оффер → next pool candidate → иначе search */
 export async function rejectAndResearchMarketplace(
   productId: string,
@@ -82,14 +206,41 @@ export async function rejectAndResearchMarketplace(
   await disputeRejected(product, marketplace, rejectedUrl);
 
   const nextCand = pickNextPoolCandidate(product, marketplace, rejectedUrl);
+  const referenceTitle = getBestTitle(product);
+  const referenceSpecs =
+    product.sourceOffer?.specs ??
+    product.marketplaceOffers?.[product.sourceMarketplace]?.specs;
 
-  if (nextCand?.url) {
+  const nextAcceptable =
+    nextCand?.url &&
+    nextCand.title &&
+    isAcceptableProductMatch(
+      referenceTitle,
+      nextCand.title,
+      MIN_COMPARE_MATCH_CONFIDENCE,
+      referenceSpecs,
+    );
+
+  if (nextAcceptable && nextCand?.url) {
     const updated = markOfferRejectedKeepPool(product, marketplace, rejectedUrl, {
       bumpSearchVariant: false,
     });
     const rest = poolToOfferCandidates(getCandidatePool(updated, marketplace), nextCand.url);
     let offer = offerFromPoolCandidate(marketplace, nextCand, rest);
-    offer = ensureOfferWithPrice(await enrichOfferRatingIfMissing(offer));
+    // S1: keep SERP price even if card enrich fails
+    if (isOfferWithPrice(offer)) {
+      offer = { ...offer, matchStatus: 'serp_only', found: true };
+      try {
+        const enriched = await enrichOfferRatingIfMissing(offer);
+        if (isOfferWithPrice(enriched)) {
+          offer = ensureOfferWithPrice({ ...enriched, matchStatus: 'verified' });
+        }
+      } catch {
+        // keep serp_only
+      }
+    } else {
+      offer = ensureOfferWithPrice(await enrichOfferRatingIfMissing(offer));
+    }
 
     let withOffer = applyOffersToCompareProduct(updated, [offer]);
     withOffer = syncPoolOntoProduct(withOffer, marketplace, [

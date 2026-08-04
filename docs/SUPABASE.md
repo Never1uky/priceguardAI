@@ -40,6 +40,13 @@ supabase functions deploy telegram-webhook
 3. В SQL Editor подставьте `__SERVICE_ROLE_KEY__` и `__CRON_SECRET__` (не коммитьте ключи).
 4. Run → проверьте строку `priceguard-update-prices` в `cron.job`.
 
+**Privacy TTL purge (ежедневно)**
+
+1. Миграция `20260717210000_privacy_ttl_purge.sql` → функция `public.purge_privacy_ttl_data()`.
+2. SQL Editor: `supabase/scripts/setup-privacy-purge-cron.sql` → job `priceguard-privacy-ttl-purge` (`15 3 * * *` UTC).
+3. Ручной прогон: `select public.purge_privacy_ttl_data();`
+4. Runbook удаления аккаунта: `docs/ACCOUNT_DELETION.md`.
+
 **B. GitHub Actions (запасной триггер)**
 
 Файл: `.github/workflows/update-prices.yml`  
@@ -70,20 +77,21 @@ curl -X POST "https://ihlfvpocwobvcpxbypsd.supabase.co/functions/v1/update-price
 Связь с ботом: `update-prices` и `price-alert-notify` шлют через `TELEGRAM_BOT_TOKEN` (@PriceGuardAlertsBot) с кнопкой «Открыть товар».  
 `/status` показывает цену, возраст `last_checked` и пометку, если маркетплейс блокирует fetch.
 
-### 4. Bright Data Web Unlocker (серверные secrets)
+### 4. Scrappey (серверный unlocker для Ozon / Я.Маркет)
 
-Для стабильного Ozon / Я.Маркет на сервере (antibot). Ключ **не** вводится в расширении — только в Supabase:
+Для стабильного парсинга antibot-площадок на сервере (Telegram cron, product-intel, Premium unlocker). Ключ **не** в расширении — только Supabase secret:
 
 ```bash
-supabase secrets set BRIGHTDATA_API_KEY=ваш_api_key BRIGHTDATA_ZONE=web_unlocker1
-supabase functions deploy update-prices
+supabase secrets set SCRAPPEY_API_KEY=ваш_api_key
+supabase functions deploy update-prices telegram-webhook fetch-product-price product-intel reviews-fetch
 ```
 
-- Zone: тип **Web Unlocker** в аккаунте Bright Data.
-- Cron `update-prices` при наличии обоих secrets вызывает Unlocker **до** legacy-парсера (Ozon/YM). WB: сначала `card.wb.ru`, Unlocker только если пусто.
-- Кэш `price_scrape_cache` TTL **2 часа**.
-- Без secrets — только legacy HTTP + hybrid Chrome backup.
-- Ответ cron: `brightdataConfigured` + `stats.bySource: { cache, brightdata, legacy }`.
+- Scrappey: `request` mode (дешевле) → fallback `browser` при captcha/block.
+- Cron `update-prices`: Ozon/YM — Scrappey **до** legacy; WB — сначала `card.wb.ru`, Scrappey только если пусто.
+- Кэш `price_scrape_cache` TTL **2 часа**, source `scrappey | legacy`.
+- Без `SCRAPPEY_API_KEY` — только legacy HTTP (частые блокировки Ozon/YM).
+- Ответ cron: `scrappeyConfigured` + `stats.bySource: { cache, scrappey, legacy }`.
+- Live smoke: `SCRAPPEY_API_KEY=... npm run smoke:scrappey`
 
 ### Telegram-бот @PriceGuardAlertsBot
 
@@ -119,11 +127,22 @@ npx supabase functions deploy price-alert-notify update-prices telegram-webhook
 
 ---
 
+### Security notes (Edge)
+
+- `yookassa-webhook` **перепроверяет** платёж через YooKassa API (`GET /v3/payments/{id}`) — тело webhook не доверяется.
+- `price-alert-notify` / `support-notify` / `product-cache` / `check-payment` требуют **JWT** пользователя.
+- `price-alert-notify`: Chat ID только из `user_alert_settings` (не из body).
+- `product-intel`: `isPremium` / `userId` из body **игнорируются**.
+- Cron: `update-prices`, `search-alerts`, `weekly-metrics-digest` — `x-cron-secret: UPDATE_PRICES_CRON_SECRET` или Bearer service_role.
+- Manifest `host_permissions`: только проект `ihlfvpocwobvcpxbypsd.supabase.co` (не `*.supabase.co`).
+
+---
+
 ## Новое в v2.7
 
 - **Supabase Auth** — синхронизация отслеживаемых товаров по `user_id` (email / Google)
 - **Дашборд метрик** — SQL Views + страница `src/admin/index.html`
-- **Алерты WB** — `search-alerts` + `chrome.alarms` + опционально Telegram
+- **Алерты WB** — Edge `search-alerts` (опционально Telegram). Клиентский вызов из расширения **не wired**; нет in-repo caller из background. Undeploy — после проверки внешнего cron.
 
 ## Миграции
 
@@ -229,12 +248,14 @@ supabase secrets set GROK_API_KEY=xai-...
 supabase secrets set OPENAI_API_KEY=sk-...
 
 # Опционально: лимиты (по умолчанию 40 запросов / 60 мин на device_id)
-# Premium pipeline Sonar→GPT = 2 запроса; при кэше веб-исследования (7 дней) = 1
+# Premium deep Sonar→GPT = 2 запроса; при кэше веб-исследования (14 дней) = 1
+# SONAR_DAILY_CAP=5  # live Perplexity calls / user / UTC day (cache hits excluded)
 supabase secrets set AI_RATE_LIMIT_MAX=40
 supabase secrets set AI_RATE_LIMIT_WINDOW_MIN=60
 
 # Деплой
 supabase functions deploy validate-license
+supabase functions deploy claim-trial
 supabase functions deploy create-payment
 supabase functions deploy check-payment
 supabase functions deploy yookassa-webhook
@@ -249,10 +270,13 @@ supabase functions deploy search-metrics
 
 | Функция | Описание |
 |---------|----------|
-| `ai-proxy` | Прокси Grok/OpenAI/Perplexity Sonar, pipeline Sonar→GPT, rate limit, лог в `ai_request_log` (pipeline, web_research_used) |
-| `product-cache` | `get`/`put` общего кэша `product_cache` (v1 отзывы, v2 полный анализ, v3 веб-исследование Sonar) |
+| `ai-proxy` | Прокси Grok/OpenAI/Perplexity Sonar; lite fullAnalysis без Sonar; deep = Sonar→GPT + `SONAR_DAILY_CAP`; лог `ai_request_log` |
+| `product-cache` | `get`/`put` `product_cache` (v1 отзывы, v2 полный анализ TTL 7д, v3 веб Sonar TTL 14д) |
 | `tracked-sync` | `push`/`pull` отслеживаемых товаров по `device_id` |
-| `search-metrics` | Запись метрик поиска |
+| `search-metrics` | Запись метрик поиска (**нет in-repo caller** в расширении; Edge может оставаться для ручных/cron вызовов) |
+| `search-alerts` | WB success-rate alerts (**нет in-repo caller**; undeploy после проверки cron) |
+| `reviews-fetch` | Server reviews fetch (**дубль** логики в `product-intel`; нет caller из extension) |
+| `weekly-metrics-digest` | Digest метрик (**нет in-repo caller / cron SQL в репо**) |
 
 ## 4. Настройте расширение
 
@@ -269,7 +293,11 @@ npm run build
 - **URL:** `https://YOUR_PROJECT.supabase.co/functions/v1/yookassa-webhook`
 - События: `payment.succeeded`, `payment.canceled`
 
-## Демо-ключи (без Supabase)
+## Демо-ключи (только БД; в клиенте офлайн-демо нет)
+
+Клиент **не** содержит `DEMO_LICENSE_KEYS` / UI «Демо-ключи». Активация — через Edge `validate-license` после входа.
+
+Seed в миграции (если ещё в prod) может содержать:
 
 | Ключ | Что даёт |
 |------|----------|
@@ -278,6 +306,11 @@ npm run build
 | `PGAI-TEST-12345-LIFE` | Тест (разработка) |
 | `PGAI-BETA-7DAY-TEST` | Premium 7 дней |
 | `PGAI-DEMO-MONTH-FREE` | Бета: месяц бесплатно |
+
+Перед **Public** CWS рекомендуется отключить: `docs/sql/disable-demo-license-keys.sql`.  
+Перед Unlisted beta — по желанию оставить для ручного QA.
+
+Оплата / smoke: `docs/YOOKASSA_SMOKE.md`.
 
 ## E2E тесты
 

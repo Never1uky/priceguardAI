@@ -35,10 +35,16 @@ alter table public.product_cache enable row level security;
 |-----------------|--------------------------|
 | `1` | Анализ отзывов (`ReviewAnalysisResult`) |
 | `2` | Полный анализ товара (`FullProductAnalysis`) |
+| `3` | Web research (SERP / compare) |
 
 **TTL:** 7 дней — проверяется на клиенте (`PRODUCT_CACHE_TTL_MS`) и на сервере в `product-cache` Edge Function.
 
 Связанная таблица `ai_request_log` — rate limiting и телеметрия для `ai-proxy`.
+Таблица `edge_request_log` — общий rate limit для других Edge (например `reviews-fetch`).
+
+**Единая запись:** `_shared/product-cache-store.ts` (`getFresh` / `upsertVersioned` / `invalidateProductCacheAnalysis`) — используют `product-cache`, `ai-proxy`, `product-intel`. Upsert v2 и v3 одного SKU не затирают друг друга (unique на `marketplace, product_id, cache_version`).
+
+**Инвалидация при скачке цены:** `update-prices` при Δ ≥ **10%** или ≥ **500 ₽** ставит `last_updated` в прошлое для `cache_version IN (1, 2)` того же `(marketplace, product_id)` — следующий get видит miss/expired. Клиент уже инвалидирует local full-analysis по тем же порогам.
 
 ---
 
@@ -53,9 +59,10 @@ supabase secrets set GROK_API_KEY=xai-... OPENAI_API_KEY=sk-...
 supabase secrets set AI_RATE_LIMIT_MAX=40 AI_RATE_LIMIT_WINDOW_MIN=60
 ```
 
-**Деплой:**
+**Деплой (AI + hardening):**
 ```bash
-supabase functions deploy ai-proxy product-cache
+supabase functions deploy ai-proxy product-cache product-intel reviews-fetch \
+  cross-market-map match-feedback compare-research update-prices
 ```
 
 **Запрос от расширения:**
@@ -204,7 +211,35 @@ await putRemoteProductCache({
 
 ---
 
-## 6. Переменные окружения
+## 6. Edge hardening (rate limits, mapping, compare verify)
+
+### `reviews-fetch` — internal-only + rate limit
+
+Публичный JWT-доступ **закрыт** (в расширении callers нет). Нужен `x-cron-secret` (= `UPDATE_PRICES_CRON_SECRET`) или Bearer service_role.
+
+Опционально снова открыть для JWT: secret `ALLOW_REVIEWS_FETCH_JWT=1`. При JWT — лимит через `edge_request_log` (по умолчанию ~20/час/user).
+
+**BREAKING** только для внешних JWT-caller’ов; расширение не затронуто.
+
+### `cross-market-map` — moderation cooldown + `unverified`
+
+- `dispute` / `reportFail`: не чаще **1× / 24ч / user / (edge, action)**; повтор → `429` `{ code: 'moderation_cooldown' }` (таблица `mapping_moderation_events`).
+- Manual upsert с `matchConfidence < 70` → `status: 'unverified'`.
+- `lookup`: primary только `active`; `unverified` — в `unverifiedAlternates` с флагом `unverified: true` (additive).
+
+### `match-feedback` + crowd promote
+
+Пишет `user_id`, optional `source_title` / `candidate_title`. Promote (`maybePromoteMultiUserMapping`): ≥2 distinct users, avg confidence ≥70, title score ≥70 если titles есть, блок при reject/dispute за 7 дней; audit в `mapping_promotion_audit`.
+
+### `compare-research` — top-1 server verify
+
+Для top-1 каждой target MP (не всех 5): card/Scrappey через `fetchMarketplacePriceDetailed` (+ `price_scrape_cache`). Additive на кандидате: `serverVerified`, `serverMatchConfidence`, `serverTitle`. Без Scrappey — Ozon/YM skip (`serverVerified: false`); WB может проверить через card API.
+
+Миграция: `supabase/migrations/20260723120000_edge_hardening_p0_p1.sql`.
+
+---
+
+## 7. Переменные окружения
 
 **Сборка расширения (`.env`):**
 ```
@@ -216,13 +251,19 @@ VITE_SUPABASE_ANON_KEY=eyJ...
 ```
 GROK_API_KEY
 OPENAI_API_KEY
+UPDATE_PRICES_CRON_SECRET   # reviews-fetch gate + cron
+SCRAPPEY_API_KEY             # compare-research / price fetch
+# optional:
+ALLOW_REVIEWS_FETCH_JWT=1
+AI_RATE_LIMIT_MAX=40
+AI_RATE_LIMIT_WINDOW_MIN=60
 ```
 
-**Не нужно в расширении:** `GROK_API_KEY`, `OPENAI_API_KEY`.
+**Не нужно в расширении:** `GROK_API_KEY`, `OPENAI_API_KEY`, Scrappey keys.
 
 ---
 
-## 7. Тестирование
+## 8. Тестирование
 
 ```bash
 # Юнит-тесты

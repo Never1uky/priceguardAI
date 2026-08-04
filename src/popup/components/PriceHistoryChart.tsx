@@ -7,6 +7,14 @@ interface PriceHistoryChartProps {
   initialPrice?: number;
 }
 
+function pluralRecords(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'запись';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'записи';
+  return 'записей';
+}
+
 export function PriceHistoryChart({ history, initialPrice }: PriceHistoryChartProps) {
   if (history.length === 0) {
     return (
@@ -19,6 +27,7 @@ export function PriceHistoryChart({ history, initialPrice }: PriceHistoryChartPr
   const maxPrice = Math.max(...prices);
   const avgPrice = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
   const range = maxPrice - minPrice || 1;
+  const flatPrices = minPrice === maxPrice;
   const width = 320;
   const height = 108;
   const paddingX = 8;
@@ -42,13 +51,18 @@ export function PriceHistoryChart({ history, initialPrice }: PriceHistoryChartPr
   const totalDiff = lastPrice - baseline;
   const isCheaper = totalDiff < 0;
   const showDots = history.length <= 24;
+  const priceTone = flatPrices ? 'text-foreground' : undefined;
 
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded-sm bg-muted/50 px-2.5 py-2">
           <p className="pg-caption">Минимум</p>
-          <p className="pg-subtitle mt-0.5 tabular-nums text-success">{formatPrice(minPrice)}</p>
+          <p
+            className={`pg-subtitle mt-0.5 tabular-nums ${priceTone ?? 'text-success'}`}
+          >
+            {formatPrice(minPrice)}
+          </p>
         </div>
         <div className="rounded-sm bg-muted/50 px-2.5 py-2">
           <p className="pg-caption">Среднее</p>
@@ -56,15 +70,21 @@ export function PriceHistoryChart({ history, initialPrice }: PriceHistoryChartPr
         </div>
         <div className="rounded-sm bg-muted/50 px-2.5 py-2">
           <p className="pg-caption">Максимум</p>
-          <p className="pg-subtitle mt-0.5 tabular-nums text-destructive">{formatPrice(maxPrice)}</p>
+          <p
+            className={`pg-subtitle mt-0.5 tabular-nums ${priceTone ?? 'text-destructive'}`}
+          >
+            {formatPrice(maxPrice)}
+          </p>
         </div>
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="pg-caption">{history.length} записей</span>
+        <span className="pg-caption">
+          {history.length} {pluralRecords(history.length)}
+        </span>
         <span
           className={`flex items-center gap-1 text-[11px] font-medium ${
-            isCheaper ? 'text-success' : totalDiff > 0 ? 'text-destructive' : 'text-muted-foreground'
+            isCheaper ? 'text-success' : totalDiff > 0 ? 'text-destructive' : 'text-foreground/65'
           }`}
         >
           {totalDiff < 0 ? (

@@ -13,7 +13,7 @@ import {
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import { isDeveloperEmail, isDeveloperUser } from '@/lib/developer-access';
 import { runPostLoginHooks, type PostLoginResult } from '@/lib/supabase/post-login';
-import { toastError, toastSuccess } from '@/popup/lib/toast';
+import { toastError, toastSuccess, toastWarning } from '@/popup/lib/toast';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { SectionLabel } from '@/components/ui/section-label';
@@ -34,6 +34,7 @@ interface AuthTabProps {
   onAuthed?: () => void;
 }
 
+/** Подсказка под кнопкой + деталь для toast (что именно подтянулось). */
 function formatMigrationHint(result: PostLoginResult): string | null {
   const parts: string[] = [];
   if (result.premiumRestored) {
@@ -48,11 +49,21 @@ function formatMigrationHint(result: PostLoginResult): string | null {
         (result.merged > 0 ? `, объединено дубликатов: ${result.merged}` : ''),
     );
   } else if (result.synced && result.localCount > 0) {
-    parts.push(`Синхронизировано ${result.localCount} локальных товаров с облаком`);
+    parts.push(`Список товаров обновлён (${result.localCount})`);
   } else if (result.synced) {
-    parts.push('Список синхронизирован с облаком');
+    parts.push('Список товаров обновлён с облака');
+  }
+  if (result.compareSynced) {
+    parts.push('Сравнение обновлено');
   }
   return parts.length > 0 ? parts.join('. ') : null;
+}
+
+/** Всегда непустой текст успеха для toast. */
+function formatSyncSuccessToast(result: PostLoginResult): string {
+  const detail = formatMigrationHint(result);
+  if (detail) return `Синхронизация выполнена. ${detail}`;
+  return 'Синхронизация выполнена — лицензия и данные актуальны';
 }
 
 function formatAuthError(err: unknown): string {
@@ -103,13 +114,32 @@ export function AuthTab({ onAuthed }: AuthTabProps) {
     }
   }, []);
 
-  const runSync = useCallback(async () => {
+  const runSync = useCallback(async (opts?: { force?: boolean }) => {
     setSyncing(true);
     try {
-      const result = await runPostLoginHooks();
+      // force: кнопка — всегда свежий cloud pass (не reuse кэша signIn/SIGNED_IN)
+      const result = await runPostLoginHooks({ force: opts?.force !== false });
       const hint = formatMigrationHint(result);
       if (hint) setMigrationHint(hint);
+
+      if (result.error && !result.synced && !result.premiumRestored && !result.telegramRestored) {
+        toastError(
+          result.timedOut
+            ? 'Синхронизация прервалась по таймауту — проверьте сеть и нажмите ещё раз'
+            : `Синхронизация не удалась: ${result.error}`,
+        );
+      } else if (result.timedOut) {
+        toastWarning(
+          hint
+            ? `Синхронизация частично завершена (таймаут сети). ${hint}`
+            : 'Синхронизация частично завершена (таймаут сети). Данные могли подтянуться не полностью.',
+        );
+      } else {
+        toastSuccess(formatSyncSuccessToast(result));
+      }
       onAuthedRef.current?.();
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Синхронизация не удалась');
     } finally {
       setSyncing(false);
     }
@@ -126,7 +156,8 @@ export function AuthTab({ onAuthed }: AuthTabProps) {
         return;
       }
       if (event === 'SIGNED_IN') {
-        void runSync();
+        // Soft: reuse just-finished signIn hooks; toast still shown
+        void runSync({ force: false });
       }
     });
     return () => unsub?.();
@@ -265,6 +296,10 @@ export function AuthTab({ onAuthed }: AuthTabProps) {
             Выйти
           </Button>
         </div>
+        <p className="pg-hint text-muted-foreground">
+          После обновления расширения нажмите «Синхронизировать», чтобы подтянуть лицензию и данные
+          аккаунта.
+        </p>
       </div>
     );
   }
@@ -288,25 +323,27 @@ export function AuthTab({ onAuthed }: AuthTabProps) {
             <input
               type="email"
               placeholder="Email"
+              aria-label="Email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-sm border-0 bg-muted/60 px-3 py-2.5 pg-body outline-none ring-primary focus:ring-1"
+              className="w-full rounded-sm border-0 bg-muted/60 px-3 py-2.5 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
               required
               autoComplete="email"
             />
             {mode === 'signup' && isUnreliableAuthEmail(email) && (
               <p className="rounded-sm bg-amber-500/10 px-2.5 py-2 pg-caption leading-relaxed text-amber-900 dark:text-amber-200">
-                Для восстановления пароля надёжнее Gmail или рабочая почта: на Яндекс/Mail.ru
-                письма сброса часто не доходят (пока нет своего SMTP).
+                Для восстановления пароля надёжнее Gmail или рабочая почта — на Яндекс/Mail.ru
+                письма сброса часто не доходят.
               </p>
             )}
             {mode !== 'reset' && (
               <input
                 type="password"
                 placeholder="Пароль (мин. 6 символов)"
+                aria-label="Пароль"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-sm border-0 bg-muted/60 px-3 py-2.5 pg-body outline-none ring-primary focus:ring-1"
+                className="w-full rounded-sm border-0 bg-muted/60 px-3 py-2.5 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 required
                 minLength={6}
                 autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}

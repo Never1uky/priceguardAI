@@ -2,6 +2,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
+import { authorizeCronOrServiceRole } from '../_shared/cron-auth.ts';
 
 function serviceClient() {
   return createClient(
@@ -31,7 +32,7 @@ async function sendTelegramAlert(message: string): Promise<TelegramResult> {
   }
 
   if (!/^\d+$/.test(chatId) && !chatId.startsWith('-')) {
-    console.warn('[search-alerts] TELEGRAM_CHAT_ID looks invalid:', chatId.slice(0, 6));
+    console.warn('[search-alerts] TELEGRAM_CHAT_ID looks invalid');
   }
 
   try {
@@ -73,6 +74,10 @@ Deno.serve(async (req) => {
   }
   if (req.method !== 'POST') {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
+  }
+
+  if (!authorizeCronOrServiceRole(req)) {
+    return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
   }
 
   try {

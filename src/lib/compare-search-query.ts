@@ -5,12 +5,21 @@
 
 import { getBestTitle } from '@/lib/compare-merge';
 import {
+  buildPrimaryEntityQuery,
+  buildPrimaryWithHostQuery,
+  enforcePrimaryLeadQuery,
+  extractEntityFromTitle,
+} from '@/lib/entity-extract';
+import { isDependentProductRole } from '@/lib/match-rules/types';
+import {
   buildModelSearchQuery,
   buildVariantSearchQuery,
   extractStorageSpecQuery,
   inferProductModel,
+  stripCategoryQueryNoise,
 } from '@/lib/model-extract';
 import { buildFeatureSearchQuery, extractProductFeatures } from '@/lib/product-features';
+import { inferProductCategory } from '@/lib/match-category';
 import type { CompareProduct, ComparisonMarketplace } from '@/types/comparison';
 
 export const SEARCH_VARIANT_COUNT = 5;
@@ -54,9 +63,34 @@ export function getSearchQueryForVariant(
     product.marketplaceOffers?.[product.sourceMarketplace]?.specs ??
     product.marketplaceOffers?.[marketplace]?.specs;
 
-  const info = inferProductModel(title, specs);
+  const entity = extractEntityFromTitle(title, specs);
+  // Host primary: model/query from title only — specs kit lines must not inject DualSense etc.
+  const info =
+    entity.productRole === 'primary'
+      ? inferProductModel(title)
+      : inferProductModel(title, specs);
   const article = articleForMarketplace(product, marketplace);
   const variant = ((variantIndex % SEARCH_VARIANT_COUNT) + SEARCH_VARIANT_COUNT) % SEARCH_VARIANT_COUNT;
+
+  // Dependent roles: lead with primary entity; host only as secondary flavour
+  if (isDependentProductRole(entity.productRole) && entity.primaryEntity.length >= 3) {
+    const lead = buildPrimaryEntityQuery(entity);
+    const withHost = buildPrimaryWithHostQuery(entity);
+    switch (variant) {
+      case 0:
+      case 4:
+        return lead || info.searchQuery;
+      case 1:
+        return entity.primaryEntity.slice(0, 80);
+      case 2:
+        if (article && marketplace === product.sourceMarketplace) return article;
+        return lead || info.searchQuery;
+      case 3:
+        return withHost ?? lead ?? info.searchQuery;
+      default:
+        return lead || info.searchQuery;
+    }
+  }
 
   switch (variant) {
     case 0: {
@@ -92,14 +126,16 @@ export function getEffectiveSearchQuery(
   marketplace: ComparisonMarketplace,
 ): string {
   const variant = getSearchVariantIndex(product, marketplace);
+  const title = getBestTitle(product);
   return sanitizeCrossMarketplaceQuery(
     getSearchQueryForVariant(product, marketplace, variant),
+    title,
   );
 }
 
 /** Убирает артикулы в скобках, дубли цвета и лишние слова из поискового запроса */
-export function sanitizeCrossMarketplaceQuery(query: string): string {
-  return query
+export function sanitizeCrossMarketplaceQuery(query: string, titleHint?: string): string {
+  let q = query
     .replace(/\([^)]*\)/g, ' ')
     .replace(/\brmx\d{4,7}\b/gi, ' ')
     .replace(/\b(смартфон|телефон|android|nano-?sim)\b/gi, ' ')
@@ -107,6 +143,12 @@ export function sanitizeCrossMarketplaceQuery(query: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80);
+
+  if (titleHint) {
+    q = stripCategoryQueryNoise(inferProductCategory(titleHint), q).slice(0, 80);
+    q = enforcePrimaryLeadQuery(q, titleHint).slice(0, 80);
+  }
+  return q;
 }
 
 /**
@@ -126,7 +168,7 @@ export function buildCrossMarketplaceQueries(
   const queries: string[] = [];
 
   const push = (q: string | undefined) => {
-    const trimmed = sanitizeCrossMarketplaceQuery(q?.trim() ?? '');
+    const trimmed = sanitizeCrossMarketplaceQuery(q?.trim() ?? '', title);
     if (!trimmed || trimmed === 'Товар' || trimmed.length < 3) return;
     const key = trimmed.toLowerCase();
     if (seen.has(key)) return;
@@ -134,7 +176,14 @@ export function buildCrossMarketplaceQueries(
     queries.push(trimmed);
   };
 
-  // Сначала структурированный запрос: brand + model + storage + color
+  // Сначала primary-entity lead для accessory/consumable
+  const entity = extractEntityFromTitle(title, specs);
+  if (isDependentProductRole(entity.productRole)) {
+    push(buildPrimaryEntityQuery(entity));
+    push(buildPrimaryWithHostQuery(entity));
+  }
+
+  // Затем структурированный запрос: brand + model + storage + color
   push(buildFeatureSearchQuery(extractProductFeatures(title, specs)));
   push(buildVariantSearchQuery(title, specs));
   push(getSearchQueryForVariant(product, marketplace, 0));

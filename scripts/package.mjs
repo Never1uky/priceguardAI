@@ -1,4 +1,4 @@
-import { createWriteStream, copyFileSync, mkdirSync } from 'node:fs';
+import { createWriteStream, copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,9 +10,37 @@ const rootDir = join(__dirname, '..');
 const distDir = join(rootDir, 'dist');
 const pkg = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf8'));
 const version = pkg.version;
-const outFile = join(rootDir, `priceguard-ai-v${version}.zip`);
+const baseName = `priceguard-ai-v${version}`;
+
+/**
+ * Не перезаписывать существующий zip:
+ * priceguard-ai-v0.9.0.zip → priceguard-ai-v0.9.0(1).zip → (2) …
+ */
+async function resolveUniqueZipName(dir) {
+  const baseFile = `${baseName}.zip`;
+  const basePath = join(dir, baseFile);
+  if (!existsSync(basePath)) return baseFile;
+
+  const suffixRe = new RegExp(
+    `^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\((\\d+)\\)\\.zip$`,
+  );
+  let maxN = 0;
+  try {
+    const entries = await readdir(dir);
+    for (const name of entries) {
+      const match = name.match(suffixRe);
+      if (match) maxN = Math.max(maxN, Number(match[1]));
+    }
+  } catch {
+    // ignore read errors — fall through to (1)
+  }
+  return `${baseName}(${maxN + 1}).zip`;
+}
+
+const zipFileName = await resolveUniqueZipName(rootDir);
+const outFile = join(rootDir, zipFileName);
 const desktopDir = join(homedir(), 'Desktop');
-const desktopFile = join(desktopDir, `priceguard-ai-v${version}.zip`);
+const desktopFile = join(desktopDir, zipFileName);
 
 async function addDirectory(archive, dirPath, archivePath = '') {
   const entries = await readdir(dirPath, { withFileTypes: true });
@@ -53,6 +81,9 @@ archive.pipe(output);
 
 const distEntries = await readdir(distDir, { withFileTypes: true });
 for (const entry of distEntries) {
+  // Manifest uses public/icons/*; skip Vite's duplicate top-level icons/
+  if (entry.name === 'icons' && entry.isDirectory()) continue;
+
   const fullPath = join(distDir, entry.name);
   if (entry.isDirectory()) {
     await addDirectory(archive, fullPath, entry.name);
@@ -77,3 +108,4 @@ try {
 }
 
 console.log(`Created ${relative(rootDir, outFile)} (${archive.pointer()} bytes)`);
+console.log(`Path: ${outFile}`);

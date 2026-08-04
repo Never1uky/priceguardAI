@@ -1,36 +1,59 @@
-import { AuthTab } from '@/popup/components/AuthTab';
 import { PricesAndCompareTab, type PriceSubView } from '@/popup/components/PricesAndCompareTab';
-import { PremiumTab } from '@/popup/components/PremiumTab';
 import { ProductContextBar } from '@/popup/components/ProductContextBar';
-import { SettingsTab } from '@/popup/components/SettingsTab';
-import { ReviewsTab } from '@/popup/components/ReviewsTab';
-import { TrackedTab } from '@/popup/components/TrackedTab';
 import { Tabs } from '@/popup/components/Tabs';
 import {
-  getStorage,
   getTrackedProducts,
   removeTrackedProduct,
   trackProduct,
 } from '@/lib/storage';
-import { findCompareProductByUrl } from '@/lib/compare-service';
+import { resolveAfterEnsure, type AddToMyProductsResult } from '@/lib/add-to-my-products-result';
 import { logAuthenticityCheck } from '@/lib/authenticity/supabase-log';
 import { loadReferralSettings } from '@/lib/referral-settings';
-import { canTrackMoreProducts, isPremium, syncSubscriptionWithServer } from '@/lib/subscription';
+import { canAddMyProduct, canTrackMoreProducts, isPremium, syncSubscriptionWithServer } from '@/lib/subscription';
 import { loadUiTheme, saveUiTheme, type UiTheme } from '@/lib/ui-theme';
 import { sendRuntimeMessage } from '@/lib/runtime-message';
 import { isFullAnalysisBusy, FULL_ANALYSIS_BUSY_MESSAGE } from '@/lib/ai-busy-lock';
 import { useLiveProduct } from '@/popup/hooks/useLiveProduct';
-import type { PricePoint, TrackedProduct } from '@/types/product';
-import { Bell, Crown, RefreshCw, Settings, Shield, Sparkles, Tag, User } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { loadMyProductItems, migrateMyProductsOnce } from '@/lib/my-products';
+import type { Product, TrackedProduct } from '@/types/product';
+import { Crown, Package, RefreshCw, Settings, Sparkles, Tag, User } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/popup/components/Toaster';
-import { toastError, toastSuccess } from '@/popup/lib/toast';
+import { toastSuccess, toastUserError, toastWarning } from '@/popup/lib/toast';
+import '@/lib/supabase/price-cache';
+import '@/lib/supabase/compare-sync';
+import { flushPendingSync } from '@/lib/pending-sync';
 
-type TabId = 'price' | 'reviews' | 'tracked' | 'premium' | 'settings' | 'auth';
+const ReviewsTab = lazy(() =>
+  import('@/popup/components/ReviewsTab').then((m) => ({ default: m.ReviewsTab })),
+);
+const MyProductsTab = lazy(() =>
+  import('@/popup/components/MyProductsTab').then((m) => ({ default: m.MyProductsTab })),
+);
+const SettingsTab = lazy(() =>
+  import('@/popup/components/SettingsTab').then((m) => ({ default: m.SettingsTab })),
+);
+const PremiumTab = lazy(() =>
+  import('@/popup/components/PremiumTab').then((m) => ({ default: m.PremiumTab })),
+);
+const AuthTab = lazy(() =>
+  import('@/popup/components/AuthTab').then((m) => ({ default: m.AuthTab })),
+);
+
+type TabId = 'price' | 'reviews' | 'my' | 'premium' | 'settings' | 'auth';
+
+const POPUP_TAB_KEY = 'priceguard_popup_tab';
+const UPDATE_SYNC_HINT_KEY = 'priceguard_update_sync_hint';
+const VALID_TABS = new Set<TabId>(['price', 'reviews', 'my', 'premium', 'settings', 'auth']);
+
+function isTabId(value: unknown): value is TabId {
+  return typeof value === 'string' && VALID_TABS.has(value as TabId);
+}
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabId>('price');
+  const [tabRestored, setTabRestored] = useState(false);
   const {
     product: liveProduct,
     dataSource,
@@ -41,32 +64,65 @@ export function App() {
   } = useLiveProduct();
 
   const [trackedProducts, setTrackedProducts] = useState<TrackedProduct[]>([]);
-  const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
-  const [selectedTrackedId, setSelectedTrackedId] = useState<string | null>(null);
+  const [myProductsCount, setMyProductsCount] = useState(0);
+  const [focusCompareId, setFocusCompareId] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isComparePending, setIsComparePending] = useState(false);
   const [premiumActive, setPremiumActive] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>('light');
-  const [removingTrackedId, setRemovingTrackedId] = useState<string | null>(null);
   const [fullAnalysisBusy, setFullAnalysisBusy] = useState(false);
   const [priceSubView, setPriceSubView] = useState<PriceSubView>('current');
   const [listRefreshing, setListRefreshing] = useState(false);
 
   const loadTracked = useCallback(async () => {
-    const [tracked, storage] = await Promise.all([getTrackedProducts(), getStorage()]);
+    const [tracked, items] = await Promise.all([getTrackedProducts(), loadMyProductItems()]);
     setTrackedProducts(tracked);
-    setPriceHistory(storage.priceHistory);
+    setMyProductsCount(items.length);
   }, []);
 
   useEffect(() => {
     void loadUiTheme().then(setUiTheme);
-    void loadTracked();
+    void migrateMyProductsOnce().then(() => loadTracked());
     void loadReferralSettings();
+    void (async () => {
+      const [stored, busy] = await Promise.all([
+        chrome.storage.local.get(POPUP_TAB_KEY),
+        isFullAnalysisBusy(),
+      ]);
+      const saved = stored[POPUP_TAB_KEY];
+      if (isTabId(saved)) {
+        if (busy && saved !== 'reviews') {
+          setActiveTab('price');
+        } else {
+          setActiveTab(saved);
+        }
+      }
+      setTabRestored(true);
+    })();
   }, [loadTracked]);
+
+  useEffect(() => {
+    if (!tabRestored) return;
+    void chrome.storage.local.set({ [POPUP_TAB_KEY]: activeTab });
+  }, [activeTab, tabRestored]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', uiTheme === 'dark');
   }, [uiTheme]);
+
+  useEffect(() => {
+    void chrome.storage.local.get(UPDATE_SYNC_HINT_KEY).then((stored) => {
+      if (!stored[UPDATE_SYNC_HINT_KEY]) return;
+      toastWarning(
+        'Обновление установлено — откройте «Аккаунт» и нажмите «Синхронизировать», чтобы подтянуть лицензию.',
+      );
+      void chrome.storage.local.remove(UPDATE_SYNC_HINT_KEY);
+    });
+  }, []);
+
+  useEffect(() => {
+    void flushPendingSync();
+  }, []);
 
   useEffect(() => {
     void isFullAnalysisBusy().then(setFullAnalysisBusy);
@@ -105,13 +161,22 @@ export function App() {
       changes: { [key: string]: chrome.storage.StorageChange },
       areaName: string,
     ) => {
-      if (areaName === 'local' && changes.priceguard_storage) {
+      if (
+        areaName === 'local' &&
+        (changes.priceguard_storage || changes.priceguard_compare_products)
+      ) {
         void loadTracked();
       }
     };
     chrome.storage.onChanged.addListener(onStorageChange);
     return () => chrome.storage.onChanged.removeListener(onStorageChange);
   }, [loadTracked]);
+
+  const goToMyProducts = (compareId?: string | null) => {
+    if (compareId) setFocusCompareId(compareId);
+    setActiveTab('my');
+    setPriceSubView('current');
+  };
 
   const handleThemeChange = async (theme: UiTheme) => {
     setUiTheme(theme);
@@ -120,134 +185,222 @@ export function App() {
 
   const handleTrack = async () => {
     if (!liveProduct) return;
+    await addToMyProducts(liveProduct, { research: true });
+  };
 
-    const { allowed, limit } = await canTrackMoreProducts(trackedProducts.length);
-    if (!allowed) {
-      toastError(`Лимит бесплатной версии: ${limit} товаров. Оформите Premium.`);
-      setActiveTab('premium');
-      return;
+  /**
+   * Единый поток: upsert в «Мои товары» + слежение + research → вкладка «Мои».
+   * alreadyPresent не занимает новый слот (grandfather / лимит).
+   * Успех = tracked ИЛИ compare; ENSURE fail при наличии в списке → warning, не error.
+   */
+  const addToMyProducts = async (
+    product: Product,
+    options?: { research?: boolean },
+  ): Promise<AddToMyProductsResult | undefined> => {
+    const wantResearch = options?.research !== false;
+
+    if (fullAnalysisBusy) {
+      toastUserError(FULL_ANALYSIS_BUSY_MESSAGE);
+      return undefined;
     }
 
-    await trackProduct(liveProduct);
-    if (liveProduct.authenticity) {
-      void logAuthenticityCheck({
-        marketplace: liveProduct.marketplace,
-        article: liveProduct.article,
-        status: liveProduct.authenticity.status,
-        source: 'track',
+    if (!product.url) {
+      toastUserError('Нет данных товара — дождитесь загрузки карточки');
+      return undefined;
+    }
+
+    setIsComparePending(true);
+    try {
+      const gate = await canAddMyProduct({ url: product.url });
+      if (!gate.allowed && !gate.alreadyPresent) {
+        toastUserError(
+          `Лимит: ${gate.limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
+        );
+        setActiveTab('premium');
+        return {
+          kind: 'limit',
+          message: `Лимит: ${gate.limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
+          compareId: null,
+          inTracked: false,
+          inCompare: false,
+          researchStarted: false,
+        };
+      }
+
+      // Track (alerts on) — upsert existing is fine
+      if (!gate.alreadyPresent || !trackedProducts.some((p) => p.id === product.id)) {
+        if (!gate.alreadyPresent) {
+          const { allowed, limit } = await canTrackMoreProducts();
+          if (!allowed) {
+            toastUserError(
+              `Лимит: ${limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
+            );
+            setActiveTab('premium');
+            return {
+              kind: 'limit',
+              message: `Лимит: ${limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
+              compareId: null,
+              inTracked: false,
+              inCompare: false,
+              researchStarted: false,
+            };
+          }
+        }
+        await trackProduct(product);
+        if (product.authenticity) {
+          void logAuthenticityCheck({
+            marketplace: product.marketplace,
+            article: product.article,
+            status: product.authenticity.status,
+            source: 'track',
+          });
+        }
+      }
+
+      let ensure: {
+        ok?: boolean;
+        error?: string;
+        productId?: string;
+        started?: boolean;
+      } | null = null;
+
+      try {
+        ensure = await sendRuntimeMessage<{
+          ok?: boolean;
+          error?: string;
+          productId?: string;
+          started?: boolean;
+        }>({
+          type: 'ENSURE_COMPARE_PRODUCT',
+          payload: {
+            url: product.url,
+            article: product.article,
+            title: product.title,
+            price: product.price,
+            oldPrice: product.oldPrice,
+            forceCompare: wantResearch,
+            authenticity: product.authenticity,
+          },
+        });
+      } catch (ensureErr) {
+        ensure = {
+          ok: false,
+          error: ensureErr instanceof Error ? ensureErr.message : String(ensureErr),
+        };
+      }
+
+      const result = await resolveAfterEnsure({
+        product: { url: product.url, id: product.id },
+        alreadyPresent: gate.alreadyPresent,
+        wantResearch,
+        ensure,
       });
+
+      if (result.kind === 'limit') {
+        toastUserError(result.message);
+        setActiveTab('premium');
+        return result;
+      }
+
+      if (result.kind === 'fail') {
+        toastUserError(result.message);
+        return result;
+      }
+
+      if (result.compareId) setFocusCompareId(result.compareId);
+
+      // Explicit research if ENSURE didn't start (cache hit) but user asked
+      let researchStarted = result.researchStarted;
+      if (wantResearch && result.compareId && !researchStarted) {
+        try {
+          const researchRes = await sendRuntimeMessage<{
+            ok?: boolean;
+            started?: boolean;
+            alreadyRunning?: boolean;
+          }>({
+            type: 'RESEARCH_COMPARE_PRODUCT',
+            payload: { productId: result.compareId },
+          });
+          researchStarted =
+            researchRes?.started === true || researchRes?.alreadyRunning === true;
+        } catch {
+          researchStarted = false;
+        }
+      }
+
+      await loadTracked();
+
+      if (wantResearch && result.compareId) {
+        if (researchStarted) {
+          toastSuccess('Ищем на WB / Ozon / Я.Маркет…');
+        } else {
+          toastWarning(
+            'Поиск не запустился — откройте товар и нажмите «Найти заново»',
+          );
+        }
+      } else if (result.kind === 'partial') {
+        toastWarning(result.message);
+      } else {
+        toastSuccess(result.message);
+      }
+      setActiveTab('my');
+      return result;
+    } catch (err) {
+      const result = await resolveAfterEnsure({
+        product: { url: product.url, id: product.id },
+        wantResearch,
+        ensure: {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+
+      if (result.kind === 'limit') {
+        toastUserError(result.message);
+        setActiveTab('premium');
+        return result;
+      }
+
+      if (result.kind === 'fail') {
+        toastUserError(result.message);
+        return result;
+      }
+
+      if (result.compareId) setFocusCompareId(result.compareId);
+      if (result.kind === 'partial') {
+        toastWarning(result.message);
+      } else {
+        toastSuccess(result.message);
+      }
+      setActiveTab('my');
+      return result;
+    } finally {
+      setIsComparePending(false);
     }
-    await loadTracked();
-    setSelectedTrackedId(liveProduct.id);
-    toastSuccess('Товар добавлен в отслеживаемые');
-    setActiveTab('tracked');
   };
 
   const handleUntrack = async () => {
     const product = liveProduct;
     if (!product) return;
-    if (!window.confirm('Удалить из отслеживаемых?')) return;
+    if (!window.confirm('Перестать следить за ценой этого товара?')) return;
 
     await removeTrackedProduct(product.id);
     await loadTracked();
-    setSelectedTrackedId(trackedProducts[0]?.id ?? null);
-  };
-
-
-  const handleRemoveTracked = async (id: string) => {
-    setRemovingTrackedId(id);
-    try {
-      await removeTrackedProduct(id);
-      const next = trackedProducts.filter((p) => p.id !== id);
-      if (selectedTrackedId === id) {
-        setSelectedTrackedId(next[0]?.id ?? null);
-      }
-      await loadTracked();
-    } finally {
-      setRemovingTrackedId(null);
-    }
-  };
-
-  const handleSelectTracked = async (product: TrackedProduct) => {
-    setSelectedTrackedId(product.id);
-    setActiveTab('tracked');
-  };
-
-  const handleCompare = async () => {
-    if (fullAnalysisBusy) {
-      toastError(FULL_ANALYSIS_BUSY_MESSAGE);
-      return;
-    }
-
-    if (!liveProduct?.url) {
-      toastError('Нет данных товара — дождитесь загрузки карточки');
-      return;
-    }
-
-    setIsComparePending(true);
-
-    try {
-      const response = await sendRuntimeMessage<{
-        ok?: boolean;
-        error?: string;
-        productId?: string;
-        started?: boolean;
-        recovered?: boolean;
-      }>({
-        type: 'ENSURE_COMPARE_PRODUCT',
-        payload: {
-          url: liveProduct.url,
-          article: liveProduct.article,
-          title: liveProduct.title,
-          price: liveProduct.price,
-          oldPrice: liveProduct.oldPrice,
-          forceCompare: true,
-          authenticity: liveProduct.authenticity,
-        },
-      });
-
-      const saved =
-        response?.ok ||
-        Boolean(await findCompareProductByUrl(liveProduct.url));
-
-      if (!saved) {
-        toastError(response?.error ?? 'Не удалось добавить товар в сравнение');
-        return;
-      }
-
-      toastSuccess(
-        response?.started
-          ? 'Товар добавлен — ищем цены на других площадках'
-          : 'Товар добавлен в сравнение',
-      );
-      setPriceSubView('compare');
-    } catch (err) {
-      const fallback = await findCompareProductByUrl(liveProduct.url);
-      if (fallback) {
-        toastSuccess('Товар добавлен в сравнение');
-        setPriceSubView('compare');
-        return;
-      }
-      toastError(
-        err instanceof Error ? err.message : 'Ошибка связи с расширением при добавлении в сравнение',
-      );
-    } finally {
-      setIsComparePending(false);
-    }
   };
 
   const handleRefreshTrackedList = async () => {
     setListRefreshing(true);
     try {
       const { syncTrackedProductsWithCloud } = await import('@/lib/storage');
-      await syncTrackedProductsWithCloud();
-      // Перепроверить цены/фото всех товаров (не только облако и активную вкладку)
+      const { syncCompareProductsFromCloud } = await import('@/lib/comparison-storage');
+      await syncTrackedProductsWithCloud({ reconcile: true });
+      await syncCompareProductsFromCloud();
       await sendRuntimeMessage({ type: 'CHECK_PRICES_NOW' });
       await loadTracked();
       await refreshLiveProduct({ silent: true });
       toastSuccess('Список обновлён');
     } catch {
-      toastError('Не удалось обновить список');
+      toastUserError('Не удалось обновить список');
     } finally {
       setListRefreshing(false);
     }
@@ -260,7 +413,7 @@ export function App() {
       await loadTracked();
       await refreshLiveProduct();
     } catch {
-      toastError('Не удалось проверить цены');
+      toastUserError('Не удалось проверить цены');
     } finally {
       setIsChecking(false);
     }
@@ -268,16 +421,16 @@ export function App() {
 
   const handleTabChange = (id: string) => {
     if (fullAnalysisBusy && id !== activeTab && id !== 'reviews') {
-      toastError(FULL_ANALYSIS_BUSY_MESSAGE);
+      toastUserError(FULL_ANALYSIS_BUSY_MESSAGE);
       return;
     }
     setActiveTab(id as TabId);
   };
 
   const tabs = [
-    { id: 'price' as const, label: 'Цены и сравнение', icon: Tag },
+    { id: 'price' as const, label: 'Цены', icon: Tag },
     { id: 'reviews' as const, label: 'Отзывы', icon: Sparkles },
-    { id: 'tracked' as const, label: 'Список', icon: Bell, badge: trackedProducts.length },
+    { id: 'my' as const, label: 'Мои товары', icon: Package, badge: myProductsCount },
     { id: 'auth' as const, label: 'Аккаунт', icon: User },
     { id: 'settings' as const, label: 'Настройки', icon: Settings },
   ];
@@ -285,15 +438,24 @@ export function App() {
   return (
     <div className="relative w-[400px] overflow-x-hidden bg-background text-foreground">
       <Toaster />
-      <header className="bg-hero text-hero-foreground">
+      <header className="border-b border-border bg-hero text-hero-foreground">
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-white/10 pg-glass">
-              <Shield className="h-4 w-4" strokeWidth={1.75} />
-            </div>
+            <img
+              src={chrome.runtime.getURL('public/icons/icon48.png')}
+              alt=""
+              width={36}
+              height={36}
+              className="h-9 w-9 shrink-0 rounded-sm"
+              aria-hidden
+            />
             <div className="min-w-0">
-              <h1 className="text-[15px] font-semibold tracking-tight">PriceGuard AI</h1>
-              <p className="pg-caption text-hero-foreground/55">WB · Ozon · Я.Маркет</p>
+              <h1 className="text-[15px] font-semibold tracking-tight text-foreground">
+                PriceGuard AI
+              </h1>
+              <p className="pg-caption">
+                v{chrome.runtime.getManifest().version} · Beta · WB · Ozon · Я.Маркет
+              </p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -302,32 +464,35 @@ export function App() {
               variant="ghost"
               className={
                 premiumActive
-                  ? 'text-purple hover:bg-white/10 hover:text-purple'
-                  : 'text-hero-foreground/80 hover:bg-white/10 hover:text-hero-foreground'
+                  ? 'text-purple hover:bg-accent hover:text-purple'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
               }
               onClick={() => {
                 if (fullAnalysisBusy) {
-                  toastError(FULL_ANALYSIS_BUSY_MESSAGE);
+                  toastUserError(FULL_ANALYSIS_BUSY_MESSAGE);
                   return;
                 }
                 setActiveTab('premium');
               }}
               disabled={fullAnalysisBusy}
               title="Premium"
+              aria-label="Premium"
             >
-              <Crown className="h-[18px] w-[18px]" strokeWidth={1.75} />
+              <Crown className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden />
             </Button>
             <Button
               size="icon-sm"
               variant="ghost"
-              className="text-hero-foreground/80 hover:bg-white/10 hover:text-hero-foreground"
+              className="text-muted-foreground hover:bg-accent hover:text-foreground"
               onClick={() => void handleCheckPrices()}
               disabled={isChecking || trackedProducts.length === 0}
               title="Проверить цены сейчас"
+              aria-label="Проверить цены сейчас"
             >
               <RefreshCw
                 className={`h-[18px] w-[18px] ${isChecking ? 'animate-spin' : ''}`}
                 strokeWidth={1.75}
+                aria-hidden
               />
             </Button>
           </div>
@@ -344,7 +509,7 @@ export function App() {
         />
 
         {fullAnalysisBusy && (
-          <p className="rounded-md bg-purple/10 px-3 py-2 text-center pg-hint text-purple">
+          <p className="rounded-md bg-primary/10 px-3 py-2 text-center pg-hint text-primary">
             {FULL_ANALYSIS_BUSY_MESSAGE}
           </p>
         )}
@@ -361,57 +526,63 @@ export function App() {
             error={liveError}
             onTrack={() => void handleTrack()}
             onUntrack={() => void handleUntrack()}
-            onRefresh={() => void refreshLiveProduct()}
-            onCompare={() => void handleCompare()}
+            onAddToMyProducts={() => {
+              if (liveProduct) void addToMyProducts(liveProduct, { research: true });
+            }}
             isComparePending={isComparePending}
             fullAnalysisBusy={fullAnalysisBusy}
+            onGoToMyProducts={() => goToMyProducts(focusCompareId)}
           />
         )}
 
-        {activeTab === 'reviews' && (
-          <ReviewsTab
-            product={liveProduct}
-            productDataSource={dataSource}
-            isPremium={premiumActive}
-            suppressReviewFetch={isComparePending}
-            onOpenPremium={() => setActiveTab('premium')}
-            onOpenAuth={() => setActiveTab('auth')}
-            onOpenSettings={() => setActiveTab('settings')}
-            onFullAnalysisBusyChange={setFullAnalysisBusy}
-          />
-        )}
+        <Suspense
+          fallback={
+            <p className="py-8 text-center pg-hint text-muted-foreground">Загрузка…</p>
+          }
+        >
+          {activeTab === 'reviews' && (
+            <ReviewsTab
+              product={liveProduct}
+              productDataSource={dataSource}
+              isPremium={premiumActive}
+              suppressReviewFetch={isComparePending}
+              onOpenPremium={() => setActiveTab('premium')}
+              onOpenAuth={() => setActiveTab('auth')}
+              onOpenSettings={() => setActiveTab('settings')}
+              onFullAnalysisBusyChange={setFullAnalysisBusy}
+            />
+          )}
 
-        {activeTab === 'settings' && (
-          <SettingsTab
-            onOpenPremium={() => setActiveTab('premium')}
-            theme={uiTheme}
-            onThemeChange={(theme) => void handleThemeChange(theme)}
-          />
-        )}
+          {activeTab === 'settings' && (
+            <SettingsTab
+              onOpenPremium={() => setActiveTab('premium')}
+              theme={uiTheme}
+              onThemeChange={(theme) => void handleThemeChange(theme)}
+            />
+          )}
 
-        {activeTab === 'auth' && (
-          <AuthTab onAuthed={() => void loadTracked()} />
-        )}
+          {activeTab === 'auth' && (
+            <AuthTab onAuthed={() => void loadTracked()} />
+          )}
 
-        {activeTab === 'premium' && (
-          <PremiumTab onClose={() => setActiveTab('price')} onOpenAuth={() => setActiveTab('auth')} />
-        )}
+          {activeTab === 'premium' && (
+            <PremiumTab onClose={() => setActiveTab('price')} onOpenAuth={() => setActiveTab('auth')} />
+          )}
 
-        {activeTab === 'tracked' && (
-          <TrackedTab
-            products={trackedProducts}
-            priceHistory={priceHistory}
-            selectedId={selectedTrackedId}
-            onSelect={(p) => void handleSelectTracked(p)}
-            onRemove={(id) => handleRemoveTracked(id)}
-            removingTrackedId={removingTrackedId}
-            onNotificationsChange={() => void loadTracked()}
-            onRefresh={() => void handleRefreshTrackedList()}
-            refreshing={listRefreshing}
-            onOpenAuth={() => setActiveTab('auth')}
-            onOpenSettings={() => setActiveTab('settings')}
-          />
-        )}
+          {activeTab === 'my' && (
+            <MyProductsTab
+              isActive={activeTab === 'my'}
+              focusCompareId={focusCompareId}
+              onClearFocusCompareId={() => setFocusCompareId(null)}
+              liveProduct={liveProduct}
+              onAddLiveProduct={() => {
+                if (liveProduct) void addToMyProducts(liveProduct, { research: true });
+              }}
+              onRefreshCloud={() => void handleRefreshTrackedList()}
+              refreshing={listRefreshing}
+            />
+          )}
+        </Suspense>
       </div>
     </div>
   );

@@ -1,28 +1,22 @@
 /**
- * Premium: загрузка цены карточки через Bright Data Unlocker (сервер).
+ * Premium: загрузка цены карточки через Scrappey (сервер).
  * POST { marketplace, url, productId? }
  * → { ok, price, title?, url, source }
  *
- * Secrets: BRIGHTDATA_API_KEY, BRIGHTDATA_ZONE
+ * Secrets: SCRAPPEY_API_KEY
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { requireAuthUser } from '../_shared/auth.ts';
-import type { BrightDataCredentials } from '../_shared/brightdata.ts';
 import {
   fetchMarketplacePriceDetailed,
   type Marketplace,
 } from '../_shared/marketplace-prices.ts';
+import { projectScraperCredentials } from '../_shared/reviews-common.ts';
+import { isPremiumRowActive } from '../_shared/premium-active.ts';
 import { corsHeaders, handleCors, jsonResponse } from '../_shared/utils.ts';
 
 const VALID: Marketplace[] = ['wildberries', 'ozon', 'yandex_market'];
-
-function projectScraperCredentials(): BrightDataCredentials | null {
-  const apiKey = Deno.env.get('BRIGHTDATA_API_KEY')?.trim() ?? '';
-  const zone = Deno.env.get('BRIGHTDATA_ZONE')?.trim() ?? '';
-  if (!apiKey || !zone) return null;
-  return { apiKey, zone };
-}
 
 function extractProductId(marketplace: Marketplace, url: string): string {
   if (marketplace === 'wildberries') {
@@ -46,13 +40,11 @@ async function userHasPremium(userId: string): Promise<boolean> {
 
   const { data } = await supabase
     .from('user_premium')
-    .select('expires_at')
+    .select('user_id, expires_at, license_key_id, license_keys(is_active, expires_at)')
     .eq('user_id', userId)
     .maybeSingle();
 
-  if (!data) return false;
-  if (!data.expires_at) return true;
-  return new Date(data.expires_at) > new Date();
+  return isPremiumRowActive(data);
 }
 
 Deno.serve(async (req) => {
@@ -87,7 +79,7 @@ Deno.serve(async (req) => {
       return jsonResponse(
         {
           ok: false,
-          error: 'Unlocker не настроен (BRIGHTDATA_*)',
+          error: 'Unlocker не настроен (SCRAPPEY_API_KEY)',
           code: 'SCRAPER_NOT_CONFIGURED',
         },
         503,

@@ -1,13 +1,13 @@
-﻿Шаг,ID,Действие в Developer Dashboard,Детали,Готово,Комментарий
+Шаг,ID,Действие в Developer Dashboard,Детали,Готово,Комментарий
 1,P.1,New Item → Chrome Extension,Загрузить zip,,
 2,P.2,Store listing → Description,Вставить полное описание RU,docs/CHROME_WEB_STORE_LISTING.md,,
 3,P.3,Store listing → Short description,132 символа RU,Лист «Контент»,,
-4,P.4,Store listing → Screenshots,5 шт. 1280×800,,,
-5,P.5,Store listing → Icon,128×128 PNG,,,
-6,P.6,Privacy → Privacy policy URL,https://USER.github.io/priceguard-ai/privacy/,,,
+4,P.4,Store listing → Screenshots,5 шт. 1280×800,,Вручную; ассетов в репо нет
+5,P.5,Store listing → Icon,128×128 PNG,,Заменить placeholder перед Public
+6,P.6,Privacy → Privacy policy URL,https://priceguard-landing.vercel.app/privacy,,v2.1 Scrappey
 7,P.7,Privacy → Single purpose,Текст из листа Контент,,,
-8,P.8,Privacy → Data use,"Product URLs, prices, reviews",,,
-9,P.9,Privacy → Permissions justification,См. лист Permissions,,,
+8,P.8,Privacy → Data use,"Product URLs, prices, reviews (AI sample), search metrics, email (opt), device_id, Telegram chat id + AI Q&A (opt), price history / comparison; processors: Supabase, Grok/OpenAI/Perplexity, Scrappey, YooKassa, Telegram",,,
+9,P.9,Privacy → Permissions justification,См. лист Permissions,,без activeTab/tabs/windows/cookies
 10,P.10,Distribution → Visibility,Public / Unlisted,,Сначала Unlisted для теста
 11,P.11,Submit for review,Отправить на модерацию,,1–3 рабочих дня
 12,P.12,После публикации,Проверить установку из Store на Win + Mac,,,

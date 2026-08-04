@@ -1,10 +1,9 @@
 // Уведомления в поддержку @priceguard_supportbot / админ-чат
 //
-// POST { message, context?, version?, userId? }
-// Secrets:
-//   TELEGRAM_BOT_TOKEN (или SUPPORT token)
-//   TELEGRAM_SUPPORT_CHAT_ID или TELEGRAM_CHAT_ID — куда слать ошибки
+// Auth: JWT. Chat всегда TELEGRAM_SUPPORT_CHAT_ID (не из body).
+// Secrets: TELEGRAM_SUPPORT_BOT_TOKEN / TELEGRAM_BOT_TOKEN, TELEGRAM_SUPPORT_CHAT_ID
 
+import { requireAuthUser } from '../_shared/auth.ts';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import {
   buildSupportErrorMessage,
@@ -20,6 +19,17 @@ Deno.serve(async (req) => {
   }
 
   try {
+    let user;
+    try {
+      user = await requireAuthUser(req, true);
+    } catch {
+      return jsonResponse({
+        ok: false,
+        error: 'Auth required',
+        code: 'AUTH_REQUIRED',
+      }, 401);
+    }
+
     const body = await req.json();
     const message = String(body.message ?? '').trim().slice(0, 1500);
     if (!message) {
@@ -39,9 +49,9 @@ Deno.serve(async (req) => {
 
     const text = buildSupportErrorMessage({
       message,
-      context: body.context ? String(body.context) : undefined,
-      version: body.version ? String(body.version) : undefined,
-      userId: body.userId ? String(body.userId) : undefined,
+      context: body.context ? String(body.context).slice(0, 200) : undefined,
+      version: body.version ? String(body.version).slice(0, 32) : undefined,
+      userId: user!.id,
     });
 
     const result = await sendTelegramMessage({

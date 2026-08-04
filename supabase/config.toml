@@ -65,7 +65,19 @@ verify_jwt = false
 [functions.tracked-sync]
 verify_jwt = false
 
+[functions.compare-sync]
+verify_jwt = false
+
+[functions.compare-research]
+verify_jwt = false
+
+[functions.price-cache]
+verify_jwt = false
+
 [functions.search-metrics]
+verify_jwt = false
+
+[functions.telemetry-ingest]
 verify_jwt = false
 
 [functions.metrics-dashboard]
@@ -78,6 +90,9 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.weekly-metrics-digest]
+verify_jwt = false
+
+[functions.daily-user-digest]
 verify_jwt = false
 
 [functions.price-alert-notify]

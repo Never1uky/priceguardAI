@@ -1,8 +1,6 @@
 import type { Marketplace } from '@/types/product';
 import type { ReviewFilter } from '@/types/review-analysis';
 import { queryFirst } from '@/utils/dom';
-import { fetchWildberriesReviews } from '@/utils/parsers/wb-api';
-import { extractArticle } from '@/utils/marketplace';
 
 export interface ScrapedReview {
   text: string;
@@ -302,34 +300,15 @@ export async function scrapeReviews(
   options: ScrapeReviewsOptions = {},
 ): Promise<ScrapeReviewsResult> {
   const allowNavigation = options.allowNavigation === true;
-  const url = window.location.href;
   let allReviews: ScrapedReview[] = [];
 
   if (marketplace === 'wildberries') {
-    const article = extractArticle(url, 'wildberries');
-    const fromApi = article ? await fetchWildberriesReviews(article, 50) : [];
-
+    // DOM only — WB feedbacks API только из SW (collect-reviews / scrape-via-tab).
+    // fetch с карточки wildberries.ru → CORS noise (credentials + ACAO *).
     await openWildberriesReviewsSection(allowNavigation);
 
     for (let attempt = 0; attempt < 3 && allReviews.length < 5; attempt++) {
-      const fromDom = scrapeReviewsFromDom(WB_REVIEW_SELECTORS);
-
-      const apiReviews: ScrapedReview[] = fromApi.map((item) => ({
-        text: item.text,
-        rating: item.rating ?? inferRating(item.text),
-        hasPhoto: item.hasPhoto,
-        timestamp: item.timestamp,
-      }));
-
-      const seen = new Set<string>();
-      allReviews = [];
-      for (const r of [...apiReviews, ...fromDom]) {
-        if (!seen.has(r.text)) {
-          seen.add(r.text);
-          allReviews.push(r);
-        }
-      }
-
+      allReviews = scrapeReviewsFromDom(WB_REVIEW_SELECTORS);
       if (allReviews.length >= 5) break;
       scrollToReviewsSection();
       await delay(2000);

@@ -1,5 +1,5 @@
 /**
- * Premium: цена карточки через Edge Unlocker (Bright Data), когда API + вкладка не дали цену.
+ * Premium: цена карточки через Edge Unlocker (Scrappey), когда API + вкладка не дали цену.
  */
 
 import { callEdgeSafe } from '@/lib/supabase/edge';

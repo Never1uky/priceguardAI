@@ -13,6 +13,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse, normalizeKey } from '../_shared/utils.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 import { bindLicenseToUser } from '../_shared/license-bind.ts';
+import { isPremiumRowActive } from '../_shared/premium-active.ts';
 
 function serviceClient() {
   return createClient(
@@ -76,13 +77,13 @@ async function premiumStatus(
   } else {
     const { data: existing } = await supabase
       .from('user_premium')
-      .select('expires_at, plan')
+      .select('user_id, expires_at, license_key_id, plan, license_keys(is_active, expires_at)')
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (existing && (!existing.expires_at || new Date(existing.expires_at) > new Date())) {
+    if (isPremiumRowActive(existing)) {
       premiumActive = true;
-      premiumExpiresAt = existing.expires_at
+      premiumExpiresAt = existing?.expires_at
         ? new Date(existing.expires_at).getTime()
         : null;
     }
@@ -135,6 +136,19 @@ Deno.serve(async (req) => {
         premiumActive: Boolean(prem.premiumActive),
         premiumExpiresAt: prem.premiumExpiresAt ?? null,
       });
+    }
+
+    // ——— Clear Premium claim (local deactivate / expired license) ———
+    if (body.clearPremium === true) {
+      const { error: clearPremError } = await supabase
+        .from('user_premium')
+        .delete()
+        .eq('user_id', userId);
+      if (clearPremError) {
+        console.error('[sync-alert-settings] clearPremium', clearPremError);
+        return jsonResponse({ ok: false, error: 'Не удалось сбросить Premium на сервере' }, 500);
+      }
+      return jsonResponse({ ok: true, premiumActive: false, clearedPremium: true });
     }
 
     // ——— Upsert ———

@@ -8,8 +8,21 @@
 import { callEdgeSafe } from '@/lib/supabase/edge';
 import { canUseCloudFeatures } from '@/lib/supabase/auth-guard';
 import { getSupabaseConfig } from '@/lib/supabase/config';
+import { cloudTrackedProductKey, cloudTrackedRowKey } from '@/lib/tracked-cloud-key';
+import {
+  computeReconcileTombstones,
+  isPendingTombstone,
+  mergeTombstoneKeys,
+  type TombstoneKey,
+} from '@/lib/tracked-reconcile';
+import {
+  clearPendingTombstones,
+  getPendingTombstones,
+} from '@/lib/tracked-pending-tombstones';
 import { buildWildberriesUrl } from '@/utils/marketplace';
 import { toCanonicalProductUrl } from '@/utils/product-url';
+import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
+import { markOwnTrackedWriteQuietPeriod } from '@/lib/supabase/tracked-realtime';
 import type { Marketplace, TrackedProduct } from '@/types/product';
 
 interface RemoteTrackedRow {
@@ -24,10 +37,6 @@ interface RemoteTrackedRow {
   deleted?: boolean;
   created_at?: string;
   updated_at?: string;
-}
-
-function productKey(item: { article?: string; id: string }): string {
-  return (item.article && item.article.trim()) || item.id;
 }
 
 /** Локальный id как у content-парсеров: wb- / ozon- / yandex- */
@@ -64,6 +73,7 @@ function reconstructUrl(
 function toLocalTracked(row: RemoteTrackedRow): TrackedProduct {
   const price = Number(row.last_price ?? 0);
   const productId = row.product_id;
+  const isWb = row.marketplace === 'wildberries';
   return {
     id: localProductId(row.marketplace, productId),
     marketplace: row.marketplace,
@@ -80,16 +90,22 @@ function toLocalTracked(row: RemoteTrackedRow): TrackedProduct {
     lowestPrice: price,
     targetPrice: row.target_price == null ? undefined : Number(row.target_price),
     notes: row.notes ?? undefined,
+    ...(isWb
+      ? {
+          imageUrl: buildWbImageUrl(productId),
+          imageUrlAlternatives: buildWbImageUrlAlternatives(productId),
+        }
+      : {}),
   };
 }
 
 function toRemotePayload(
   local: TrackedProduct[],
-  deletedKeys: { marketplace: Marketplace; productId: string }[],
+  deletedKeys: TombstoneKey[],
 ) {
   const items = local.map((p) => ({
     marketplace: p.marketplace,
-    productId: productKey(p),
+    productId: cloudTrackedProductKey(p),
     productTitle: p.title,
     targetPrice: p.targetPrice ?? null,
     lastPrice: p.price,
@@ -119,48 +135,86 @@ export interface SyncResult {
   updated: TrackedProduct[];
 }
 
+export interface SyncTrackedOptions {
+  /** Tombstone server-only rows (extension list authoritative). Use after delete / manual refresh. */
+  reconcile?: boolean;
+}
+
+async function pullRemoteTracked(): Promise<RemoteTrackedRow[]> {
+  const pulled = await callEdgeSafe<{ ok: boolean; items: RemoteTrackedRow[] }>('tracked-sync', {
+    action: 'pull',
+  });
+  return pulled?.items ?? [];
+}
+
 export async function syncTrackedProducts(
   local: TrackedProduct[],
-  deletedKeys: { marketplace: Marketplace; productId: string }[] = [],
+  options: SyncTrackedOptions = {},
 ): Promise<SyncResult | null> {
   if (!getSupabaseConfig().configured) return null;
   if (!(await canUseCloudFeatures())) return null;
+
+  try {
+    markOwnTrackedWriteQuietPeriod();
+  } catch {
+    // ignore
+  }
+
+  const remoteBefore = await pullRemoteTracked();
+  const pending = await getPendingTombstones();
+  const reconcileKeys = options.reconcile
+    ? computeReconcileTombstones(local, remoteBefore)
+    : [];
+  const deletedKeys = mergeTombstoneKeys(pending, reconcileKeys);
 
   const pushed = await callEdgeSafe<{ ok: boolean; items: RemoteTrackedRow[] }>('tracked-sync', {
     action: 'push',
     items: toRemotePayload(local, deletedKeys),
   });
 
-  const remote = pushed?.items ?? [];
-  const localKeys = new Set(local.map((p) => `${p.marketplace}:${productKey(p)}`));
+  if (!pushed?.ok) return null;
+
+  const remote = pushed.items ?? [];
+  const localKeys = new Set(
+    local.map((p) => cloudTrackedRowKey(p.marketplace, cloudTrackedProductKey(p))),
+  );
 
   const incoming = remote
-    .filter((r) => !r.deleted && !localKeys.has(`${r.marketplace}:${r.product_id}`))
+    .filter((r) => !r.deleted)
+    .filter((r) => !localKeys.has(cloudTrackedRowKey(r.marketplace, r.product_id)))
+    .filter((r) => !isPendingTombstone(r, pending))
     .map(toLocalTracked);
 
   const removedKeys = remote
     .filter((r) => r.deleted)
-    .map((r) => `${r.marketplace}:${r.product_id}`);
+    .map((r) => cloudTrackedRowKey(r.marketplace, r.product_id));
 
   const updated: TrackedProduct[] = [];
   for (const row of remote.filter((r) => !r.deleted)) {
-    const key = `${row.marketplace}:${row.product_id}`;
+    const key = cloudTrackedRowKey(row.marketplace, row.product_id);
     if (localKeys.has(key)) {
       updated.push(toLocalTracked(row));
     }
   }
 
+  const clearedPending = deletedKeys.filter((d) =>
+    removedKeys.includes(cloudTrackedRowKey(d.marketplace, d.productId)),
+  );
+  if (clearedPending.length > 0) {
+    await clearPendingTombstones(clearedPending);
+  }
+
   return { incoming, remote, removedKeys, updated };
 }
 
-export async function pushTrackedProduct(product: TrackedProduct): Promise<void> {
-  if (!getSupabaseConfig().configured || !(await canUseCloudFeatures())) return;
-  await callEdgeSafe('tracked-sync', {
+export async function pushTrackedProduct(product: TrackedProduct): Promise<boolean> {
+  if (!getSupabaseConfig().configured || !(await canUseCloudFeatures())) return false;
+  const res = await callEdgeSafe<{ ok?: boolean }>('tracked-sync', {
     action: 'push',
     items: [
       {
         marketplace: product.marketplace,
-        productId: productKey(product),
+        productId: cloudTrackedProductKey(product),
         productTitle: product.title,
         targetPrice: product.targetPrice ?? null,
         lastPrice: product.price,
@@ -172,15 +226,17 @@ export async function pushTrackedProduct(product: TrackedProduct): Promise<void>
       },
     ],
   });
+  return Boolean(res?.ok);
 }
 
 export async function pushTrackedTombstone(
   marketplace: Marketplace,
   productId: string,
-): Promise<void> {
-  if (!getSupabaseConfig().configured || !(await canUseCloudFeatures())) return;
-  await callEdgeSafe('tracked-sync', {
+): Promise<boolean> {
+  if (!getSupabaseConfig().configured || !(await canUseCloudFeatures())) return false;
+  const res = await callEdgeSafe<{ ok?: boolean }>('tracked-sync', {
     action: 'push',
     items: [{ marketplace, productId, deleted: true, updatedAt: Date.now() }],
   });
+  return Boolean(res?.ok);
 }

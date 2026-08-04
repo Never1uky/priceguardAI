@@ -3,6 +3,11 @@
  * Для сравнения предпочитаем basePrice (без банк-скидки).
  */
 
+import {
+  dropLikelyPackUnitPrices,
+  parseListingRubNumbers,
+} from '@/lib/listing-rub-prices';
+
 export interface OzonPriceBreakdown {
   /** Цена для сравнения и алертов (без банк-скидки) */
   price: number;
@@ -15,12 +20,6 @@ export interface OzonPriceBreakdown {
 const BANK_HINT = /с\s+банками|ozon\s*банк|озон\s*банк|card\s*price|по\s+карте\s+ozon|с\s+картой\s+ozon/i;
 const OTHER_BANKS_HINT = /с\s+другими\s+банками|другими\s+банками/i;
 
-function parseRubNumbers(text: string): number[] {
-  return [...text.replace(/\u00a0/g, ' ').matchAll(/(\d[\d\s]*)\s*(?:₽|руб)/gi)]
-    .map((m) => parseInt(m[1].replace(/\s/g, ''), 10))
-    .filter((n) => Number.isFinite(n) && n >= 50 && n < 50_000_000);
-}
-
 /**
  * Из текста ценового блока (DOM) вытащить base / bank / old.
  */
@@ -28,7 +27,7 @@ export function parseOzonPriceBlockText(blockText: string): OzonPriceBreakdown |
   const text = blockText.replace(/\u00a0/g, ' ').trim();
   if (!text) return null;
 
-  const all = parseRubNumbers(text);
+  const all = parseListingRubNumbers(text);
   if (!all.length) return null;
 
   const unique = [...new Set(all)].sort((a, b) => a - b);
@@ -101,9 +100,12 @@ export function ozonBreakdownToOfferPrices(
 
 /**
  * Две+ цены из priceV2 без текста: меньшая = банк, большая среди близких = base, max далеко = old.
+ * Отбрасывает вероятную «цену за 1 шт» комплекта (×2…×6 от соседнего уровня).
  */
 export function ozonPricesFromNumbers(prices: number[]): OzonPriceBreakdown | null {
-  const unique = [...new Set(prices.filter((n) => n > 0))].sort((a, b) => a - b);
+  const unique = dropLikelyPackUnitPrices(
+    [...new Set(prices.filter((n) => n > 0))].sort((a, b) => a - b),
+  );
   if (!unique.length) return null;
 
   if (unique.length === 1) {

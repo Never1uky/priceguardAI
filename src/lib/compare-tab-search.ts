@@ -9,19 +9,22 @@ import { acquireHiddenBrowser, releaseHiddenBrowser } from '@/lib/hidden-browser
 import { searchOzonInTab } from '@/lib/ozon-tab-search';
 import { isOfferWithPrice } from '@/lib/compare-offers';
 import { isProductPageUrl, isUrlExcluded } from '@/lib/product-match';
-import { getSerpCachedOffer, setSerpCachedOffer } from '@/lib/serp-cache';
+import { getSerpCachedOffer } from '@/lib/serp-cache';
+import { noteEmptyScrape, resetEmptyScrape } from '@/lib/empty-scrape-guard';
+import {
+  OZON_ANTIBOT_USER_MESSAGE,
+  scrapeOzonSerpDomInTab,
+} from '@/lib/ozon-serp-dom';
+import { ensureContentScriptReady } from '@/lib/safe-messaging';
+import { hashQuery, telemetry } from '@/lib/telemetry';
 
 const TAB_LOAD_TIMEOUT_MS = 35_000;
-const SCRAPE_DELAYS: Record<ComparisonMarketplace, number> = {
-  wildberries: 3_500,
-  ozon: 5_000,
-  yandex_market: 4_500,
-};
-
-const SEARCH_RETRY_DELAYS: Record<ComparisonMarketplace, number[]> = {
-  wildberries: [0, 1_000, 2_500, 4_000],
-  ozon: [0, 1_500, 3_500, 5_500],
-  yandex_market: [0, 1_000, 2_500, 4_000],
+/** Poll after load until cards appear (instead of long fixed delays). */
+const SERP_POLL_INTERVAL_MS = 500;
+const SERP_POLL_MAX_MS: Record<ComparisonMarketplace, number> = {
+  wildberries: 6_000,
+  ozon: 7_000,
+  yandex_market: 6_500,
 };
 
 function delay(ms: number): Promise<void> {
@@ -63,28 +66,17 @@ async function scrollSearchPage(tabId: number): Promise<void> {
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
-  try {
-    const pong = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    if (pong?.ok) return;
-  } catch {
-    // content script ещё не подключён
-  }
-
-  const files = chrome.runtime.getManifest().content_scripts?.[0]?.js;
-  if (!files?.length) return;
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: [...files],
-    });
-    await delay(1_000);
-  } catch {
-    // страница может блокировать инъекцию
-  }
+  await ensureContentScriptReady(tabId);
 }
 
-async function sendSearchMessage(
+function isUsableSearchOffer(offer: MarketplaceOffer): boolean {
+  if (offer.needsManualPick && offer.searchCandidates?.length) return true;
+  return Boolean(
+    offer.found && offer.price && offer.url && isProductPageUrl(offer.url),
+  );
+}
+
+async function tryScrapeOnce(
   tabId: number,
   marketplace: ComparisonMarketplace,
   query: string,
@@ -93,34 +85,58 @@ async function sendSearchMessage(
   referenceSpecs?: string,
   excludedUrls?: string[],
 ): Promise<MarketplaceOffer | null> {
-  const delays = SEARCH_RETRY_DELAYS[marketplace];
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: 'SCRAPE_MARKETPLACE_SEARCH',
+      marketplace,
+      query,
+      referenceTitle,
+      referencePrice,
+      referenceSpecs,
+      excludedUrls,
+    });
 
-  for (const wait of delays) {
-    if (wait) await delay(wait);
-
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, {
-        type: 'SCRAPE_MARKETPLACE_SEARCH',
-        marketplace,
-        query,
-        referenceTitle,
-        referencePrice,
-        referenceSpecs,
-        excludedUrls,
-      });
-
-      if (response?.ok && response.offer) {
-        const offer = response.offer as MarketplaceOffer;
-        if (offer.needsManualPick && offer.searchCandidates?.length) {
-          return offer;
-        }
-        if (offer.found && offer.price && offer.url && isProductPageUrl(offer.url)) {
-          return offer;
-        }
-      }
-    } catch {
-      // content script ещё не готов — повтор
+    if (response?.ok && response.offer && isUsableSearchOffer(response.offer)) {
+      return response.offer as MarketplaceOffer;
     }
+  } catch {
+    // content script ещё не готов
+  }
+  return null;
+}
+
+/** Poll scrape until cards appear or timeout. */
+async function pollSearchMessage(
+  tabId: number,
+  marketplace: ComparisonMarketplace,
+  query: string,
+  referenceTitle: string,
+  referencePrice?: number,
+  referenceSpecs?: string,
+  excludedUrls?: string[],
+): Promise<MarketplaceOffer | null> {
+  const maxMs = SERP_POLL_MAX_MS[marketplace];
+  const started = Date.now();
+  let attempt = 0;
+
+  while (Date.now() - started < maxMs) {
+    if (attempt > 0) await delay(SERP_POLL_INTERVAL_MS);
+    attempt += 1;
+
+    if (attempt === 2 || attempt === 5) {
+      await scrollSearchPage(tabId);
+    }
+
+    const offer = await tryScrapeOnce(
+      tabId,
+      marketplace,
+      query,
+      referenceTitle,
+      referencePrice,
+      referenceSpecs,
+      excludedUrls,
+    );
+    if (offer) return offer;
   }
 
   return null;
@@ -142,8 +158,13 @@ export async function searchViaBrowserTab(
     if (cached.url && excludedUrls?.length && isUrlExcluded(cached.url, excludedUrls)) {
       // stale cache hit на rejected URL — игнорируем
     } else if (
-      cached.needsManualPick ||
-      (cached.found && cached.price && cached.price > 0)
+      // Only post-cascade verified product cards — never raw SERP
+      cached.found &&
+      cached.price &&
+      cached.price > 0 &&
+      cached.url &&
+      isProductPageUrl(cached.url) &&
+      cached.matchStatus === 'verified'
     ) {
       return cached;
     }
@@ -151,48 +172,155 @@ export async function searchViaBrowserTab(
 
   try {
     const browser = acquireHiddenBrowser();
-    const tabId = await browser.navigate(searchUrl);
+    const extVersion =
+      typeof chrome !== 'undefined' && chrome.runtime?.getManifest
+        ? chrome.runtime.getManifest().version
+        : 'unknown';
+    console.info('[PriceGuard] HiddenBrowser SERP navigate', {
+      marketplace,
+      searchUrl,
+      version: extVersion,
+    });
 
-    await waitForTabComplete(tabId);
-    await delay(SCRAPE_DELAYS[marketplace]);
-    await scrollSearchPage(tabId);
-    await delay(800);
-    await ensureContentScript(tabId);
+    return await browser.runExclusive(async (nav) => {
+      let tabId = await nav(searchUrl);
 
-    if (marketplace === 'ozon') {
-      const fromPageApi = await searchOzonInTab(tabId, query, ref, referencePrice, excludedUrls);
-      if (
-        fromPageApi &&
-        (fromPageApi.needsManualPick ||
-          (isOfferWithPrice(fromPageApi) &&
-            fromPageApi.url &&
-            isProductPageUrl(fromPageApi.url)))
-      ) {
-        await setSerpCachedOffer(marketplace, query, ref, fromPageApi);
-        return fromPageApi;
+      await waitForTabComplete(tabId);
+      await delay(400);
+
+      // Ozon often redirects /search → /category/…prediction — force global SERP (up to 2 retries)
+      if (marketplace === 'ozon') {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const tab = await chrome.tabs.get(tabId);
+            const finalUrl = tab.url ?? '';
+            if (!/\/category\//i.test(finalUrl)) break;
+            console.info('[PriceGuard] Ozon category redirect → re-nav global SERP', {
+              attempt: attempt + 1,
+              finalUrl: finalUrl.slice(0, 120),
+            });
+            tabId = await nav(searchUrl);
+            await waitForTabComplete(tabId);
+            await delay(600);
+          } catch {
+            break;
+          }
+        }
       }
-    }
 
-    const offer = await sendSearchMessage(
-      tabId,
-      marketplace,
-      query,
-      ref,
-      referencePrice,
-      referenceSpecs,
-      excludedUrls,
-    );
-    if (offer) {
-      // setSerpCachedOffer сам пропустит notFound
-      await setSerpCachedOffer(marketplace, query, ref, offer);
-      return offer;
-    }
+      await scrollSearchPage(tabId);
+      await ensureContentScript(tabId);
 
-    return buildSearchNotFoundOffer(
-      marketplace,
-      query,
-      `В выдаче не найден подходящий товар (запрос: «${query}»). Укажите ссылку вручную.`,
-    );
+      if (marketplace === 'ozon') {
+        // Poll DOM/widgets while tiles hydrate (category pages often lazy-load /product/ links)
+        const ozonStarted = Date.now();
+        const ozonMaxMs = SERP_POLL_MAX_MS.ozon;
+        let ozonAttempt = 0;
+        while (Date.now() - ozonStarted < ozonMaxMs) {
+          if (ozonAttempt > 0) await delay(SERP_POLL_INTERVAL_MS);
+          ozonAttempt += 1;
+          if (ozonAttempt === 2 || ozonAttempt === 5) {
+            await scrollSearchPage(tabId);
+          }
+
+          const fromPageApi = await searchOzonInTab(tabId, query, ref, referencePrice, excludedUrls);
+          if (fromPageApi?.error === OZON_ANTIBOT_USER_MESSAGE) {
+            noteEmptyScrape(marketplace, 'serp');
+            telemetry.warn({
+              stage: 'parser',
+              name: 'PARSER_ANTIBOT',
+              marketplace,
+              queryHash: hashQuery(query),
+              success: false,
+              errorCode: 'ozon_antibot',
+              data: { path: 'widgetStates' },
+            });
+            return fromPageApi;
+          }
+          if (
+            fromPageApi &&
+            (fromPageApi.needsManualPick ||
+              (isOfferWithPrice(fromPageApi) &&
+                fromPageApi.url &&
+                isProductPageUrl(fromPageApi.url)) ||
+              (fromPageApi.searchCandidates?.length ?? 0) > 0)
+          ) {
+            return fromPageApi;
+          }
+        }
+      }
+
+      const offer = await pollSearchMessage(
+        tabId,
+        marketplace,
+        query,
+        ref,
+        referencePrice,
+        referenceSpecs,
+        excludedUrls,
+      );
+      if (offer) {
+        resetEmptyScrape(marketplace, 'serp');
+        // Do not cache pre-cascade SERP
+        return offer;
+      }
+
+      // Content-script scrape empty — last DOM pass for Ozon (widgets already tried)
+      if (marketplace === 'ozon') {
+        const fromDom = await scrapeOzonSerpDomInTab(
+          tabId,
+          query,
+          ref,
+          referencePrice,
+          excludedUrls,
+        );
+        if (fromDom?.error === OZON_ANTIBOT_USER_MESSAGE) {
+          noteEmptyScrape(marketplace, 'serp');
+          telemetry.warn({
+            stage: 'parser',
+            name: 'PARSER_ANTIBOT',
+            marketplace,
+            queryHash: hashQuery(query),
+            success: false,
+            errorCode: 'ozon_antibot',
+            data: { path: 'dom' },
+          });
+          return fromDom;
+        }
+        if (
+          fromDom &&
+          (fromDom.needsManualPick ||
+            (isOfferWithPrice(fromDom) && fromDom.url && isProductPageUrl(fromDom.url)) ||
+            (fromDom.searchCandidates?.length ?? 0) > 0)
+        ) {
+          telemetry.info({
+            stage: 'parser',
+            name: 'PARSER_USED',
+            marketplace,
+            queryHash: hashQuery(query),
+            success: true,
+            data: { path: 'dom', candidates: fromDom.searchCandidates?.length ?? 0 },
+          });
+          return fromDom;
+        }
+      }
+
+      noteEmptyScrape(marketplace, 'serp');
+      telemetry.warn({
+        stage: 'parser',
+        name: 'PARSER_EMPTY',
+        marketplace,
+        queryHash: hashQuery(query),
+        success: false,
+        errorCode: 'empty_serp',
+      });
+
+      return buildSearchNotFoundOffer(
+        marketplace,
+        query,
+        'Подходящий товар в выдаче не найден. Укажите ссылку вручную.',
+      );
+    });
   } catch (error) {
     return buildSearchNotFoundOffer(marketplace, query, userFacingError(error));
   } finally {

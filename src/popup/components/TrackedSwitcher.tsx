@@ -44,8 +44,8 @@ export function TrackedSwitcher({
   return (
     <div className="space-y-1.5">
       <Surface variant="subtle" padding="sm" className="flex items-center gap-1.5">
-        <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={goPrev} disabled={products.length <= 1} title="Предыдущий товар">
-          <ChevronLeft className="h-4 w-4" />
+        <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={goPrev} disabled={products.length <= 1} title="Предыдущий товар" aria-label="Предыдущий товар">
+          <ChevronLeft className="h-4 w-4" aria-hidden />
         </Button>
 
         <div className="min-w-0 flex-1 px-1 text-center">
@@ -54,18 +54,18 @@ export function TrackedSwitcher({
           <p className="pg-caption font-semibold text-primary">{formatPrice(current.price)}</p>
         </div>
 
-        <Button variant={showInfo ? 'secondary' : 'ghost'} size="icon-sm" className="shrink-0" onClick={() => setShowInfo((v) => !v)} title="Информация">
-          <Info className="h-3.5 w-3.5" />
+        <Button variant={showInfo ? 'secondary' : 'ghost'} size="icon-sm" className="shrink-0" onClick={() => setShowInfo((v) => !v)} title="Информация" aria-label="Информация о товаре" aria-pressed={showInfo}>
+          <Info className="h-3.5 w-3.5" aria-hidden />
         </Button>
 
         {onRemove && (
-          <Button variant="ghost" size="icon-sm" className="shrink-0 text-destructive hover:bg-destructive/10" disabled={isRemoving} onClick={() => void onRemove(current.id)} title="Удалить из отслеживаемых">
-            {isRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          <Button variant="ghost" size="icon-sm" className="shrink-0 text-destructive hover:bg-destructive/10" disabled={isRemoving} onClick={() => void onRemove(current.id)} title="Удалить из отслеживаемых" aria-label="Удалить из отслеживаемых">
+            {isRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Trash2 className="h-3.5 w-3.5" aria-hidden />}
           </Button>
         )}
 
-        <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={goNext} disabled={products.length <= 1} title="Следующий товар">
-          <ChevronRight className="h-4 w-4" />
+        <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={goNext} disabled={products.length <= 1} title="Следующий товар" aria-label="Следующий товар">
+          <ChevronRight className="h-4 w-4" aria-hidden />
         </Button>
       </Surface>
 

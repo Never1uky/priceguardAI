@@ -1,8 +1,5 @@
 import { isContextInvalidatedError, isExtensionContextValid } from '@/lib/extension-context';
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { safeSendMessage } from '@/lib/safe-messaging';
 
 /** Повтор при холодном старте service worker. */
 export async function sendRuntimeMessage<T>(
@@ -13,19 +10,20 @@ export async function sendRuntimeMessage<T>(
     throw new Error('Расширение обновлено — закройте и откройте popup снова');
   }
 
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return (await chrome.runtime.sendMessage(message)) as T;
-    } catch (error) {
-      lastError = error;
-      if (isContextInvalidatedError(error)) {
-        throw new Error('Расширение обновлено — закройте и откройте popup снова');
-      }
-      if (attempt < attempts - 1) await delay(250 * (attempt + 1));
+  try {
+    const result = await safeSendMessage<T>({ type: 'runtime' }, message, {
+      retries: Math.max(0, attempts - 1),
+      backoffMs: [250, 500, 750],
+      softFail: false,
+    });
+    if (result == null) {
+      throw new Error('Расширение обновлено — закройте и откройте popup снова');
     }
+    return result;
+  } catch (error) {
+    if (isContextInvalidatedError(error)) {
+      throw new Error('Расширение обновлено — закройте и откройте popup снова');
+    }
+    throw error;
   }
-
-  throw lastError;
 }

@@ -38,13 +38,23 @@ export function toast(message: string, type: ToastType = 'info', durationMs = 45
 
 export function toastError(message: string): void {
   toast(message, 'error', 5500);
-  void import('@/lib/support-report').then((m) =>
-    m.reportExtensionError(message, 'toastError'),
-  );
+  void import('@/lib/support-report').then((m) => {
+    if (!m.shouldReportExtensionError(message)) return;
+    void m.reportExtensionError(message, 'toastError');
+  });
+}
+
+/** UX/ожидаемые ошибки — toast без отправки в Telegram-поддержку */
+export function toastUserError(message: string): void {
+  toast(message, 'error', 5500);
 }
 
 export function toastSuccess(message: string): void {
   toast(message, 'success', 3500);
+}
+
+export function toastWarning(message: string): void {
+  toast(message, 'warning', 5000);
 }
 
 export function subscribeToasts(listener: Listener): () => void {

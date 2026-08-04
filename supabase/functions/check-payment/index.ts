@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+import { requireAuthUser } from '../_shared/auth.ts';
 import { handleCors, jsonResponse } from '../_shared/utils.ts';
 
 interface CheckBody {
@@ -14,6 +15,17 @@ Deno.serve(async (req) => {
   }
 
   try {
+    let user;
+    try {
+      user = await requireAuthUser(req, true);
+    } catch {
+      return jsonResponse({
+        ok: false,
+        error: 'Войдите во вкладку «Аккаунт», чтобы проверить оплату',
+        code: 'AUTH_REQUIRED',
+      }, 401);
+    }
+
     const body = (await req.json()) as CheckBody;
     const sessionId = (body.sessionId ?? '').trim();
 
@@ -28,8 +40,9 @@ Deno.serve(async (req) => {
 
     const { data: payment, error } = await supabase
       .from('payments')
-      .select('status, plan, license_key_id')
+      .select('status, plan, license_key_id, user_id')
       .eq('session_id', sessionId)
+      .eq('user_id', user!.id)
       .maybeSingle();
 
     if (error || !payment) {

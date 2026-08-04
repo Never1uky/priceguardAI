@@ -1,4 +1,4 @@
-﻿# Supabase Auth — PriceGuard AI (v2.20.8)
+# Supabase Auth — PriceGuard AI (v2.20.8)
 
 Полная настройка авторизации, миграции `device_id → user_id` и синхронизации отслеживаемых товаров.
 
@@ -166,6 +166,7 @@ Legacy-строки (`device_id`, `user_id IS NULL`) доступны тольк
 | `pushTrackedProduct()` | skip |
 | `tracked-sync` edge | 401 |
 | `claim-device-tracked` edge | 401 |
+| `validate-license` edge | 401 (нужен JWT; ключ привязывается к аккаунту) |
 | `ai-proxy` | работает по device_id (anon) |
 | `metrics-dashboard` | 401 |
 

@@ -1,5 +1,6 @@
 /**
- * Единая точка сбора отзывов для ANALYZE_REVIEWS / PREVIEW_REVIEWS.
+ * Единая точка сбора отзывов для PREVIEW_REVIEWS / FULL_PRODUCT_ANALYSIS.
+ * Не вызывать из compare / ENSURE_COMPARE / Current price / add-to-my-products.
  */
 
 import { scrapeReviewsFromActiveTab, scrapeReviewsFromCurrentActiveTab } from '@/lib/reviews/scrape-active-tab';
@@ -20,6 +21,10 @@ export interface ReviewPreviewItem {
   text: string;
   rating?: number;
   author?: string;
+  /** Локализованная дата (из WB timestamp), только UI */
+  dateLabel?: string;
+  /** Характеристики варианта (цвет/размер) — chips; пока обычно пусто */
+  attrs?: string[];
 }
 
 export interface CollectedReviews {
@@ -48,12 +53,26 @@ export interface CollectReviewsOptions {
   allowNavigation?: boolean;
 }
 
+function formatReviewDateLabel(timestamp?: number): string | undefined {
+  if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) return undefined;
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    }).format(new Date(timestamp));
+  } catch {
+    return undefined;
+  }
+}
+
 function toPreviewItems(reviews: string[], wbItems?: WbReviewItem[]): ReviewPreviewItem[] {
   if (wbItems?.length) {
     return wbItems.slice(0, 3).map((r) => ({
       text: r.text.slice(0, 280),
       rating: r.rating,
       author: r.author ?? 'Покупатель',
+      dateLabel: formatReviewDateLabel(r.timestamp),
     }));
   }
 
@@ -65,6 +84,7 @@ function toPreviewItems(reviews: string[], wbItems?: WbReviewItem[]): ReviewPrev
 
 /**
  * Собирает тексты отзывов из всех доступных источников.
+ * WB feedbacks API — только здесь (SW), не из content script на карточке.
  */
 export async function collectReviewsForProduct(
   options: CollectReviewsOptions,
@@ -101,7 +121,33 @@ export async function collectReviewsForProduct(
   let totalFound = 0;
   let source: ReviewCollectSource = 'none';
 
-  if (preferCurrentPage) {
+  // 1) WB API из SW (credentials omit) — до DOM на странице, без CORS-шума
+  if (marketplace === 'wildberries' && resolvedArticle) {
+    try {
+      const fromApi = await fetchWildberriesReviews(resolvedArticle, 50);
+      if (fromApi.length > 0) {
+        wbItems = fromApi;
+        reviews = fromApi.map((r) => r.text);
+        reviewRatings = fromApi.map((r) => r.rating);
+        totalFound = fromApi.length;
+        source = 'wb_api';
+        if (reviews.length >= MIN_REVIEWS_FOR_ANALYSIS) {
+          return {
+            reviews,
+            reviewRatings,
+            previewItems: toPreviewItems(reviews, wbItems),
+            totalFound,
+            source,
+            insufficient: false,
+          };
+        }
+      }
+    } catch (error) {
+      console.warn('[PriceGuard] fetchWildberriesReviews:', error);
+    }
+  }
+
+  if (preferCurrentPage && reviews.length < MIN_REVIEWS_FOR_ANALYSIS) {
     try {
       const fromCurrent = await scrapeReviewsFromCurrentActiveTab(filter, allowNavigation);
       if (fromCurrent && fromCurrent.reviews.length > 0) {
@@ -138,28 +184,14 @@ export async function collectReviewsForProduct(
     }
   }
 
-  if (reviews.length < MIN_REVIEWS_FOR_ANALYSIS && marketplace === 'wildberries' && resolvedArticle) {
-    try {
-      const fromApi = await fetchWildberriesReviews(resolvedArticle, 50);
-      if (fromApi.length > reviews.length) {
-        wbItems = fromApi;
-        reviews = fromApi.map((r) => r.text);
-        reviewRatings = fromApi.map((r) => r.rating);
-        totalFound = fromApi.length;
-        source = 'wb_api';
-      }
-    } catch (error) {
-      console.warn('[PriceGuard] fetchWildberriesReviews:', error);
-    }
-  }
-
   if (!previewOnly && reviews.length < MIN_REVIEWS_FOR_ANALYSIS) {
     try {
       const fromHidden = await scrapeReviewsViaHiddenTab(canonicalUrl, marketplace, filter);
       if (fromHidden.reviews.length > reviews.length) {
         reviews = fromHidden.reviews;
         totalFound = Math.max(totalFound, fromHidden.totalFound);
-        source = marketplace === 'yandex_market' ? 'hidden_tab' : source;
+        // WB path = same feedbacks API; YM = hidden browser tab
+        source = marketplace === 'yandex_market' ? 'hidden_tab' : 'wb_api';
       }
     } catch (error) {
       console.warn('[PriceGuard] scrapeReviewsViaHiddenTab:', error);

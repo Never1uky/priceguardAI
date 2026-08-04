@@ -4,7 +4,9 @@
  */
 
 import { sendRuntimeMessage } from '@/lib/runtime-message';
+import { seedProductImageSync } from '@/lib/product-image';
 import { getPriceHistory, getStorage } from '@/lib/storage';
+import { stableProductStorageId } from '@/lib/price-identity';
 import type { Product } from '@/types/product';
 import { detectMarketplace, isProductPage } from '@/utils/marketplace';
 import { isSameProductPage } from '@/lib/reviews/tab-resolver';
@@ -65,11 +67,33 @@ export function useLiveProduct(): UseLiveProductResult {
     async (next: Product, source: ProductDataSource) => {
       clearProductPageWait();
       loadingSinceRef.current = null;
-      setProduct(next);
-      setTabUrl(next.url);
+
+      // Sync WB CDN seed before first paint — avoids broken img while ensure runs
+      const painted = seedProductImageSync(next);
+
+      setProduct(painted);
+      setTabUrl(painted.url);
       setDataSource(source);
       setError(null);
-      setPriceHistory(await getPriceHistory(next.id));
+      setPriceHistory(await getPriceHistory(stableProductStorageId(painted) ?? painted.id));
+
+      void (async () => {
+        try {
+          const { ensureProductImage } = await import('@/lib/product-image');
+          const withImage = await ensureProductImage(painted, {
+            force: !painted.imageUrl,
+          });
+          if (
+            withImage.imageUrl !== painted.imageUrl ||
+            (withImage.imageUrlAlternatives?.length ?? 0) >
+              (painted.imageUrlAlternatives?.length ?? 0)
+          ) {
+            setProduct((prev) => (prev?.id === painted.id ? { ...prev, ...withImage } : prev));
+          }
+        } catch {
+          // soft
+        }
+      })();
     },
     [clearProductPageWait],
   );
@@ -88,28 +112,46 @@ export function useLiveProduct(): UseLiveProductResult {
     [clearProductPageWait],
   );
 
-  const fallbackWhenProductPageEmpty = useCallback(async (tabError?: string) => {
+  const fallbackWhenProductPageEmpty = useCallback(async (tabError?: string, activeTabUrl?: string | null) => {
     const storage = await getStorage();
-    if (storage.lastScrapedProduct) {
-      await applyProduct(storage.lastScrapedProduct, 'cached');
-      lastTabUrlRef.current = storage.lastScrapedProduct.url;
+    const cached = storage.lastScrapedProduct;
+    if (
+      cached &&
+      activeTabUrl &&
+      isProductPage(activeTabUrl) &&
+      urlsReferToSameProduct(cached.url, activeTabUrl)
+    ) {
+      await applyProduct(cached, 'cached');
+      lastTabUrlRef.current = cached.url;
       setError(
         tabError
-          ? `${tabError} — показан кэш`
+          ? `${tabError} — показан кэш этой карточки`
           : 'Не удалось прочитать карточку — показаны данные из кэша',
       );
       return;
     }
 
+    // Product page but cache is another SKU — never show foreign product
+    if (activeTabUrl && isProductPage(activeTabUrl)) {
+      clearProductPageWait();
+      loadingSinceRef.current = null;
+      setProduct(null);
+      setDataSource('none');
+      setPriceHistory([]);
+      setError(
+        tabError ??
+          'Не удалось прочитать карточку — обновите страницу или откройте товар заново',
+      );
+      return;
+    }
+
+    // Не карточка МП — пустой контекст (без lastScraped «чужого» товара)
     clearProductPageWait();
     loadingSinceRef.current = null;
     setProduct(null);
     setDataSource('none');
     setPriceHistory([]);
-    setError(
-      tabError ??
-        'Не удалось прочитать карточку — откройте товар или вставьте ссылку на вкладке «Отзывы»',
-    );
+    setError(null);
   }, [applyProduct, clearProductPageWait]);
 
   const refresh = useCallback(
@@ -135,6 +177,28 @@ export function useLiveProduct(): UseLiveProductResult {
         if (tabResponse?.ok && tabResponse.product) {
           const source: ProductDataSource =
             tabResponse.source === 'content' ? 'current_tab' : 'cached';
+          const [activeTab] = await chrome.tabs.query({
+            active: true,
+            currentWindow: true,
+          });
+          // Не‑карточка (chrome://, новая вкладка и т.п.) — пустой контекст, без чужого кэша
+          if (!activeTab?.url || !isProductPage(activeTab.url)) {
+            clearProductPageWait();
+            loadingSinceRef.current = null;
+            setProduct(null);
+            setDataSource('none');
+            setPriceHistory([]);
+            setError(null);
+            lastTabUrlRef.current = activeTab?.url ?? null;
+            return;
+          }
+          if (!urlsReferToSameProduct(tabResponse.product.url, activeTab.url)) {
+            await fallbackWhenProductPageEmpty(
+              'Карточка на вкладке не совпала с кэшем',
+              activeTab.url,
+            );
+            return;
+          }
           await applyProduct(tabResponse.product, source);
           lastTabUrlRef.current = tabResponse.product.url;
           return;
@@ -154,21 +218,23 @@ export function useLiveProduct(): UseLiveProductResult {
 
           setError(tabResponse.error ?? 'Данные товара загружаются…');
 
-          // Не ждать scrape вечно (Ozon/YM часто не отдают content)
           const waited =
             loadingSinceRef.current != null
               ? Date.now() - loadingSinceRef.current
               : 0;
 
           if (!tabResponse.needsRefresh || waited >= PRODUCT_PAGE_WAIT_MS) {
-            await fallbackWhenProductPageEmpty(tabResponse.error);
+            const [activeTab] = await chrome.tabs.query({
+              active: true,
+              currentWindow: true,
+            });
+            await fallbackWhenProductPageEmpty(tabResponse.error, activeTab?.url);
             return;
           }
 
           clearProductPageWait();
           productPageWaitRef.current = setTimeout(() => {
             void (async () => {
-              // Повторная попытка; если снова пусто — fallback внутри refresh
               await refresh({ silent: true });
             })();
           }, Math.max(500, PRODUCT_PAGE_WAIT_MS - waited));
@@ -178,22 +244,11 @@ export function useLiveProduct(): UseLiveProductResult {
 
         clearProductPageWait();
         loadingSinceRef.current = null;
-
-        const storage = await getStorage();
-        if (storage.lastScrapedProduct) {
-          await applyProduct(storage.lastScrapedProduct, 'cached');
-          lastTabUrlRef.current = storage.lastScrapedProduct.url;
-          setError('Откройте карточку товара — показаны данные из кэша');
-          return;
-        }
-
         setProduct(null);
         setDataSource('none');
         setPriceHistory([]);
-        setError(
-          tabResponse?.error ??
-            'Откройте страницу товара на Wildberries, Ozon или Яндекс.Маркет',
-        );
+        setError(null);
+        lastTabUrlRef.current = null;
       } catch {
         setError('Не удалось загрузить данные');
         setDataSource((prev) => (prev === 'loading' ? 'none' : prev));
@@ -254,14 +309,31 @@ export function useLiveProduct(): UseLiveProductResult {
         const scraped = nextStorage?.lastScrapedProduct;
         if (!scraped) return;
 
-        const currentUrl = lastTabUrlRef.current;
-        if (currentUrl && !urlsReferToSameProduct(scraped.url, currentUrl)) {
-          return;
-        }
+        void (async () => {
+          try {
+            const { getRunningCompareProductId } = await import('@/lib/compare-jobs');
+            if (await getRunningCompareProductId()) return;
+          } catch {
+            // soft
+          }
 
-        void applyProduct(scraped, 'current_tab');
-        lastTabUrlRef.current = scraped.url;
-        setIsLoading(false);
+          const [activeTab] = await chrome.tabs.query({
+            active: true,
+            currentWindow: true,
+          });
+          const activeUrl = activeTab?.url;
+          if (!activeUrl || !isProductPage(activeUrl)) return;
+          if (!urlsReferToSameProduct(scraped.url, activeUrl)) return;
+
+          const currentUrl = lastTabUrlRef.current;
+          if (currentUrl && !urlsReferToSameProduct(scraped.url, currentUrl)) {
+            return;
+          }
+
+          void applyProduct(scraped, 'current_tab');
+          lastTabUrlRef.current = scraped.url;
+          setIsLoading(false);
+        })();
       }
     };
 

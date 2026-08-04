@@ -10,6 +10,7 @@ import {
   deactivatePremium,
   getAiQuotaStatus,
   getSubscription,
+  hasLocalTelegramForTrial,
   isTrialActive,
   startTrial,
 } from '@/lib/subscription';
@@ -42,8 +43,8 @@ import { useEffect, useState } from 'react';
 
 const PREMIUM_FEATURES = [
   'Неограниченный AI-анализ товаров',
-  'Полный разбор: плюсы, минусы, альтернативы',
-  'Неограниченное отслеживание товаров',
+  'Глубокий разбор: AI + веб-контекст (Sonar)',
+  'До 50 товаров в отслеживании',
   'Алерты о цене + приоритет проверки (без Chrome)',
   'Сравнение · где дешевле на всех маркетплейсах',
 ];
@@ -66,6 +67,7 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
   const [hasPendingPayment, setHasPendingPayment] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<CheckoutPlanId>('yearly');
   const [trialAvailable, setTrialAvailable] = useState(false);
+  const [trialHasTelegram, setTrialHasTelegram] = useState(false);
   const [quotaLabel, setQuotaLabel] = useState('');
   const [showPlansModal, setShowPlansModal] = useState(false);
   const [onTrial, setOnTrial] = useState(false);
@@ -74,17 +76,19 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
   const supabaseReady = isSupabaseConfigured();
 
   const loadState = async () => {
-    const [subscription, pending, canTrial, quota, trial, authed] = await Promise.all([
+    const [subscription, pending, canTrial, quota, trial, authed, hasTg] = await Promise.all([
       getSubscription(),
       getPendingPayment(),
       canStartTrial(),
       getAiQuotaStatus(),
       isTrialActive(),
       canUseCloudFeatures(),
+      hasLocalTelegramForTrial(),
     ]);
     setSub(subscription);
     setHasPendingPayment(Boolean(pending));
     setTrialAvailable(canTrial);
+    setTrialHasTelegram(hasTg);
     setQuotaLabel(quota.label);
     setOnTrial(trial);
     setIsAuthenticated(authed);
@@ -97,6 +101,11 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
   const isPremium = sub.tier === 'premium';
 
   const handleActivateKey = async (keyOverride?: string) => {
+    if (!isAuthenticated) {
+      setLicenseError(AI_AUTH_REQUIRED_MESSAGE);
+      onOpenAuth?.();
+      return;
+    }
     const key = keyOverride ?? licenseKey;
     setIsActivating(true);
     setLicenseError(null);
@@ -200,7 +209,7 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
             <Surface variant="subtle" padding="sm">
               <p className="pg-body font-medium">{AI_AUTH_REQUIRED_MESSAGE}</p>
               <p className="pg-hint mt-1">
-                Пробный период и AI-анализ доступны после входа.
+                Пробный период, оплата и активация ключа — после входа.
               </p>
               {onOpenAuth && (
                 <Button size="sm" variant="outline" className="mt-2 gap-1.5" onClick={onOpenAuth}>
@@ -212,20 +221,27 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
           )}
 
           {trialAvailable && isAuthenticated && (
-            <Button
-              variant="purple"
-              size="lg"
-              className="w-full gap-2 font-semibold"
-              onClick={() => void handleTrial()}
-              disabled={isStartingTrial}
-            >
-              {isStartingTrial ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="h-4 w-4" />
-              )}
-              Начать бесплатный {TRIAL_DAYS}-дневный период
-            </Button>
+            <div className="space-y-1.5">
+              <Button
+                variant="purple"
+                size="lg"
+                className="w-full gap-2 font-semibold"
+                onClick={() => void handleTrial()}
+                disabled={isStartingTrial || !trialHasTelegram}
+              >
+                {isStartingTrial ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Начать бесплатный {TRIAL_DAYS}-дневный период
+              </Button>
+              <p className="pg-hint text-center">
+                {trialHasTelegram
+                  ? 'Бесплатный период — один раз на Telegram и устройство.'
+                  : 'Бесплатный период — после подключения Telegram в Настройках.'}
+              </p>
+            </div>
           )}
 
           <div className="space-y-1.5">
@@ -351,32 +367,51 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
                 <KeyRound className="h-3.5 w-3.5" /> Активация лицензии
               </p>
               <p className="pg-hint">
-                Лицензия привязывается к аккаунту. После переустановки войдите — Premium восстановится.
-                Ключ также можно запросить командой /mykey у @priceguard_supportbot (если Telegram
-                подключён в Настройках).
+                Нужен вход в аккаунт. Лицензия привязывается к аккаунту — после переустановки
+                войдите снова, Premium восстановится. Ключ также можно запросить командой /mykey у
+                @priceguard_supportbot (если Telegram подключён в Настройках).
               </p>
-              <input
-                type="text"
-                placeholder="PGAI-XXXX-XXXX"
-                value={licenseKey}
-                onChange={(e) => setLicenseKey(e.target.value)}
-                className="w-full rounded-sm border border-border bg-background px-2 py-2 pg-body text-foreground outline-none focus:ring-1 focus:ring-purple"
-              />
-              {licenseError && <p className="text-[10px] text-red-600">{licenseError}</p>}
-              {licenseSuccess && <p className="text-[10px] text-green-600">Premium активирован!</p>}
-              <Button
-                className="w-full gap-2"
-                variant="outline"
-                onClick={() => void handleActivateKey()}
-                disabled={isActivating || !licenseKey.trim()}
-              >
-                {isActivating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <KeyRound className="h-4 w-4" />
-                )}
-                Активировать ключ
-              </Button>
+              {!isAuthenticated ? (
+                <Button
+                  className="w-full gap-2"
+                  variant="outline"
+                  onClick={() => onOpenAuth?.()}
+                  disabled={!onOpenAuth}
+                >
+                  <LogIn className="h-4 w-4" />
+                  Войти, чтобы активировать ключ
+                </Button>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    placeholder="PGAI-XXXX-XXXX"
+                    value={licenseKey}
+                    onChange={(e) => setLicenseKey(e.target.value)}
+                    className="w-full rounded-sm border border-border bg-background px-2 py-2 pg-body text-foreground outline-none focus:ring-1 focus:ring-purple"
+                  />
+                  {licenseError && <p className="text-[10px] text-red-600">{licenseError}</p>}
+                  {licenseSuccess && (
+                    <p className="text-[10px] text-green-600">Premium активирован!</p>
+                  )}
+                  <Button
+                    className="w-full gap-2"
+                    variant="outline"
+                    onClick={() => void handleActivateKey()}
+                    disabled={isActivating || !licenseKey.trim()}
+                  >
+                    {isActivating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4" />
+                    )}
+                    Активировать ключ
+                  </Button>
+                </>
+              )}
+              {!isAuthenticated && licenseError && (
+                <p className="text-[10px] text-red-600">{licenseError}</p>
+              )}
           </Surface>
         </>
       )}

@@ -25,7 +25,12 @@ import { FULL_ANALYSIS_SCHEMA_VERSION } from '@/types/full-analysis';
 import type { AiProvider } from '@/types/review-analysis';
 
 export interface AnalyzeFullCloudOptions {
-  /** Premium: Sonar → GPT. Free: один вызов Grok/GPT-mini */
+  /**
+   * true = Sonar → GPT (deep / «Глубокий разбор»).
+   * false/omit = lite: один вызов Grok/GPT-mini без Perplexity.
+   */
+  webResearch?: boolean;
+  /** @deprecated use webResearch */
   fullAnalysis?: boolean;
 }
 
@@ -114,22 +119,23 @@ async function persistWebResearchCache(
 
 /**
  * Облачный полный анализ.
- * - Free: один запрос Grok/GPT-4o mini (только отзывы)
- * - Premium (fullAnalysis): ai-proxy pipeline Sonar → GPT
+ * - lite (default): один запрос Grok/GPT-4o mini (только отзывы)
+ * - webResearch: ai-proxy pipeline Sonar → GPT (кэш v3 / daily Sonar cap)
  */
 export async function analyzeFullViaCloud(
   input: FullAnalysisInput,
   options: AnalyzeFullCloudOptions = {},
 ): Promise<FullProductAnalysis> {
-  const usePipeline = options.fullAnalysis === true;
+  const useSonar =
+    options.webResearch === true || options.fullAnalysis === true;
 
-  if (usePipeline) {
+  if (useSonar) {
     const payload = await buildProxyPayload(input);
-    const result = await sendFullAnalysisViaProxy(payload);
+    const result = await sendFullAnalysisViaProxy(payload, { webResearch: true });
     const label = result.webResearchUsed
       ? result.webResearchCached
-        ? `${getProviderLabel(result.providerUsed)} + Sonar (кэш)`
-        : `${getProviderLabel(result.providerUsed)} + Sonar`
+        ? `${getProviderLabel(result.providerUsed)} + веб (кэш)`
+        : `${getProviderLabel(result.providerUsed)} + веб`
       : getProviderLabel(result.providerUsed);
 
     if (result.webResearchUsed && result.webResearchText) {
@@ -155,7 +161,7 @@ export async function analyzeFullViaCloud(
     }
   }
 
-  // Free: дешёвый одиночный вызов
+  // Lite: дешёвый одиночный вызов без Sonar
   const userPrompt = buildFullAnalysisUserPrompt(input);
   const { text, providerUsed } = await sendToAIWithFallback(
     FULL_ANALYSIS_SYSTEM_PROMPT,

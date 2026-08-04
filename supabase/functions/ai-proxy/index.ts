@@ -1,15 +1,22 @@
 // PriceGuard AI — AI proxy (AITunnel).
 //
 // Режимы:
-//   1) Обычный chat: Grok ↔ GPT-4o mini fallback (Free / простые запросы)
-//   2) fullAnalysis: true → двухшаговый pipeline Sonar → GPT-4o mini (Premium)
+//   1) Обычный chat / lite fullAnalysis: Grok ↔ GPT-4o mini (без Sonar)
+//   2) fullAnalysis + webResearch → pipeline Sonar → GPT-4o mini (Premium deep)
 //
 // Secrets: AITUNNEL_API_KEY, GROK_API_KEY, OPENAI_API_KEY
 //          AI_RATE_LIMIT_MAX (40), AI_RATE_LIMIT_WINDOW_MIN (60)
+//          SONAR_DAILY_CAP (5) — live Sonar calls / user / UTC day
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
+import {
+  getProductCacheEntry,
+  upsertProductCacheVersioned,
+  WEB_RESEARCH_CACHE_VERSION,
+  WEB_RESEARCH_CACHE_TTL_MS,
+} from '../_shared/product-cache-store.ts';
 
 type Provider = 'grok' | 'openai' | 'perplexity';
 
@@ -43,9 +50,10 @@ interface FullAnalysisPayload {
   }>;
 }
 
-const WEB_RESEARCH_CACHE_VERSION = 3;
-const WEB_RESEARCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const WEB_RESEARCH_TTL_MS = WEB_RESEARCH_CACHE_TTL_MS;
 const VALID_MARKETPLACES = ['wildberries', 'ozon', 'yandex_market'];
+/** Live Perplexity Sonar calls per user per UTC day (cache hits do not count). */
+const DEFAULT_SONAR_DAILY_CAP = 5;
 
 const AITUNNEL_URL = 'https://api.aitunnel.ru/v1/chat/completions';
 
@@ -143,6 +151,34 @@ async function isRateLimited(
     return false;
   }
   return (count ?? 0) + cost > max;
+}
+
+/** Live Sonar (not cache) count for user since UTC midnight. */
+async function isSonarDailyCapped(
+  supabase: ReturnType<typeof serviceClient>,
+  userId: string | null,
+): Promise<boolean> {
+  if (!userId) return false;
+  const max = Number(Deno.env.get('SONAR_DAILY_CAP') ?? String(DEFAULT_SONAR_DAILY_CAP));
+  if (max <= 0) return false;
+
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const { count, error } = await supabase
+    .from('ai_request_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('provider', 'perplexity')
+    .eq('success', true)
+    .eq('web_research_used', true)
+    .eq('web_research_cached', false)
+    .gte('created_at', start.toISOString());
+
+  if (error) {
+    console.error('sonar daily cap check failed', error);
+    return false;
+  }
+  return (count ?? 0) >= max;
 }
 
 async function logRequest(
@@ -407,15 +443,14 @@ async function loadWebResearchFromServerCache(
 ): Promise<{ text: string; sources: WebSource[] } | null> {
   if (!VALID_MARKETPLACES.includes(marketplace) || !productId) return null;
 
-  const { data, error } = await supabase
-    .from('product_cache')
-    .select('ai_analysis, last_updated')
-    .eq('marketplace', marketplace)
-    .eq('product_id', productId)
-    .eq('cache_version', WEB_RESEARCH_CACHE_VERSION)
-    .maybeSingle();
-
-  if (error || !data || !isWebResearchFresh(data.last_updated)) return null;
+  const data = await getProductCacheEntry(
+    supabase,
+    marketplace,
+    productId,
+    WEB_RESEARCH_CACHE_VERSION,
+    WEB_RESEARCH_TTL_MS,
+  );
+  if (!data) return null;
 
   const cached = data.ai_analysis as { text?: string; sources?: WebSource[] } | null;
   if (!cached?.text?.trim() || cached.text.trim().length <= 40) return null;
@@ -437,18 +472,14 @@ async function saveWebResearchToServerCache(
   if (!VALID_MARKETPLACES.includes(marketplace) || !productId || !text.trim()) return;
 
   try {
-    await supabase.from('product_cache').upsert(
-      {
-        marketplace,
-        product_id: productId,
-        product_title: payload.productTitle?.slice(0, 500) ?? null,
-        model: 'sonar',
-        ai_analysis: { text: text.trim(), sources },
-        last_updated: new Date().toISOString(),
-        cache_version: WEB_RESEARCH_CACHE_VERSION,
-      },
-      { onConflict: 'marketplace,product_id,cache_version' },
-    );
+    await upsertProductCacheVersioned(supabase, {
+      marketplace,
+      productId,
+      productTitle: payload.productTitle?.slice(0, 500) ?? null,
+      model: 'sonar',
+      aiAnalysis: { text: text.trim(), sources },
+      cacheVersion: WEB_RESEARCH_CACHE_VERSION,
+    });
   } catch (e) {
     console.error('web research cache save failed', e);
   }
@@ -515,7 +546,19 @@ function buildFullAnalysisUser(payload: FullAnalysisPayload, webResearch?: strin
     lines.push('', 'Данные из интернета (Perplexity Sonar):', webResearch.trim().slice(0, 3_500));
   }
 
-  const reviewsBlock = (payload.reviews ?? [])
+  const reviewList = payload.reviews ?? [];
+  if (reviewList.length === 0) {
+    if (webResearch?.trim()) {
+      lines.push(
+        '',
+        'На маркетплейсе нет отзывов для анализа. Опирайся на данные Sonar.',
+        'fakeRisk: medium (если данных мало — укажи в fakeRiskExplanation); qualityScore — из обзоров в сети.',
+      );
+    }
+    return lines.join('\n');
+  }
+
+  const reviewsBlock = reviewList
     .slice(0, 20)
     .map((r, i) => `--- Отзыв ${i + 1} ---\n${String(r).slice(0, 500)}`)
     .join('\n\n');
@@ -606,8 +649,9 @@ async function handleSingleChat(params: {
 }
 
 /**
- * Premium pipeline: Sonar (web) → GPT-4o mini (JSON).
- * Если Sonar упал — GPT всё равно делает анализ только по отзывам (graceful degrade).
+ * Premium deep pipeline: Sonar (web) → GPT-4o mini (JSON).
+ * Cache-first: fresh v3 product_cache skips Sonar. Live Sonar subject to daily cap.
+ * Если Sonar упал / cap — GPT всё равно делает анализ только по отзывам (graceful degrade).
  */
 async function handleFullAnalysisPipeline(params: {
   supabase: ReturnType<typeof serviceClient>;
@@ -617,19 +661,11 @@ async function handleFullAnalysisPipeline(params: {
   deviceId: string;
   started: number;
   preferredProvider: 'grok' | 'openai';
+  /** false = lite JSON synthesis without Sonar */
+  webResearch: boolean;
 }): Promise<Response> {
   const payload = params.payload;
   const reviews = Array.isArray(payload.reviews) ? payload.reviews : [];
-  if (reviews.length < 5) {
-    return jsonResponse(
-      {
-        ok: false,
-        code: 'bad_request',
-        error: `Недостаточно отзывов (${reviews.length}). Нужно минимум 5.`,
-      },
-      400,
-    );
-  }
 
   let webResearch = '';
   let webSources: WebSource[] = [];
@@ -637,75 +673,104 @@ async function handleFullAnalysisPipeline(params: {
   let webCached = false;
   let webError = '';
 
-  // ——— Шаг 1: Perplexity Sonar (или кэш 7 дней) ———
-  const clientCache = payload.forceRefreshWeb ? null : payload.cachedWebResearch;
-  if (clientCache?.text?.trim() && clientCache.text.trim().length > 40) {
-    webResearch = clientCache.text.trim();
-    webSources = Array.isArray(clientCache.sources) ? clientCache.sources : [];
-    webUsed = true;
-    webCached = true;
-  } else if (!payload.forceRefreshWeb && payload.marketplace && payload.productId) {
-    const serverCache = await loadWebResearchFromServerCache(
-      params.supabase,
-      payload.marketplace,
-      payload.productId,
-    );
-    if (serverCache) {
-      webResearch = serverCache.text;
-      webSources = serverCache.sources;
+  if (params.webResearch) {
+    // ——— Шаг 1: Perplexity Sonar (или кэш 14 дней) ———
+    const clientCache = payload.forceRefreshWeb ? null : payload.cachedWebResearch;
+    if (clientCache?.text?.trim() && clientCache.text.trim().length > 40) {
+      webResearch = clientCache.text.trim();
+      webSources = Array.isArray(clientCache.sources) ? clientCache.sources : [];
       webUsed = true;
       webCached = true;
-    }
-  }
-
-  if (!webUsed) {
-    try {
-      const sonar = await callSonar(
-        [
-          { role: 'system', content: WEB_RESEARCH_SYSTEM },
-          { role: 'user', content: buildWebResearchUser(params.payload) },
-        ],
-        0.2,
-        700,
+    } else if (!payload.forceRefreshWeb && payload.marketplace && payload.productId) {
+      const serverCache = await loadWebResearchFromServerCache(
+        params.supabase,
+        payload.marketplace,
+        payload.productId,
       );
+      if (serverCache) {
+        webResearch = serverCache.text;
+        webSources = serverCache.sources;
+        webUsed = true;
+        webCached = true;
+      }
+    }
 
-      webResearch = sonar.text.trim();
-      webSources = sonar.sources;
-      webUsed = webResearch.length > 40;
-
-      if (webUsed) {
-        await saveWebResearchToServerCache(params.supabase, params.payload, webResearch, webSources);
+    if (!webUsed) {
+      if (await isSonarDailyCapped(params.supabase, params.userId)) {
+        webError = 'sonar_daily_cap';
+        await logRequest(params.supabase, {
+          userId: params.userId,
+          deviceId: params.deviceId,
+          provider: 'perplexity',
+          model: MODELS.perplexity,
+          success: false,
+          error: webError,
+          durationMs: Date.now() - params.started,
+          pipeline: 'sonar_gpt',
+          webResearchUsed: false,
+          webResearchCached: false,
+        });
+        return jsonResponse(
+          {
+            ok: false,
+            code: 'sonar_daily_cap',
+            error:
+              'Дневной лимит глубокого разбора (веб) исчерпан. Используйте обычный AI-анализ или повторите завтра.',
+          },
+          429,
+        );
       }
 
-      await logRequest(params.supabase, {
-        userId: params.userId,
-        deviceId: params.deviceId,
-        provider: 'perplexity',
-        model: sonar.model,
-        success: true,
-        durationMs: Date.now() - params.started,
-        promptTokens: sonar.promptTokens,
-        completionTokens: sonar.completionTokens,
-        pipeline: 'sonar_gpt',
-        webResearchUsed: webUsed,
-        webResearchCached: false,
-      });
-    } catch (e) {
-      webError = e instanceof Error ? e.message : String(e);
-      await logRequest(params.supabase, {
-        userId: params.userId,
-        deviceId: params.deviceId,
-        provider: 'perplexity',
-        model: MODELS.perplexity,
-        success: false,
-        error: webError,
-        durationMs: Date.now() - params.started,
-        pipeline: 'sonar_gpt',
-        webResearchUsed: false,
-        webResearchCached: false,
-      });
+      try {
+        const sonar = await callSonar(
+          [
+            { role: 'system', content: WEB_RESEARCH_SYSTEM },
+            { role: 'user', content: buildWebResearchUser(params.payload) },
+          ],
+          0.2,
+          700,
+        );
+
+        webResearch = sonar.text.trim();
+        webSources = sonar.sources;
+        webUsed = webResearch.length > 40;
+
+        if (webUsed) {
+          await saveWebResearchToServerCache(params.supabase, params.payload, webResearch, webSources);
+        }
+
+        await logRequest(params.supabase, {
+          userId: params.userId,
+          deviceId: params.deviceId,
+          provider: 'perplexity',
+          model: sonar.model,
+          success: true,
+          durationMs: Date.now() - params.started,
+          promptTokens: sonar.promptTokens,
+          completionTokens: sonar.completionTokens,
+          pipeline: 'sonar_gpt',
+          webResearchUsed: webUsed,
+          webResearchCached: false,
+        });
+      } catch (e) {
+        webError = e instanceof Error ? e.message : String(e);
+        await logRequest(params.supabase, {
+          userId: params.userId,
+          deviceId: params.deviceId,
+          provider: 'perplexity',
+          model: MODELS.perplexity,
+          success: false,
+          error: webError,
+          durationMs: Date.now() - params.started,
+          pipeline: 'sonar_gpt',
+          webResearchUsed: false,
+          webResearchCached: false,
+        });
+      }
     }
   }
+
+  const pipeline = params.webResearch ? 'sonar_gpt' : 'lite';
 
   // ——— Шаг 2: GPT-4o mini (с fallback на Grok) ———
   const synthesisMessages: ChatMessage[] = [
@@ -741,7 +806,7 @@ async function handleFullAnalysisPipeline(params: {
         durationMs: Date.now() - params.started,
         promptTokens: result.promptTokens,
         completionTokens: result.completionTokens,
-        pipeline: 'sonar_gpt',
+        pipeline,
         webResearchUsed: webUsed,
         webResearchCached: webCached,
       });
@@ -751,7 +816,7 @@ async function handleFullAnalysisPipeline(params: {
         text: result.text,
         provider: p,
         model: result.model,
-        pipeline: 'sonar_gpt',
+        pipeline,
         webResearchUsed: webUsed,
         webResearchCached: webCached,
         webResearchText: webUsed ? webResearch : undefined,
@@ -770,6 +835,7 @@ async function handleFullAnalysisPipeline(params: {
         success: false,
         error: msg,
         durationMs: Date.now() - params.started,
+        pipeline,
       });
     }
   }
@@ -803,6 +869,12 @@ Deno.serve(async (req) => {
       Boolean(body.fullAnalysis) ||
       body.mode === 'full_analysis' ||
       body.mode === 'fullAnalysis';
+    // Deep = Sonar→GPT only when explicitly requested (pipeline or webResearch flag).
+    // Legacy: fullAnalysis alone used to imply Sonar — now defaults to lite unless webResearch.
+    const webResearch =
+      body.pipeline === 'sonar_gpt' ||
+      body.webResearch === true ||
+      body.mode === 'sonar_gpt';
     const provider: 'grok' | 'openai' = body.provider === 'openai' ? 'openai' : 'grok';
     const messages = Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : [];
     const temperature =
@@ -814,6 +886,7 @@ Deno.serve(async (req) => {
 
     console.log('[ai-proxy] incoming', {
       fullAnalysis,
+      webResearch,
       mode: body.mode ?? null,
       hasPayload: Boolean(payload),
       reviews: Array.isArray(payload?.reviews) ? payload!.reviews.length : 0,
@@ -830,19 +903,19 @@ Deno.serve(async (req) => {
       );
     }
 
-    const authUser = await requireAuthUser(req, false);
-    const userId = authUser?.id ?? null;
+    const authUser = await requireAuthUser(req, true);
+    const userId = authUser.id;
     const supabase = serviceClient();
 
-    const rateKey = userId ?? reqDeviceId;
-    const rateColumn = userId ? 'user_id' : 'device_id';
-    let rateCost = fullAnalysis ? 2 : 1;
-    if (fullAnalysis && payload) {
+    const rateKey = userId;
+    const rateColumn = 'user_id';
+    let rateCost = fullAnalysis && webResearch ? 2 : 1;
+    if (fullAnalysis && webResearch && payload) {
       const cachedWeb = await willUseCachedWebResearch(supabase, payload);
       if (cachedWeb) rateCost = 1;
     }
 
-    if (rateKey && await isRateLimited(supabase, rateKey, rateColumn, rateCost)) {
+    if (await isRateLimited(supabase, rateKey, rateColumn, rateCost)) {
       return jsonResponse(
         {
           ok: false,
@@ -862,6 +935,7 @@ Deno.serve(async (req) => {
         deviceId: reqDeviceId,
         started,
         preferredProvider: provider,
+        webResearch,
       });
     }
 
@@ -877,6 +951,17 @@ Deno.serve(async (req) => {
       started,
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg === 'auth_required' || msg === 'invalid_token') {
+      return jsonResponse(
+        {
+          ok: false,
+          code: 'auth_required',
+          error: 'Войдите во вкладку «Аккаунт» для AI-анализа',
+        },
+        401,
+      );
+    }
     console.error('ai-proxy error', error);
     return jsonResponse({ ok: false, error: 'Внутренняя ошибка сервера', code: 'server_error' }, 500);
   }

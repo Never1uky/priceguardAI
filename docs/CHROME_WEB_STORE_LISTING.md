@@ -1,6 +1,6 @@
 # Материалы для Chrome Web Store — PriceGuard AI
 
-Версия расширения: **2.20.8**  
+Версия расширения: **0.9.90 (Early access)**  
 Категория: **Shopping**  
 Язык листинга: **Русский** (основной), **English** (дополнительно)
 
@@ -11,13 +11,15 @@ Privacy Policy (публичный URL): https://priceguard-landing.vercel.app/p
 
 ## 0. Что сделать вручную перед загрузкой (чеклист оператора)
 
-1. **Privacy URL** — `https://priceguard-landing.vercel.app/privacy` (или GitHub Pages `docs/privacy/`).
+1. **Privacy URL** — `https://priceguard-landing.vercel.app/privacy` (или GitHub Pages `docs/privacy/`). Policy **v2.4**.
 2. **Confirm email OFF** в Supabase Dashboard (Auth → Email), либо SMTP.
-3. **5 скриншотов 1280×800**: popup «Цены и сравнение»; отслеживаемые; AI-анализ; Premium; Telegram + AI по ссылке.
-4. **Smoke P0** на zip без debug: WB/Ozon/YM сравнение; вход; Premium restore; Telegram «Подключить»; AI по ссылке в @PriceGuardAlertsBot.
-5. Загрузить **только** `priceguard-ai-v2.20.8.zip`. Сначала **Unlisted**, потом Public.
-6. В форме CWS: Single purpose (§8), Permissions (§9), Data use: product URLs, prices, reviews, email (optional), device_id, Telegram chat id (optional); processors: Supabase, AI providers, Bright Data (server scrape), YooKassa, Telegram.
-
+3. **5 скриншотов 1280×800** — из `docs/store-assets/` (или live-capture с теми же сюжетами).
+4. **Smoke P0** на zip без debug: WB/Ozon/YM сравнение; вход; Premium restore; Telegram «Подключить»; AI; SW без `import() is disallowed`. См. `docs/RELEASE_GO.md`.
+5. **ЮKassa smoke** — `docs/YOOKASSA_SMOKE.md` (один успешный тестовый платёж).
+6. Загрузить **только** `priceguard-ai-v0.9.90.zip`. Visibility: **Unlisted** → Submit for review. **Не Public** до апрува.
+7. Prod secrets: `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_SUPPORT_WEBHOOK_SECRET`, `METRICS_ADMIN_EMAILS`, AI/YooKassa/Scrappey; deploy Edge JWT hardenings.
+8. В форме CWS: Single purpose (§8), Permissions (§9), Data use: product URLs, prices, reviews (incl. raw sample for AI), match feedback / compare-research, email (optional), device_id, Telegram chat id + AI questions (optional), price history / comparison data, **automatic support error reports** (truncated error text ≤800 chars, optional context, extension version, userId — via Supabase Edge `support-notify` → operator Telegram); processors: Supabase, Grok/OpenAI/Perplexity, Scrappey (server scrape), YooKassa, Telegram.
+9. (Опц. перед Public) `docs/sql/disable-demo-license-keys.sql` в SQL Editor.
 ---
 
 ## 1. Короткое описание (до 132 символов)
@@ -63,7 +65,7 @@ PriceGuard AI — умный помощник для покупок на Wildber
 ✨ ВОЗМОЖНОСТИ
 
 🤖 AI-анализ отзывов и полный разбор товара
-Плюсы, минусы, риск накрутки/подделки, вердикт «покупать / подождать». Free: до 3 полных AI-анализов в сутки (после входа). Premium — без лимита.
+Плюсы, минусы, риск накрутки/подделки, вердикт «покупать / подождать». Free: до 3 AI-анализов в сутки (после входа). Premium — без лимита AI + глубокий разбор с веб-контекстом.
 
 ⚖️ Сравнение на трёх площадках
 Один товар — таблица офферов WB / Ozon / Яндекс.Маркет. Сразу видно, где дешевле, переход в карточку в один клик.
@@ -75,7 +77,7 @@ PriceGuard AI — умный помощник для покупок на Wildber
 Подключите @PriceGuardAlertsBot: уведомления о падении цены и AI-карточка по ссылке на товар (кнопки: недостатки, где дешевле, история…). Поддержка — @priceguard_supportbot.
 
 ☁️ Без открытого Chrome
-При включённом Telegram сервер проверяет цены по расписанию (Free — до 5 товаров; Premium — без лимита и с приоритетом).
+При включённом Telegram сервер проверяет цены по расписанию (Free — до 5 товаров; Premium — до 50 и с приоритетом).
 
 🔒 БЕЗОПАСНОСТЬ
 • Ключи AI не в расширении — запросы через защищённый сервер
@@ -140,26 +142,26 @@ Install PriceGuard AI — shop smarter.
 
 ---
 
-## 2b. What's New (поле «Что нового» для 2.20.8)
+## 2b. What's New (поле «Что нового» для 0.9.90 Early access)
 
 ### Русский
 
 ```
-• AI-анализ по ссылке в Telegram (@PriceGuardAlertsBot): карточка, кнопки, вопросы AI
-• Серверный сбор отзывов Ozon/Я.Маркет + единый пайплайн анализа
-• История цен на сервере и кнопка истории в боте
-• Мониторинг цен без открытого Chrome при подключённом Telegram
-• Обновлена Политика конфиденциальности (Bright Data, Telegram AI)
+• Early access: возможны неточности матчинга — пишите в поддержку
+• Telegram-бот алертов: статус товаров, AI и FAQ
+• Статус «Нет в наличии» и надёжнее сравнение цен
+• Отчёт для поддержки при сбое (без промптов и паролей)
+• Облачный AI и алерты без постоянно открытого Chrome
 ```
 
 ### English
 
 ```
-• AI analysis from a product link in Telegram (@PriceGuardAlertsBot)
-• Server-side Ozon/Yandex Market reviews + unified AI pipeline
-• Server price history + history button in the bot
-• Price monitoring without Chrome open when Telegram is connected
-• Privacy Policy updated (Bright Data, Telegram AI)
+• Early access: matching may be imperfect — contact support
+• Telegram alerts bot: product status, AI, and FAQ
+• Out-of-stock status and more reliable price compare
+• Support diagnostics export on failure (no prompts/passwords)
+• Cloud AI and alerts without keeping Chrome open
 ```
 
 ---
@@ -192,36 +194,42 @@ price tracker, wildberries, ozon, yandex market, price drop alert, compare price
 4. **AI по ссылке в боте** — пришлите URL → карточка и кнопки.
 5. **История цен** — отличить реальную скидку от «было выше на бумаге».
 6. **Безопасный облачный AI** — ключи на сервере.
-7. **Freemium** — 3 AI/день и до 5 товаров бесплатно.
+7. **Freemium** — 3 AI/день и до 5 товаров бесплатно; Premium — до 50 товаров.
 8. **Синхронизация** — список и Telegram после входа в аккаунт.
 
 ---
 
-## 5. Структура скриншотов (5 × 1280×800)
+## 5. Структура скриншотов (5 × 1280×800, опционально 7)
 
-| # | Заголовок | Что показать |
-|---|-----------|--------------|
-| 1 | Цены и сравнение | Вкладка «Цены и сравнение», офферы, «где дешевле» |
-| 2 | AI-анализ | Отзывы / полный анализ, вердикт |
-| 3 | Отслеживание | Список + история / целевая цена |
-| 4 | Telegram-алерты | Настройки Telegram + пример алерта |
-| 5 | AI в боте | Карточка @PriceGuardAlertsBot по ссылке |
+| # | Файл | Заголовок | Что показать |
+|---|------|-----------|--------------|
+| 1 | `01-compare.png` | Где дешевле — сразу | Вкладка «Цены», таблица WB/Ozon/YM, метка «Где дешевле» |
+| 2 | `02-ai-reviews.png` | AI-анализ отзывов | Вкладка «Отзывы», вердикт, плюсы/минусы |
+| 3 | `03-tracking.png` | Мои товары | Цена, скидка, вкладки «Цены» / «Мои товары» |
+| 4 | `04-price-history.png` | Скидка и история | Процент скидки, подсказка проверить историю |
+| 5 | `05-full-analysis.png` | Полный AI-разбор | Альтернативы, характеристики, «Рекомендую купить» |
+| 6 | `06-telegram-ai.png` | Telegram без Chrome | Настройки бота @PriceGuardAlertsBot (опционально) |
+| 7 | `07-telegram-alert.png` | Алерты в Telegram | «Цена упала» / «Нашли дешевле» (опционально) |
+
+Пересборка: `Desktop\screenshots for CWS\photopea-mockup\build-mockups.ps1` → копия в `docs/store-assets/`.
 
 ---
 
 ## 6. Иконки
 
-Store icon 128×128 — `public/icons/icon128.png`. Promo 440×280 / marquee — по желанию.
+Store icon 128×128 — `docs/store-assets/icons/store-icon-128.png` (или `public/icons/icon128.png`; hex price-tag + P, `npm run icons`). Small promo 440×280 — `docs/store-assets/icons/small-promo-440x280.png`. Marquee — по желанию.
+
+**Скриншоты:** `docs/store-assets/` — 5×1280×800 (готовы к загрузке; перед Public желательно заменить на live-capture).
 
 ---
 
 ## 7. Чеклист публикации
 
-- [ ] Zip `priceguard-ai-v2.20.8.zip`
+- [ ] Zip `priceguard-ai-v0.9.0.zip`
 - [ ] Privacy URL: https://priceguard-landing.vercel.app/privacy
 - [ ] Single purpose (§8)
 - [ ] Permissions (§9)
-- [ ] Data use + Bright Data / Telegram AI в disclosure при необходимости
+- [ ] Data use + Scrappey / Telegram AI в disclosure при необходимости
 - [ ] 5 скриншотов + иконка 128
 - [ ] Краткое описание ≤132
 - [ ] What's New (§2b)
@@ -241,14 +249,26 @@ Helps compare prices, analyze reviews with AI, and get price-drop alerts on Wild
 
 ## 9. Permission Justifications
 
-| Permission | Обоснование |
-|------------|-------------|
-| `storage` | Список отслеживания, история, настройки, сессия |
-| `activeTab` / `tabs` | Цена и отзывы с открытой карточки |
-| `windows` | Фоновый поиск Ozon/Я.Маркет (HiddenBrowser) |
-| `scripting` | Сбор данных со страниц маркетплейсов |
-| `notifications` | Уведомления о падении цены |
-| `alarms` | Периодическая проверка и backup-синхронизация |
-| `webNavigation` | Смена карточки товара |
-| Host: WB / Ozon / YM | Публичные цены и отзывы |
-| Host: supabase.co | Синхронизация, AI-прокси, лицензии, Telegram, product-intel |
+Копируйте в Chrome Web Store Developer Dashboard (каждое разрешение отдельно).
+
+| Permission | Обоснование (RU для формы) |
+|------------|----------------------------|
+| `storage` | Хранение списка отслеживания, истории цен, настроек алертов/темы, сессии Supabase Auth и локального кэша AI-анализа. Без синхронизации через `storage.sync` для секретов. |
+| `scripting` | Внедрение content script и вспомогательных скриптов на страницах WB/Ozon/Я.Маркет для чтения публичных данных карточки/SERP (цена, название, отзывы) и ensureContentScript при HiddenBrowser scrape. Не загружаем удалённый код. |
+| `notifications` | Браузерные уведомления о падении цены и достижении целевой цены. |
+| `alarms` | Периодическая проверка цен (раз в ~6 ч), flush PendingSync и фоновые задачи при закрытом popup. |
+| `webNavigation` | Отслеживание SPA-навигации на маркетплейсах (`onCompleted` / `onHistoryStateUpdated`): переход между карточками без полной перезагрузки страницы, чтобы обновить scraped product. |
+| Host: `wildberries.ru` / `www.wildberries.ru` | Content script + fetch публичных страниц каталога/карточки. |
+| Host: `card.wb.ru`, `search.wb.ru`, `feedbacks1/2.wb.ru` | Только **fetch из service worker** (цена, поиск, отзывы WB API) — **не** content_scripts. |
+| Host: `*.wbbasket.ru` | CDN изображений товаров WB в UI сравнения. |
+| Host: `ozon.ru` / `www.ozon.ru` | Content script на product/search + scrape/SERP. |
+| Host: `market.yandex.ru` | Content script на product/search/card + scrape. |
+| Host: `ihlfvpocwobvcpxbypsd.supabase.co` | Edge Functions: AI-прокси, sync, лицензии, Telegram settings, product-intel. |
+
+**Data use:** расширение передаёт данные о просматриваемых/отслеживаемых товарах (URL, цены, выборка отзывов, match feedback) на наш бэкенд Supabase для AI-анализа, синхронизации и алертов. При неожиданных ошибках может уйти автоматический отчёт: текст ошибки (≤800), контекст, версия, userId (`support-notify` → Telegram оператора). **Мы не продаём персональные данные третьим лицам.** Процессоры: Supabase, AI (Grok/OpenAI/Perplexity), Scrappey (URL страницы), YooKassa, Telegram — только для работы сервиса.
+
+**Privacy Policy URL:** https://priceguard-landing.vercel.app/privacy
+
+Не запрашиваем: `activeTab`, `tabs`, `windows`, `cookies`, `identity`, `api.ozon.ru`. URL вкладок маркетплейсов доступны через `host_permissions`; `chrome.windows` / `chrome.tabs.create` не требуют отдельных permissions.
+
+**BYOK / Premium (для ревьюеров):** ключи AI не хранятся в расширении (только приоритет провайдера в `chrome.storage.local`). Premium UI читает локальный флаг; активация и costly server paths проверяются на Edge (`validate-license` / `user_premium` / JWT).

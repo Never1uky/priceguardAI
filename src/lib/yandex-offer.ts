@@ -1,4 +1,5 @@
 import type { MarketplaceOffer } from '@/types/comparison';
+import { normalizeMarketplaceRating } from '@/lib/compare-offers';
 import { fetchWithRetry } from '@/lib/fetch-retry';
 import {
   parseYandexPriceBlockText,
@@ -190,7 +191,7 @@ function breakdownFromYmProduct(product: YmProduct, rawNode?: unknown): YandexPr
   }
 
   if (isPayTagged(product) && primary) {
-    return { price: primary, basePrice: primary, payPrice: primary };
+    return { price: primary, basePrice: undefined, payPrice: primary };
   }
 
   const price = primary ?? min;
@@ -215,7 +216,7 @@ function productToOffer(product: YmProduct, fallbackUrl: string, rawNode?: unkno
     payPrice: prices.payPrice,
     oldPrice: prices.oldPrice,
     delivery: null,
-    rating: product.rating ?? product.preciseRating ?? null,
+    rating: normalizeMarketplaceRating(product.rating ?? product.preciseRating),
     reviewCount: product.opinions,
     specs: extractSpecs(product),
     imageUrl: extractYmImageUrl(product),
@@ -238,6 +239,9 @@ export async function fetchYandexOfferFromPage(url: string): Promise<Marketplace
     try {
       const response = await fetchWithRetry(endpoint, {
         headers: { Accept: 'application/json' },
+      }, {
+        retries: 1,
+        delayMs: 400,
       });
       if (!response.ok) continue;
 

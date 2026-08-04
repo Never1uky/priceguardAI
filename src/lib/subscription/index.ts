@@ -1,6 +1,5 @@
 import {
   FREE_LIMITS,
-  TRIAL_DAYS,
   type SubscriptionState,
   type SubscriptionTier,
 } from '@/types/subscription';
@@ -10,8 +9,21 @@ import {
   isSupabaseConfigured,
   restoreLicenseRemote,
   validateLicenseRemote,
+  claimTrialRemote,
 } from '@/lib/supabase/client';
 import { canUseCloudFeatures, AI_AUTH_REQUIRED_MESSAGE } from '@/lib/supabase/auth-guard';
+import {
+  clearPremiumClaimOnServer,
+  setServerPriceMonitoringActive,
+  syncAlertSettingsToCloud,
+} from '@/lib/supabase/alert-settings-sync';
+import { getPriceAlertSettings } from '@/lib/compare-price-alerts';
+import {
+  findMyProductByUrl,
+  getMyProductSlotCount,
+  getMyProductsLimit,
+  loadMyProductItems,
+} from '@/lib/my-products';
 
 const STORAGE_KEY = 'priceguard_subscription';
 const TRIAL_USED_KEY = 'priceguard_trial_used';
@@ -50,6 +62,18 @@ function isPremiumActive(sub: SubscriptionState): boolean {
   return Date.now() < sub.expiresAt;
 }
 
+/** @internal Unit tests */
+export function isPremiumSubscriptionActive(sub: SubscriptionState): boolean {
+  return isPremiumActive(sub);
+}
+
+function notifyPaidPremiumExpired(): void {
+  void (async () => {
+    await clearPremiumClaimOnServer();
+    await syncAlertSettingsToCloud();
+  })();
+}
+
 function applyPremiumState(
   key: string | undefined,
   plan: RemotePlan,
@@ -68,8 +92,12 @@ function applyPremiumState(
 export async function getSubscription(): Promise<SubscriptionState> {
   const sub = await readSubscription();
   if (sub.tier === 'premium' && !isPremiumActive(sub)) {
+    const wasTrial = sub.source === 'trial';
     const downgraded: SubscriptionState = { tier: 'free' };
     await writeSubscription(downgraded);
+    if (!wasTrial) {
+      notifyPaidPremiumExpired();
+    }
     return downgraded;
   }
   return sub;
@@ -95,16 +123,34 @@ export async function hasUsedTrial(): Promise<boolean> {
   return Boolean(stored[TRIAL_USED_KEY]);
 }
 
+/** Локальный UX-гейт: Chat ID в настройках (сервер всё равно проверяет облако). */
+export async function hasLocalTelegramForTrial(): Promise<boolean> {
+  const settings = await getPriceAlertSettings();
+  return settings.telegramChatId.trim().length > 0;
+}
+
+/**
+ * Можно ли показать CTA триала (вход + не Premium + локально ещё не брал).
+ * Без Telegram кнопка может быть disabled — см. hasLocalTelegramForTrial.
+ */
 export async function canStartTrial(): Promise<boolean> {
   if (!(await canUseCloudFeatures())) return false;
+  if (!isSupabaseConfigured()) return false;
   if (await isPremium()) return false;
   return !(await hasUsedTrial());
 }
 
-/** Старт бесплатного Premium на TRIAL_DAYS дней (один раз на устройство) */
+/**
+ * Старт бесплатного Premium на TRIAL_DAYS.
+ * Источник правды — Edge claim-trial (chat_id + device_id). Локальный флаг — UX-кэш.
+ * Отвязка Telegram после старта не отзывает активный триал до expiresAt.
+ */
 export async function startTrial(): Promise<{ ok: boolean; error?: string; expiresAt?: number }> {
   if (!(await canUseCloudFeatures())) {
     return { ok: false, error: AI_AUTH_REQUIRED_MESSAGE };
+  }
+  if (!isSupabaseConfigured()) {
+    return { ok: false, error: 'Сервер не настроен. Попробуйте позже.' };
   }
   if (await isPremium()) {
     return { ok: false, error: 'Premium уже активен' };
@@ -113,19 +159,53 @@ export async function startTrial(): Promise<{ ok: boolean; error?: string; expir
     return { ok: false, error: 'Пробный период уже использован. Оформите подписку.' };
   }
 
-  const expiresAt = Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000;
+  if (!(await hasLocalTelegramForTrial())) {
+    return {
+      ok: false,
+      error: 'Подключите Telegram в Настройках, затем повторите.',
+    };
+  }
+
+  const deviceId = await getDeviceId();
+  const remote = await claimTrialRemote(deviceId);
+
+  if (!remote.ok || typeof remote.expiresAt !== 'number') {
+    if (remote.code === 'trial_already_used') {
+      await chrome.storage.local.set({ [TRIAL_USED_KEY]: true });
+    }
+    if (remote.code === 'telegram_required') {
+      return {
+        ok: false,
+        error: 'Подключите Telegram в Настройках (Chat ID), затем повторите.',
+      };
+    }
+    if (remote.code === 'trial_already_used') {
+      return {
+        ok: false,
+        error: 'Пробный период уже использован на этом устройстве или Telegram.',
+      };
+    }
+    if (remote.code === 'auth_required') {
+      return { ok: false, error: AI_AUTH_REQUIRED_MESSAGE };
+    }
+    return {
+      ok: false,
+      error: remote.error ?? 'Не удалось активировать пробный период',
+    };
+  }
+
   await writeSubscription({
     tier: 'premium',
     activatedAt: Date.now(),
-    expiresAt,
+    expiresAt: remote.expiresAt,
     source: 'trial',
   });
   await chrome.storage.local.set({ [TRIAL_USED_KEY]: true });
 
-  return { ok: true, expiresAt };
+  return { ok: true, expiresAt: remote.expiresAt };
 }
 
-/** Активация Premium — через Supabase validate-license (ключ после оплаты ЮKassa). */
+/** Активация Premium — через Supabase validate-license (ключ после оплаты ЮKassa). Требует вход в аккаунт. */
 export async function activateLicenseKey(key: string): Promise<{ ok: boolean; error?: string }> {
   const normalized = normalizeKey(key);
 
@@ -138,6 +218,10 @@ export async function activateLicenseKey(key: string): Promise<{ ok: boolean; er
     },
     'C',
   );
+
+  if (!(await canUseCloudFeatures())) {
+    return { ok: false, error: AI_AUTH_REQUIRED_MESSAGE };
+  }
 
   if (!VALID_LICENSE_PREFIXES.some((p) => normalized.startsWith(p))) {
     return { ok: false, error: 'Неверный формат ключа. Ожидается PGAI-XXXX-XXXX' };
@@ -162,7 +246,7 @@ export async function activateLicenseKey(key: string): Promise<{ ok: boolean; er
       const plan = remote.plan as RemotePlan;
       const state = applyPremiumState(normalized, plan, remote.expiresAt, 'supabase');
       await writeSubscription(state);
-      void import('@/lib/supabase/alert-settings-sync').then((m) => m.syncAlertSettingsToCloud());
+      void syncAlertSettingsToCloud();
       return { ok: true };
     }
     return { ok: false, error: remote.error ?? 'Ключ недействителен или лимит устройств исчерпан' };
@@ -176,13 +260,17 @@ export async function syncSubscriptionWithServer(): Promise<void> {
   const sub = await readSubscription();
   if (sub.tier !== 'premium' || !sub.licenseKey || !isSupabaseConfigured()) return;
   if (sub.source === 'trial') return;
+  // Без сессии validate-license недоступен — не сбрасываем локальный Premium
+  if (!(await canUseCloudFeatures())) return;
 
   try {
     const deviceId = await getDeviceId();
     const remote = await validateLicenseRemote(sub.licenseKey, deviceId);
 
     if (!remote.ok) {
+      if (remote.code === 'auth_required') return;
       await writeSubscription({ tier: 'free' });
+      void clearPremiumClaimOnServer();
     } else if (remote.plan) {
       await writeSubscription(
         applyPremiumState(sub.licenseKey, remote.plan as RemotePlan, remote.expiresAt, 'supabase'),
@@ -257,10 +345,9 @@ export async function restorePremiumFromAccount(): Promise<{
 
 export async function deactivatePremium(): Promise<void> {
   await writeSubscription({ tier: 'free' });
-  await import('@/lib/supabase/alert-settings-sync').then(async (m) => {
-    await m.setServerPriceMonitoringActive(false);
-    await m.syncAlertSettingsToCloud();
-  });
+  await clearPremiumClaimOnServer();
+  await setServerPriceMonitoringActive(false);
+  await syncAlertSettingsToCloud();
 }
 
 // ——— AI usage (Free) ———
@@ -342,6 +429,8 @@ export async function canRunFullAnalysis(): Promise<{ allowed: boolean; reason?:
 }
 
 export async function recordFullAnalysis(): Promise<void> {
+  // Free: 1 попытка за успешный user_run / hard_refresh (в т.ч. cache hit как ответ на Run).
+  // Soft refresh и тихий hydrate кэша — не вызывают эту функцию (см. full-analysis-quota-policy).
   await recordReviewAnalysis();
 }
 
@@ -366,21 +455,51 @@ export async function getUsageStats(): Promise<{
 }
 
 export async function canTrackMoreProducts(
-  currentCount: number,
+  currentCount?: number,
 ): Promise<{ allowed: boolean; limit: number }> {
-  if (await isPremium()) return { allowed: true, limit: Infinity };
+  const premium = await isPremium();
+  const limit = getMyProductsLimit(premium);
+  const slotCount = await getMyProductSlotCount();
+  const count = currentCount != null ? Math.max(currentCount, slotCount) : slotCount;
   return {
-    allowed: currentCount < FREE_LIMITS.maxTrackedProducts,
-    limit: FREE_LIMITS.maxTrackedProducts,
+    allowed: count < limit,
+    limit,
   };
 }
 
 export async function canAddCompareProduct(
-  currentCount: number,
+  currentCount?: number,
 ): Promise<{ allowed: boolean; limit: number }> {
-  if (await isPremium()) return { allowed: true, limit: Infinity };
+  const premium = await isPremium();
+  const limit = getMyProductsLimit(premium);
+  const slotCount = await getMyProductSlotCount();
+  const count = currentCount != null ? Math.max(currentCount, slotCount) : slotCount;
   return {
-    allowed: currentCount < FREE_LIMITS.maxCompareProducts,
-    limit: FREE_LIMITS.maxCompareProducts,
+    allowed: count < limit,
+    limit,
+  };
+}
+
+/** Unified Free/Premium gate for «Мои товары». Skip limit if URL already in the list. */
+export async function canAddMyProduct(options?: {
+  url?: string;
+}): Promise<{ allowed: boolean; limit: number; count: number; alreadyPresent: boolean }> {
+  const premium = await isPremium();
+  const limit = getMyProductsLimit(premium);
+  const count = await getMyProductSlotCount();
+
+  if (options?.url) {
+    const items = await loadMyProductItems();
+    const existing = findMyProductByUrl(items, options.url);
+    if (existing) {
+      return { allowed: true, limit, count, alreadyPresent: true };
+    }
+  }
+
+  return {
+    allowed: count < limit,
+    limit,
+    count,
+    alreadyPresent: false,
   };
 }

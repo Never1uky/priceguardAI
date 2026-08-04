@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { bindLicenseToUser } from '../_shared/license-bind.ts';
-import { generateLicenseKey, handleCors, jsonResponse } from '../_shared/utils.ts';
+import { generateLicenseKey, handleCors, jsonResponse, PLAN_PRICES } from '../_shared/utils.ts';
+import { fetchYookassaPayment } from '../_shared/yookassa-verify.ts';
 
 async function bindPaymentUserPremium(
   supabase: ReturnType<typeof createClient>,
@@ -29,16 +30,25 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json();
     const event = body?.event;
-    const payment = body?.object;
+    const paymentHint = body?.object;
 
     if (event !== 'payment.succeeded' && event !== 'payment.canceled') {
       return jsonResponse({ ok: true, skipped: true });
     }
 
-    const sessionId = payment?.metadata?.session_id as string | undefined;
-    const yookassaId = payment?.id as string | undefined;
+    const yookassaId = paymentHint?.id as string | undefined;
+    if (!yookassaId) {
+      return jsonResponse({ ok: false, error: 'payment id required' }, 400);
+    }
 
-    if (!sessionId && !yookassaId) {
+    // Never trust webhook body — re-fetch from YooKassa API
+    const verified = await fetchYookassaPayment(yookassaId);
+    if (!verified) {
+      return jsonResponse({ ok: false, error: 'Payment verification failed' }, 502);
+    }
+
+    const sessionId = verified.sessionId;
+    if (!sessionId) {
       return jsonResponse({ ok: false, error: 'No session metadata' }, 400);
     }
 
@@ -47,21 +57,32 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
-    let query = supabase.from('payments').select('*');
-    if (sessionId) {
-      query = query.eq('session_id', sessionId);
-    } else {
-      query = query.eq('yookassa_payment_id', yookassaId!);
-    }
-
-    const { data: paymentRow, error: fetchError } = await query.maybeSingle();
+    const { data: paymentRow, error: fetchError } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('session_id', sessionId)
+      .maybeSingle();
 
     if (fetchError || !paymentRow) {
       console.error('payment not found:', sessionId, yookassaId);
       return jsonResponse({ ok: false, error: 'Payment not found' }, 404);
     }
 
+    // Bind yookassa id if missing
+    if (!paymentRow.yookassa_payment_id) {
+      await supabase
+        .from('payments')
+        .update({ yookassa_payment_id: verified.id })
+        .eq('id', paymentRow.id);
+    } else if (paymentRow.yookassa_payment_id !== verified.id) {
+      console.error('[yookassa-webhook] payment id mismatch');
+      return jsonResponse({ ok: false, error: 'Payment id mismatch' }, 400);
+    }
+
     if (event === 'payment.canceled') {
+      if (verified.status !== 'canceled') {
+        return jsonResponse({ ok: false, error: 'Not canceled at YooKassa' }, 400);
+      }
       await supabase
         .from('payments')
         .update({ status: 'canceled' })
@@ -69,10 +90,34 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true });
     }
 
+    // payment.succeeded
+    if (verified.status !== 'succeeded') {
+      return jsonResponse({ ok: false, error: 'Not succeeded at YooKassa' }, 400);
+    }
+
+    if (verified.currency !== 'RUB') {
+      return jsonResponse({ ok: false, error: 'Unexpected currency' }, 400);
+    }
+
+    const expectedRub = Number(paymentRow.amount_rub);
+    const planPrice = PLAN_PRICES[paymentRow.plan as string];
+    if (
+      !Number.isFinite(verified.amountValue) ||
+      Math.round(verified.amountValue) !== Math.round(expectedRub) ||
+      (typeof planPrice === 'number' && Math.round(verified.amountValue) !== planPrice)
+    ) {
+      console.error('[yookassa-webhook] amount mismatch', {
+        verified: verified.amountValue,
+        expected: expectedRub,
+        plan: paymentRow.plan,
+      });
+      return jsonResponse({ ok: false, error: 'Amount mismatch' }, 400);
+    }
+
     if (paymentRow.status === 'succeeded' && paymentRow.license_key_id) {
       const { data: existingKey } = await supabase
         .from('license_keys')
-        .select('id, key_code, plan, expires_at')
+        .select('id, plan, expires_at')
         .eq('id', paymentRow.license_key_id)
         .maybeSingle();
 
@@ -84,7 +129,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      return jsonResponse({ ok: true, licenseKey: existingKey?.key_code, alreadyProcessed: true });
+      return jsonResponse({ ok: true, alreadyProcessed: true });
     }
 
     const plan = paymentRow.plan as 'monthly' | 'yearly' | 'lifetime';
@@ -106,7 +151,7 @@ Deno.serve(async (req) => {
         payment_id: paymentRow.id,
         is_demo: false,
       })
-      .select('id, key_code, plan, expires_at')
+      .select('id, plan, expires_at')
       .single();
 
     if (licenseError || !license) {
@@ -120,6 +165,7 @@ Deno.serve(async (req) => {
         status: 'succeeded',
         paid_at: new Date().toISOString(),
         license_key_id: license.id,
+        yookassa_payment_id: verified.id,
       })
       .eq('id', paymentRow.id);
 
@@ -129,9 +175,11 @@ Deno.serve(async (req) => {
       expires_at: license.expires_at,
     });
 
-    console.info(`License issued: ${license.key_code} for session ${paymentRow.session_id}`);
+    console.info(
+      `[yookassa-webhook] License issued for payment ${paymentRow.id} session ${paymentRow.session_id}`,
+    );
 
-    return jsonResponse({ ok: true, licenseKey: license.key_code });
+    return jsonResponse({ ok: true });
   } catch (error) {
     console.error('yookassa-webhook:', error);
     return jsonResponse({ ok: false, error: 'Webhook error' }, 500);

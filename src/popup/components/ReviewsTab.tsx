@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { sendRuntimeMessage } from '@/lib/runtime-message';
+import { seedProductImageSync } from '@/lib/product-image';
 import { FullAnalysisSection } from '@/popup/components/FullAnalysisSection';
 import { ReviewPreviewQuotes } from '@/popup/components/ReviewPreviewQuotes';
 import { ReviewProductPicker } from '@/popup/components/ReviewProductPicker';
@@ -42,20 +43,27 @@ export function ReviewsTab({
   const [pickedProduct, setPickedProduct] = useState<Product | null>(null);
   const [previewItems, setPreviewItems] = useState<ReviewPreviewItem[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewSettled, setPreviewSettled] = useState(false);
   const [previewTotal, setPreviewTotal] = useState(0);
+  const [reviewRatings, setReviewRatings] = useState<Array<number | undefined>>([]);
   const [insufficientReviews, setInsufficientReviews] = useState(false);
 
   const previewGenRef = useRef(0);
   const previewFetchedKeyRef = useRef<string | null>(null);
   const previewInFlightRef = useRef(false);
 
-  const activeProduct = useMemo(() => pickedProduct ?? product, [pickedProduct, product]);
+  const activeProduct = useMemo(() => {
+    const raw = pickedProduct ?? product;
+    return raw ? seedProductImageSync(raw) : null;
+  }, [pickedProduct, product]);
 
   useEffect(() => {
     if (!activeProduct?.url || suppressReviewFetch) {
       setPreviewItems([]);
+      setReviewRatings([]);
       setInsufficientReviews(false);
       setPreviewLoading(false);
+      setPreviewSettled(false);
       return;
     }
 
@@ -67,6 +75,7 @@ export function ReviewsTab({
     const generation = ++previewGenRef.current;
     previewInFlightRef.current = true;
     setPreviewLoading(true);
+    setPreviewSettled(false);
 
     void (async () => {
       try {
@@ -78,6 +87,7 @@ export function ReviewsTab({
           previewItems?: ReviewPreviewItem[];
           totalFound?: number;
           reviewCount?: number;
+          reviewRatings?: Array<number | undefined>;
           insufficient?: boolean;
         }>({
           type: 'PREVIEW_REVIEWS',
@@ -93,6 +103,7 @@ export function ReviewsTab({
         if (res?.ok) {
           setPreviewItems(res.previewItems ?? []);
           setPreviewTotal(res.totalFound ?? res.reviewCount ?? 0);
+          setReviewRatings(res.reviewRatings ?? []);
           setInsufficientReviews(Boolean(res.insufficient));
           previewFetchedKeyRef.current = sessionKey;
         }
@@ -100,6 +111,7 @@ export function ReviewsTab({
         if (generation === previewGenRef.current) {
           previewInFlightRef.current = false;
           setPreviewLoading(false);
+          setPreviewSettled(true);
         }
       }
     })();
@@ -173,24 +185,31 @@ export function ReviewsTab({
           <FullAnalysisSection
             product={activeProduct}
             isPremium={isPremium}
+            reviewRatings={reviewRatings}
             onOpenPremium={() => onOpenPremium?.()}
             onOpenAuth={() => onOpenAuth?.()}
             onOpenSettings={() => onOpenSettings?.()}
             onBusyChange={onFullAnalysisBusyChange}
           />
 
-          {(insufficientReviews || previewLoading || previewItems.length > 0) && (
-            <ReviewPreviewQuotes
-              items={previewItems}
-              totalFound={previewTotal}
-              isLoading={previewLoading}
-            />
-          )}
+          <ReviewPreviewQuotes
+            items={previewItems}
+            totalFound={previewTotal}
+            isLoading={previewLoading || !previewSettled}
+            showEmpty={previewSettled}
+            productHints={[activeProduct.title]}
+          />
 
           {insufficientReviews && (
             <div className="rounded-sm bg-warning/10 px-3 py-2.5 pg-hint text-warning">
-              На странице мало отзывов (нужно {MIN_REVIEWS_FOR_ANALYSIS}). Откройте вкладку отзывов
-              на маркетплейсе или выберите другой товар.
+              {isPremium ? (
+                <>Мало отзывов — Premium: анализ из сети. Можно нажать «Запустить AI-анализ».</>
+              ) : (
+                <>
+                  На странице мало отзывов (нужно {MIN_REVIEWS_FOR_ANALYSIS}). Откройте вкладку отзывов
+                  на маркетплейсе или выберите другой товар.
+                </>
+              )}
             </div>
           )}
         </>

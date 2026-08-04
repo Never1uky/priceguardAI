@@ -117,7 +117,13 @@ async function openNotificationUrl(notificationId: string): Promise<void> {
   await chrome.notifications.clear(notificationId);
 }
 
+let notificationHandlersSetupDone = false;
+
+/** Идемпотентно: SW может вызвать setup несколько раз (onInstalled/onStartup). */
 export function setupNotificationHandlers(): void {
+  if (notificationHandlersSetupDone) return;
+  notificationHandlersSetupDone = true;
+
   chrome.notifications.onClicked.addListener((notificationId) => {
     void openNotificationUrl(notificationId);
   });

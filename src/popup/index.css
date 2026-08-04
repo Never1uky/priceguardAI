@@ -4,24 +4,24 @@
 
 @layer base {
   :root {
-    /* Neutrals — Linear / Stripe calm light */
-    --background: 220 20% 98%;
-    --foreground: 222 25% 10%;
+    /* Neutrals — light teal brand */
+    --background: 170 20% 98%;
+    --foreground: 180 25% 10%;
     --card: 0 0% 100%;
-    --card-foreground: 222 25% 10%;
-    --primary: 221 83% 53%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 220 16% 94%;
-    --secondary-foreground: 222 20% 18%;
-    --muted: 220 16% 94%;
-    --muted-foreground: 220 10% 46%;
-    --accent: 220 16% 94%;
-    --accent-foreground: 222 20% 18%;
+    --card-foreground: 180 25% 10%;
+    --primary: 174 60% 36%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 170 16% 94%;
+    --secondary-foreground: 180 20% 18%;
+    --muted: 170 14% 94%;
+    --muted-foreground: 180 10% 36%;
+    --accent: 174 40% 94%;
+    --accent-foreground: 174 55% 28%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 14% 90%;
-    --input: 220 14% 90%;
-    --ring: 221 83% 53%;
+    --border: 170 14% 88%;
+    --input: 170 14% 88%;
+    --ring: 174 60% 36%;
 
     /* Brand accents (use sparingly) */
     --pg-purple: 262 70% 55%;
@@ -30,13 +30,13 @@
     --pg-orange: 32 95% 48%;
     --pg-red: 0 72% 51%;
     --pg-blue: 217 91% 55%;
-    --pg-grey: 220 10% 46%;
+    --pg-grey: 180 10% 40%;
 
-    /* Surfaces */
-    --pg-hero: 222 30% 12%;
-    --pg-hero-foreground: 210 40% 98%;
+    /* Surfaces — light header */
+    --pg-hero: 0 0% 100%;
+    --pg-hero-foreground: 180 25% 10%;
     --pg-glass: 0 0% 100% / 0.72;
-    --pg-shadow: 222 30% 10% / 0.06;
+    --pg-shadow: 174 30% 20% / 0.08;
 
     --radius: 16px;
     --radius-sm: 12px;
@@ -44,23 +44,23 @@
   }
 
   .dark {
-    --background: 222 28% 7%;
-    --foreground: 210 30% 96%;
-    --card: 222 24% 10%;
-    --card-foreground: 210 30% 96%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 8%;
-    --secondary: 222 20% 14%;
-    --secondary-foreground: 210 30% 96%;
-    --muted: 222 20% 14%;
-    --muted-foreground: 215 14% 62%;
-    --accent: 222 20% 16%;
-    --accent-foreground: 210 30% 96%;
+    --background: 180 22% 8%;
+    --foreground: 170 20% 96%;
+    --card: 180 18% 11%;
+    --card-foreground: 170 20% 96%;
+    --primary: 174 55% 45%;
+    --primary-foreground: 180 30% 8%;
+    --secondary: 180 16% 14%;
+    --secondary-foreground: 170 20% 96%;
+    --muted: 180 16% 14%;
+    --muted-foreground: 170 10% 78%;
+    --accent: 174 25% 16%;
+    --accent-foreground: 174 50% 70%;
     --destructive: 0 62% 48%;
     --destructive-foreground: 0 0% 100%;
-    --border: 222 16% 18%;
-    --input: 222 16% 18%;
-    --ring: 217 91% 60%;
+    --border: 180 14% 18%;
+    --input: 180 14% 18%;
+    --ring: 174 55% 45%;
 
     --pg-purple: 262 75% 65%;
     --pg-purple-foreground: 0 0% 100%;
@@ -68,11 +68,11 @@
     --pg-orange: 32 95% 55%;
     --pg-red: 0 70% 55%;
     --pg-blue: 217 91% 65%;
-    --pg-grey: 215 14% 62%;
+    --pg-grey: 170 10% 78%;
 
-    --pg-hero: 222 28% 9%;
-    --pg-hero-foreground: 210 30% 96%;
-    --pg-glass: 222 24% 12% / 0.78;
+    --pg-hero: 180 18% 11%;
+    --pg-hero-foreground: 170 20% 96%;
+    --pg-glass: 180 18% 12% / 0.78;
     --pg-shadow: 0 0% 0% / 0.35;
   }
 }
@@ -113,7 +113,7 @@
   }
 
   .pg-caption {
-    @apply text-[10px] font-normal leading-snug text-muted-foreground;
+    @apply text-[11px] font-normal leading-snug text-muted-foreground;
   }
 
   .pg-section-label {
@@ -134,6 +134,13 @@
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }

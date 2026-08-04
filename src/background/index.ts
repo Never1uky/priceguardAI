@@ -8,30 +8,40 @@ import { setupProductPageNavigation } from '@/background/product-navigation';
 import { resolveProductForTab } from '@/lib/background-product-scrape';
 import { checkComparePriceDrops } from '@/lib/compare-price-alerts';
 import { agentLog, flushAgentLogs } from '@/lib/debug-log';
-import { getCompareProducts, setSelectedCompareId } from '@/lib/comparison-storage';
+import { getCompareProducts, setSelectedCompareId, updateCompareProduct } from '@/lib/comparison-storage';
 import { shouldRunCompare } from '@/lib/compare-cache';
-import { resolveAndAddCompareProduct, linkMarketplaceOffer } from '@/lib/compare-resolve';
+import { resolveAndAddCompareProduct, linkMarketplaceOffer, ManualLinkNeedsConfirmError } from '@/lib/compare-resolve';
 import { refreshCompareProduct } from '@/lib/compare-service';
-import { runCompareJob, isCompareRunning } from '@/lib/compare-jobs';
+import { runCompareJob, isCompareRunning, clearCompareRunning } from '@/lib/compare-jobs';
+import { withSendResponse, withSendResponseOk } from '@/lib/with-send-response';
+import {
+  researchClearAutoOnly,
+  clearBoundOffer,
+  isResearchPreservedSlot,
+  findPendingChoiceForProductUrl,
+} from '@/lib/candidate-pool';
 import { selectCompareSearchCandidate } from '@/lib/compare-candidate-select';
 import { fetchOfferFromUrl } from '@/lib/offer-fetch';
 import type { ComparisonMarketplace } from '@/types/comparison';
 import { runFullProductAnalysis } from '@/lib/ai/full-analysis';
 import { collectReviewsForProduct } from '@/lib/reviews/collect-reviews';
-import { withReviewCollectGuard } from '@/lib/reviews/collect-guard';
-import { rejectAndResearchMarketplace } from '@/lib/compare-reject';
-import {
-  resolveReviewTarget,
-  resolveReviewTargets,
-  classifyReviewInput,
-} from '@/lib/reviews/resolve-target';
+import { withSharedReviewCollect } from '@/lib/reviews/raw-review-cache';
+import { rejectAndResearchMarketplace, rejectCompareCandidate } from '@/lib/compare-reject';
 import { loadReviewProductFromInput } from '@/lib/reviews/load-review-product';
 import {
   getCachedFullAnalysis,
   saveCachedFullAnalysis,
-  shouldReturnCachedFullAnalysis,
+  evaluateLocalFullAnalysisCache,
 } from '@/lib/full-analysis-cache';
-import { computeCardFingerprint, cardFingerprintsMatch } from '@/lib/card-fingerprint';
+import { computeCardFingerprint } from '@/lib/card-fingerprint';
+import { lookupCrossMarketplaceAiCache } from '@/lib/ai/cache-cross-mp';
+import { AI_CACHE_CONFIG, type AiCacheReason } from '@/lib/ai/cache-config';
+import {
+  computeAiCacheConfidence,
+  decideAiCacheReuse,
+  featuresFromTitle,
+  refineCacheReasonForSource,
+} from '@/lib/ai/cache-confidence';
 import {
   analysisSingleflightKey,
   withAnalysisSingleflight,
@@ -43,6 +53,10 @@ import { userFacingError } from '@/lib/fetch-retry';
 import { offersFromCompareProduct } from '@/lib/compare-offers';
 import type { ReviewFilter } from '@/types/review-analysis';
 import { dispatchPriceDropAlert, dispatchTargetPriceAlert } from '@/lib/price-alert-dispatch';
+import { assertScrapedPriceIdentity } from '@/lib/price-identity';
+import { isHiddenBrowserTab } from '@/lib/hidden-browser';
+import { ensureSessionId } from '@/lib/telemetry/context';
+import { flushRemoteTelemetry } from '@/lib/telemetry/flush';
 import { setupNotificationHandlers } from '@/lib/notifications';
 import { getAuthSession } from '@/lib/supabase/auth';
 import { canUseCloudFeatures } from '@/lib/supabase/auth-guard';
@@ -54,7 +68,6 @@ import {
   getPriceHistory,
   removeTrackedProduct,
   setTargetPrice,
-  trackProduct,
   updateTrackedProductPrice,
   isTargetPriceReached,
   syncTrackedProductsWithCloud,
@@ -63,7 +76,7 @@ import type { CompareProduct } from '@/types/comparison';
 import type { FullProductAnalysis } from '@/types/full-analysis';
 import type { Product, TrackedProduct } from '@/types/product';
 import type { Marketplace } from '@/types/product';
-import { MIN_REVIEWS_FOR_ANALYSIS } from '@/types/review-analysis';
+import { minReviewsForFullAnalysis, MIN_REVIEWS_FOR_ANALYSIS } from '@/types/review-analysis';
 import { detectComparisonMarketplace } from '@/utils/comparison-url';
 import { detectMarketplace, extractArticle } from '@/utils/marketplace';
 import { toCanonicalProductUrl } from '@/utils/product-url';
@@ -80,15 +93,41 @@ import {
 import { analyzeViaProductIntel } from '@/lib/supabase/product-intel';
 import {
   canRunFullAnalysis,
-  canTrackMoreProducts,
   recordFullAnalysis,
+  isPremium,
 } from '@/lib/subscription';
+import {
+  deriveFullAnalysisQuotaIntent,
+  shouldConsumeFullAnalysisQuota,
+} from '@/lib/ai/full-analysis-quota-policy';
+import { setFullAnalysisJobSnapshot } from '@/lib/ai/full-analysis-job';
+import '@/lib/supabase/price-cache';
+import '@/lib/supabase/compare-sync';
+import {
+  flushPendingSync,
+  schedulePendingSyncAlarm,
+  PENDING_SYNC_ALARM,
+} from '@/lib/pending-sync';
 
 const ALARM_NAME = 'priceguard-price-check';
 const STARTUP_CHECK_KEY = 'priceguard_last_startup_check';
 /** Как Palert: проверка каждые 6 часов */
 const CHECK_INTERVAL_MINUTES = 6 * 60;
 const STARTUP_CHECK_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+
+void schedulePendingSyncAlarm();
+
+/** Soft safety net: log unhandled rejections without PII (does not replace sendResponse). */
+self.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason;
+  const msg =
+    reason instanceof Error
+      ? reason.message.slice(0, 200)
+      : typeof reason === 'string'
+        ? reason.slice(0, 200)
+        : 'non_error_rejection';
+  console.warn('[PriceGuard] unhandledrejection', msg);
+});
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -134,10 +173,23 @@ async function checkTrackedProduct(product: TrackedProduct): Promise<void> {
       return;
     }
 
+    const offerUrl = offer.url || pageUrl;
+    const identity = assertScrapedPriceIdentity(product, {
+      marketplace: product.marketplace,
+      article: extractArticle(offerUrl, product.marketplace) || product.article,
+      url: offerUrl,
+      id: product.id,
+      title: offer.title || product.title,
+    });
+    if (!identity.ok) {
+      return;
+    }
+
     const updated: Product = {
       ...product,
       url: pageUrl,
-      title: offer.title || product.title,
+      title: product.title,
+      article: identity.article || product.article,
       price: offer.price,
       oldPrice: offer.oldPrice ?? product.oldPrice,
       imageUrl: offer.imageUrl || product.imageUrl,
@@ -148,7 +200,7 @@ async function checkTrackedProduct(product: TrackedProduct): Promise<void> {
     const priceChange = await updateTrackedProductPrice(updated);
     const canNotify = await areNotificationsEnabledForProduct(product.id);
 
-    if (priceChange && canNotify) {
+    if (priceChange?.dropped && canNotify) {
       await dispatchPriceDropAlert(updated, priceChange.previousPrice);
     }
 
@@ -199,12 +251,37 @@ export async function checkAllTrackedPrices(options?: { force?: boolean }): Prom
 }
 
 async function checkAllComparePrices(options?: { force?: boolean }): Promise<void> {
-  const products = await getCompareProducts();
+  let products = await getCompareProducts();
   if (!products.length) return;
+
+  // Server cron is primary; client only refreshes stale bound cards (no SERP / Scrappey).
+  const skipUnlocker = !options?.force;
+  if (!options?.force && (await isServerPriceMonitoringActive())) {
+    products = products.filter((p) => {
+      const at = p.comparedAt;
+      if (!at || !Number.isFinite(at) || at <= 0) return true;
+      return Date.now() - at >= SERVER_STALE_MS;
+    });
+    if (!products.length) {
+      console.info(
+        '[PriceGuard AI] Серверный мониторинг активен — compare цены свежие, клиентский backup не нужен',
+      );
+      return;
+    }
+    console.info(
+      `[PriceGuard AI] Серверный мониторинг: compare backup для ${products.length} устаревших`,
+    );
+  }
 
   for (const product of products) {
     try {
-      const result = await refreshCompareProduct(product, options?.force ?? false);
+      // Don't race a live research/refresh job — it may have just written needs_choice
+      if (await isCompareRunning(product.id)) continue;
+
+      const result = await refreshCompareProduct(product, options?.force ?? false, {
+        mode: 'refresh',
+        skipUnlocker,
+      });
       await checkComparePriceDrops(product, result.offers);
     } catch (error) {
       console.warn('[PriceGuard] compare price check:', error);
@@ -213,9 +290,46 @@ async function checkAllComparePrices(options?: { force?: boolean }): Promise<voi
   }
 }
 
+/** Singleflight: alarm + startup + CHECK_PRICES_NOW не гоняют параллельные полные прогоны. */
+let periodicCheckInFlight: Promise<void> | null = null;
+let compareRefreshInFlight: Promise<void> | null = null;
+/** Если во время прогона пришёл force — после текущего прогона один follow-up. */
+let periodicCheckForceQueued = false;
+
 async function runPeriodicPriceChecks(options?: { force?: boolean }): Promise<void> {
-  await checkAllTrackedPrices(options);
-  await checkAllComparePrices();
+  if (periodicCheckInFlight) {
+    if (options?.force) periodicCheckForceQueued = true;
+    await periodicCheckInFlight;
+    if (periodicCheckInFlight) await periodicCheckInFlight;
+    return;
+  }
+
+  const runOnce = async (force?: boolean): Promise<void> => {
+    await checkAllTrackedPrices({ force });
+    await checkAllComparePrices({ force });
+  };
+
+  periodicCheckInFlight = (async () => {
+    await runOnce(options?.force);
+    while (periodicCheckForceQueued) {
+      periodicCheckForceQueued = false;
+      await runOnce(true);
+    }
+  })().finally(() => {
+    periodicCheckInFlight = null;
+  });
+  await periodicCheckInFlight;
+}
+
+async function runCompareRefreshAll(options?: { force?: boolean }): Promise<void> {
+  if (compareRefreshInFlight) {
+    await compareRefreshInFlight;
+    return;
+  }
+  compareRefreshInFlight = checkAllComparePrices(options).finally(() => {
+    compareRefreshInFlight = null;
+  });
+  await compareRefreshInFlight;
 }
 
 async function shouldRunStartupCheck(): Promise<boolean> {
@@ -263,28 +377,50 @@ async function syncCloudIfAuthed(): Promise<void> {
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.info('[PriceGuard AI] Extension installed');
+const UPDATE_SYNC_HINT_KEY = 'priceguard_update_sync_hint';
+
+chrome.runtime.onInstalled.addListener((details) => {
+  console.info('[PriceGuard] SW ready', chrome.runtime.getManifest().version);
+  console.info('[PriceGuard AI] Extension installed', details.reason);
+  void ensureSessionId();
   setupNotificationHandlers();
   setupProductPageNavigation();
   schedulePriceChecks();
   void runStartupPriceCheck();
   void syncCloudIfAuthed();
+  void flushRemoteTelemetry();
+  if (details.reason === 'update') {
+    void chrome.storage.local.set({ [UPDATE_SYNC_HINT_KEY]: true });
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  console.info('[PriceGuard] SW ready', chrome.runtime.getManifest().version);
+  void ensureSessionId();
   setupNotificationHandlers();
   setupProductPageNavigation();
   schedulePriceChecks();
   void runStartupPriceCheck();
   void syncCloudIfAuthed();
+  void flushRemoteTelemetry();
 });
+
+// Cold start / reload (onInstalled may not fire)
+console.info('[PriceGuard] SW ready', chrome.runtime.getManifest().version);
+void ensureSessionId();
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
     void runPeriodicPriceChecks();
   }
+  if (alarm.name === PENDING_SYNC_ALARM) {
+    void flushPendingSync();
+    void flushRemoteTelemetry();
+  }
 });
+
+void flushPendingSync();
+void flushRemoteTelemetry();
 
 void getAuthSession().then((session) => {
   if (session) {
@@ -294,7 +430,7 @@ void getAuthSession().then((session) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'GET_ACTIVE_TAB_PRODUCT') {
-    void (async () => {
+    return withSendResponse(sendResponse, async (respond) => {
       const tab = await findActiveProductTab();
       agentLog(
         'background/index.ts:GET_ACTIVE_TAB_PRODUCT',
@@ -303,7 +439,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         'B',
       );
 
-      const result = tab ? await resolveProductForTab(tab) : { ok: false, error: 'Активная вкладка не найдена' };
+      const result = tab
+        ? await resolveProductForTab(tab)
+        : { ok: false, error: 'Активная вкладка не найдена' };
 
       agentLog(
         'background/index.ts:GET_ACTIVE_TAB_PRODUCT:result',
@@ -317,18 +455,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         'B',
       );
 
-      sendResponse(result);
-    })();
-
-    return true;
+      respond(result);
+    });
   }
 
   if (message.type === 'DUMP_AGENT_LOGS') {
-    void flushAgentLogs().then((count) => sendResponse({ ok: true, count }));
+    return withSendResponseOk(sendResponse, async () => {
+      const count = await flushAgentLogs();
+      return { count };
+    });
+  }
+
+  if (message.type === 'IS_HIDDEN_BROWSER_CONTEXT') {
+    const tabId = _sender.tab?.id;
+    const windowId = _sender.tab?.windowId;
+    const hidden = isHiddenBrowserTab(tabId, windowId);
+    sendResponse({ ok: true, hidden });
     return true;
   }
 
   if (message.type === 'PRODUCT_SCRAPED') {
+    const tabId = _sender.tab?.id;
+    const windowId = _sender.tab?.windowId;
+    if (isHiddenBrowserTab(tabId, windowId)) {
+      sendResponse({ ok: true, ignored: true });
+      return true;
+    }
     const product = message.payload as Product;
     chrome.action.setBadgeText({ text: '●' });
     chrome.action.setBadgeBackgroundColor({ color: '#16a34a' });
@@ -338,6 +490,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'PRICE_DROP') {
+    const tabId = _sender.tab?.id;
+    const windowId = _sender.tab?.windowId;
+    if (isHiddenBrowserTab(tabId, windowId)) {
+      sendResponse({ ok: true, ignored: true });
+      return true;
+    }
     const { product, previousPrice } = message.payload as {
       product: Product;
       previousPrice: number;
@@ -352,50 +510,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'CHECK_PRICES_NOW') {
-    void runPeriodicPriceChecks({ force: true }).then(() => sendResponse({ ok: true }));
-    return true;
+    return withSendResponseOk(sendResponse, async () => {
+      await runPeriodicPriceChecks({ force: true });
+    });
   }
 
   if (message.type === 'REFRESH_ALL_COMPARE_PRICES') {
-    void checkAllComparePrices({ force: true }).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (message.type === 'STARTUP_PRICE_CHECK') {
-    void runStartupPriceCheck().then(() => sendResponse({ ok: true }));
-    return true;
+    return withSendResponseOk(sendResponse, async () => {
+      await runCompareRefreshAll({ force: true });
+    });
   }
 
   if (message.type === 'UNTRACK_PRODUCT') {
     const { productId } = message.payload as { productId: string };
-    void removeTrackedProduct(productId).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (message.type === 'TRACK_FROM_PANEL') {
-    const { product } = message.payload as { product: Product };
-    void (async () => {
-      const tracked = await getTrackedProducts();
-      const alreadyTracked = tracked.some((p) => p.id === product.id);
-      if (!alreadyTracked) {
-        const { allowed, limit } = await canTrackMoreProducts(tracked.length);
-        if (!allowed) {
-          sendResponse({ ok: false, error: `Лимит бесплатной версии: ${limit} товаров` });
-          return;
-        }
-      }
-      await trackProduct({ ...product, url: toCanonicalProductUrl(product.url, product.marketplace) });
-      if (product.authenticity) {
-        void logAuthenticityCheck({
-          marketplace: product.marketplace,
-          article: product.article,
-          status: product.authenticity.status,
-          source: 'track',
-        });
-      }
-      sendResponse({ ok: true });
-    })();
-    return true;
+    return withSendResponseOk(sendResponse, async () => {
+      await removeTrackedProduct(productId);
+    });
   }
 
   if (message.type === 'SET_TARGET_PRICE') {
@@ -403,25 +533,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       productId: string;
       targetPrice: number;
     };
-    void setTargetPrice(productId, targetPrice).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (message.type === 'GET_PANEL_STATE') {
-    const { productId } = message.payload as { productId: string };
-    void (async () => {
-      const [history, tracked] = await Promise.all([
-        getPriceHistory(productId),
-        getTrackedProduct(productId),
-      ]);
-      sendResponse({
-        ok: true,
-        history,
-        isTracked: Boolean(tracked),
-        targetPrice: tracked?.targetPrice,
-      });
-    })();
-    return true;
+    return withSendResponseOk(sendResponse, async () => {
+      await setTargetPrice(productId, targetPrice);
+    });
   }
 
   if (message.type === 'ENSURE_COMPARE_PRODUCT') {
@@ -452,6 +566,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       let savedProductId: string | null = null;
 
       try {
+        // Candidate card opened while picker is open → select that candidate on the
+        // existing row. Do NOT resolveAndAdd (new shell) or researchClearAutoOnly
+        // (would wipe needs_choice / searchCandidates).
+        const pendingChoice = findPendingChoiceForProductUrl(await getCompareProducts(), url);
+        if (pendingChoice) {
+          try {
+            const selected = await selectCompareSearchCandidate(
+              pendingChoice.product.id,
+              pendingChoice.marketplace,
+              url,
+            );
+            savedProductId = selected.id;
+            await setSelectedCompareId(selected.id);
+            safeRespond({
+              ok: true,
+              productId: selected.id,
+              started: false,
+              fromCache: true,
+              selectedCandidate: true,
+            });
+            return;
+          } catch (selectErr) {
+            console.warn('[PriceGuard] ENSURE pending-choice select failed:', selectErr);
+            // Fall through to normal resolve; preserve picker on research clear below
+          }
+        }
+
         const product = await resolveAndAddCompareProduct(url, article, {
           title,
           price,
@@ -481,8 +622,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         });
 
         if (willCompare) {
-          // research = полный SERP на других площадках (refresh без поиска даёт мгновенный notFound)
-          void runCompareJob(product, Boolean(forceCompare), 'research');
+          await clearCompareRunning();
+          // Soft ENSURE / duplicate merge: keep open needs_choice pickers.
+          // Full wipe only via RESEARCH_COMPARE_PRODUCT / RESEARCH_SINGLE_MARKETPLACE.
+          const cleared = researchClearAutoOnly(product, { preservePendingChoice: true });
+          await updateCompareProduct(cleared);
+          void runCompareJob(cleared, true, 'research');
         }
       } catch (error) {
         if (savedProductId) {
@@ -491,35 +636,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
         safeRespond({
           ok: false,
-          error: userFacingError(error, 'Не удалось добавить в сравнение'),
-        });
-      }
-    })();
-
-    return true;
-  }
-
-  if (message.type === 'ADD_COMPARE_BY_URL') {
-    const { url, article, title, price, oldPrice } = message.payload as {
-      url: string;
-      article?: string;
-      title?: string;
-      price?: number;
-      oldPrice?: number;
-    };
-
-    void (async () => {
-      try {
-        const product = await resolveAndAddCompareProduct(url, article, {
-          title,
-          price,
-          oldPrice,
-        });
-        sendResponse({ ok: true, product });
-      } catch (error) {
-        sendResponse({
-          ok: false,
-          error: error instanceof Error ? error.message : 'Не удалось добавить товар',
+          error: userFacingError(error, 'Не удалось добавить в «Мои товары»'),
         });
       }
     })();
@@ -528,17 +645,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'LINK_MARKETPLACE_OFFER') {
-    const { productId, marketplace, url } = message.payload as {
+    const { productId, marketplace, url, confirmed } = message.payload as {
       productId: string;
       marketplace: import('@/types/comparison').ComparisonMarketplace;
       url: string;
+      confirmed?: boolean;
     };
 
     void (async () => {
       try {
-        const product = await linkMarketplaceOffer(productId, marketplace, url);
+        const product = await linkMarketplaceOffer(productId, marketplace, url, { confirmed });
         sendResponse({ ok: true, product });
       } catch (error) {
+        if (error instanceof ManualLinkNeedsConfirmError) {
+          sendResponse({
+            ok: false,
+            needsConfirm: true,
+            error: error.message,
+            referenceTitle: error.referenceTitle,
+            fetchedTitle: error.fetchedTitle,
+            confidence: error.confidence,
+          });
+          return;
+        }
         sendResponse({
           ok: false,
           error: error instanceof Error ? error.message : 'Не удалось привязать ссылку',
@@ -550,15 +679,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'SELECT_COMPARE_CANDIDATE') {
-    const { productId, marketplace, url } = message.payload as {
+    const { productId, marketplace, url, title, price, rating } = message.payload as {
       productId: string;
       marketplace: import('@/types/comparison').ComparisonMarketplace;
       url: string;
+      title?: string;
+      price?: number | null;
+      rating?: number | null;
     };
 
     void (async () => {
       try {
-        const product = await selectCompareSearchCandidate(productId, marketplace, url);
+        const product = await selectCompareSearchCandidate(productId, marketplace, url, {
+          title,
+          price,
+          rating,
+        });
         sendResponse({ ok: true, product });
       } catch (error) {
         sendResponse({
@@ -576,7 +712,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       | CompareProduct
       | { product: CompareProduct; force?: boolean; mode?: 'refresh' | 'research' };
 
-    void (async () => {
+    return withSendResponse(sendResponse, async (respond) => {
       const product =
         'sourceUrl' in payload && payload.sourceUrl
           ? (payload as CompareProduct)
@@ -595,20 +731,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           : 'refresh';
 
       if (!product?.sourceUrl) {
-        sendResponse({ ok: false, error: 'Товар не выбран' });
+        respond({ ok: false, error: 'Товар не выбран' });
         return;
       }
 
       if (!force && (await isCompareRunning(product.id))) {
-        sendResponse({ ok: true, started: false, alreadyRunning: true, productId: product.id });
+        respond({ ok: true, started: false, alreadyRunning: true, productId: product.id });
         return;
       }
 
       void runCompareJob(product, force, mode);
-      sendResponse({ ok: true, started: true, productId: product.id });
-    })();
-
-    return true;
+      respond({ ok: true, started: true, productId: product.id });
+    });
   }
 
   if (message.type === 'RESEARCH_COMPARE_PRODUCT') {
@@ -622,13 +756,65 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ ok: false, error: 'Товар не найден' });
           return;
         }
-        const { clearAllBoundTargets } = await import('@/lib/candidate-pool');
-        const { updateCompareProduct } = await import('@/lib/comparison-storage');
-        const cleared = clearAllBoundTargets(product);
-        await updateCompareProduct(cleared);
-        // force=true снимает чужой/свой lock и перезапускает полный SERP
-        void runCompareJob(cleared, true, 'research');
+        // Ack immediately — MV3 closes the message channel if we await storage first
         sendResponse({ ok: true, started: true, productId: product.id });
+
+        void (async () => {
+          try {
+            await clearCompareRunning();
+            const cleared = researchClearAutoOnly(product);
+            await updateCompareProduct(cleared);
+            void runCompareJob(cleared, true, 'research');
+          } catch (error) {
+            console.warn('[PriceGuard] RESEARCH_COMPARE_PRODUCT job start:', error);
+          }
+        })();
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: formatApiErrorForUser(error, 'Не удалось запустить поиск'),
+        });
+      }
+    })();
+
+    return true;
+  }
+
+  if (message.type === 'RESEARCH_SINGLE_MARKETPLACE') {
+    const { productId, marketplace } = message.payload as {
+      productId: string;
+      marketplace: import('@/types/comparison').ComparisonMarketplace;
+    };
+
+    void (async () => {
+      try {
+        const products = await getCompareProducts();
+        const product = products.find((p) => p.id === productId);
+        if (!product) {
+          sendResponse({ ok: false, error: 'Товар не найден' });
+          return;
+        }
+        if (!marketplace || marketplace === product.sourceMarketplace) {
+          sendResponse({ ok: false, error: 'Некорректная площадка' });
+          return;
+        }
+
+        sendResponse({ ok: true, started: true, productId: product.id, marketplace });
+
+        void (async () => {
+          try {
+            await clearCompareRunning();
+            const cleared = isResearchPreservedSlot(product, marketplace)
+              ? product
+              : clearBoundOffer(product, marketplace, { clearPool: true });
+            await updateCompareProduct(cleared);
+            void runCompareJob(cleared, true, 'research', {
+              onlyMarketplaces: [marketplace],
+            });
+          } catch (error) {
+            console.warn('[PriceGuard] RESEARCH_SINGLE_MARKETPLACE job start:', error);
+          }
+        })();
       } catch (error) {
         sendResponse({
           ok: false,
@@ -666,36 +852,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'RESOLVE_REVIEW_TARGET') {
-    const { input, marketplace } = message.payload as {
-      input: string;
-      marketplace?: Marketplace;
+  if (message.type === 'REJECT_COMPARE_CANDIDATE') {
+    const { productId, marketplace, rejectedUrl } = message.payload as {
+      productId: string;
+      marketplace: import('@/types/comparison').ComparisonMarketplace;
+      rejectedUrl: string;
     };
 
     void (async () => {
       try {
-        const kind = classifyReviewInput(input.trim());
-        if (kind === 'model') {
-          sendResponse({
-            ok: false,
-            error:
-              'Поиск по модели отключён. Вставьте ссылку на карточку или артикул Wildberries.',
-          });
-          return;
-        }
-        if (kind === 'article') {
-          const targets = await resolveReviewTargets(input);
-          if (targets.length > 0) {
-            sendResponse({ ok: true, targets, target: targets[0] });
-            return;
-          }
-        }
-        const target = await resolveReviewTarget(input, marketplace);
-        sendResponse({ ok: true, target, targets: [target] });
+        const { product, offer } = await rejectCompareCandidate(
+          productId,
+          marketplace,
+          rejectedUrl,
+        );
+        sendResponse({ ok: true, product, offer });
       } catch (error) {
         sendResponse({
           ok: false,
-          error: error instanceof Error ? error.message : 'Не удалось найти товар',
+          error: error instanceof Error ? error.message : 'Не удалось отклонить вариант',
         });
       }
     })();
@@ -734,21 +909,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     void (async () => {
       try {
-        const collected = await withReviewCollectGuard(
-          marketplace,
-          productUrl,
-          'preview',
-          () =>
-            collectReviewsForProduct({
-              productUrl,
-              marketplace,
-              article,
-              filter: filter ?? 'all',
-              preferActiveTab: true,
-              preferCurrentPage: true,
-              previewOnly: true,
-              allowNavigation: false,
-            }),
+        const collected = await withSharedReviewCollect(marketplace, productUrl, () =>
+          collectReviewsForProduct({
+            productUrl,
+            marketplace,
+            article,
+            filter: filter ?? 'all',
+            preferActiveTab: true,
+            preferCurrentPage: true,
+            previewOnly: true,
+            allowNavigation: false,
+            skipWhileCompareRunning: true,
+          }),
         );
 
         sendResponse({
@@ -756,6 +928,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           previewItems: collected.previewItems,
           totalFound: collected.totalFound,
           reviewCount: collected.reviews.length,
+          reviewRatings: collected.reviewRatings ?? [],
           insufficient: collected.insufficient,
           source: collected.source,
         });
@@ -767,15 +940,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
     })();
 
-    return true;
-  }
-
-  if (message.type === 'ANALYZE_REVIEWS') {
-    sendResponse({
-      ok: false,
-      error:
-        'Локальный анализ отзывов отключён. Используйте «Полный AI-анализ» на вкладке «Отзывы».',
-    });
     return true;
   }
 
@@ -791,6 +955,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       forceRefresh,
       softRefresh,
       forceHardRefresh,
+      webResearch,
     } = message.payload as {
       productTitle: string;
       productPrice: number;
@@ -802,12 +967,69 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       forceRefresh?: boolean;
       /** Soft: price overlay / AI без сброса Sonar */
       softRefresh?: boolean;
-      /** Жёсткий refresh: сбрасывает и Sonar web-research */
+      /** Жёсткий refresh: сбрасывает и Sonar web-research (только при deep) */
       forceHardRefresh?: boolean;
+      /** Deep pipeline Sonar→GPT (Premium UI «Глубокий разбор») */
+      webResearch?: boolean;
     };
 
     void (async () => {
       let locked = false;
+      const intent = deriveFullAnalysisQuotaIntent({
+        softRefresh,
+        forceRefresh,
+        forceHardRefresh,
+      });
+
+      const applyQuotaAndJob = async (
+        flightKey: string,
+        productId: string,
+        productUrl: string,
+        raw: {
+          ok: boolean;
+          analysis?: FullProductAnalysis;
+          fromCache?: boolean;
+          analysisSource?: string;
+          cacheNote?: string;
+          cacheReason?: AiCacheReason | string;
+          cacheConfidence?: number;
+          error?: string;
+        },
+      ) => {
+        const hasAnalysis = Boolean(raw.ok && raw.analysis);
+        let quotaConsumed = false;
+        if (
+          shouldConsumeFullAnalysisQuota({
+            intent,
+            ok: Boolean(raw.ok),
+            hasAnalysis,
+          })
+        ) {
+          await recordFullAnalysis();
+          quotaConsumed = true;
+        }
+
+        await setFullAnalysisJobSnapshot({
+          flightKey,
+          productId,
+          productUrl,
+          intent,
+          status: raw.ok && hasAnalysis ? 'done' : 'error',
+          startedAt: Date.now(),
+          finishedAt: Date.now(),
+          analysis: raw.analysis,
+          fromCache: raw.fromCache,
+          quotaConsumed,
+          cacheNote: raw.cacheNote ?? null,
+          cacheReason: raw.cacheReason ?? null,
+          cacheConfidence: raw.cacheConfidence ?? null,
+          analysisSource: raw.analysisSource,
+          error: raw.error,
+        });
+
+        return { ...raw, quotaConsumed };
+      };
+
       try {
         const mp = (marketplace as Marketplace | undefined) ?? detectMarketplace(productUrl);
         const canonicalUrl = toCanonicalProductUrl(productUrl, mp ?? undefined);
@@ -825,10 +1047,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           url: canonicalUrl,
         });
 
+        await setFullAnalysisJobSnapshot({
+          flightKey,
+          productId,
+          productUrl: canonicalUrl,
+          intent,
+          status: 'running',
+          startedAt: Date.now(),
+        });
+
         const result = await withAnalysisSingleflight(flightKey, async () => {
           locked = true;
           await setFullAnalysisBusy(true);
 
+          const inner = await (async () => {
           const cardFp = computeCardFingerprint(productTitle, undefined, resolvedArticle);
           const cacheRef = { url: productUrl, marketplace, article, id: productId };
           const cached = await getCachedFullAnalysis(cacheRef);
@@ -860,72 +1092,154 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           };
 
           const skipStaticCache = Boolean(forceRefresh || forceHardRefresh);
+          const wantDeep = Boolean(webResearch);
+          const currentFeatures = featuresFromTitle(productTitle);
 
-          // Soft refresh: overlay цены без сбора отзывов и без AI, если static кэш есть
-          if (
-            softRefresh &&
-            !skipStaticCache &&
-            cached?.result &&
-            cardFingerprintsMatch(cached.cardFingerprint, cardFp)
-          ) {
-            void pipelineMetrics.aiCacheLocalHit();
-            return {
-              ok: true as const,
-              analysis: withPriceInsightOverlay(cached.result, overlayInput),
-              fromCache: true,
-              analysisSource: 'cache' as const,
-              cacheNote: 'Обновлены цена и сравнение — AI-текст без изменений.',
-            };
+          // Soft refresh: overlay цены без AI
+          if (softRefresh && !skipStaticCache && cached?.result) {
+            const softDec = evaluateLocalFullAnalysisCache({
+              cached,
+              reviews: [],
+              softRefresh: true,
+              currentTitle: productTitle,
+              currentArticle: resolvedArticle,
+              currentPrice: productPrice,
+              sameSku: true,
+            });
+            if (softDec.reuse) {
+              void pipelineMetrics.aiCacheLocalHit();
+              return {
+                ok: true as const,
+                analysis: withPriceInsightOverlay(cached.result, overlayInput),
+                fromCache: true,
+                analysisSource: 'cache' as const,
+                cacheReason: 'SOFT_REFRESH' as AiCacheReason,
+                cacheConfidence: softDec.score,
+                cacheNote: 'Обновлены цена и сравнение — AI-текст без изменений.',
+              };
+            }
           }
 
-          // E11: общий Edge product-intel (cache / server reviews / AI)
-          if (!skipStaticCache) {
+          // SAME_SKU remote lookup (no reviews) — not for deep
+          if (
+            !skipStaticCache &&
+            !wantDeep &&
+            AI_CACHE_CONFIG.allowRemoteLookupWithoutReviews &&
+            mp &&
+            productId
+          ) {
             const viaIntel = await analyzeViaProductIntel({
               url: canonicalUrl,
               marketplace: mp,
               productId,
               productUrl: canonicalUrl,
-              allowGenerate: true,
+              action: 'lookup',
+              allowGenerate: false,
             });
-            if (viaIntel?.analysis && viaIntel.card.analysisStatus === 'ready') {
-              const overlaid = withPriceInsightOverlay(viaIntel.analysis, overlayInput);
-              await saveCachedFullAnalysis(cacheRef, overlaid, [], cardFp);
-              if (viaIntel.card.fromCache) void pipelineMetrics.aiCacheRemoteHit();
-              else void pipelineMetrics.aiCloudRun();
+            if (viaIntel?.analysis) {
+              const decided = decideAiCacheReuse({
+                sameSku: true,
+                confidence: 90,
+                fresh: true,
+                reviewsHashMatch: false,
+              });
+              if (decided.reuse) {
+                const overlaid = withPriceInsightOverlay(viaIntel.analysis, overlayInput);
+                await saveCachedFullAnalysis(cacheRef, overlaid, [], cardFp, productPrice, {
+                  features: currentFeatures,
+                  productTitle,
+                  article: resolvedArticle,
+                });
+                void pipelineMetrics.aiCacheRemoteHit();
+                return {
+                  ok: true as const,
+                  analysis: overlaid,
+                  fromCache: true,
+                  analysisSource: 'remote_cache' as const,
+                  cacheReason: refineCacheReasonForSource('SAME_SKU', 'remote'),
+                  cacheConfidence: decided.score,
+                  cacheNote: 'Из общего AI Cache (тот же SKU).',
+                };
+              }
+            }
+          }
+
+          // CROSS_MARKETPLACE via mapping (lite only; no Sonar)
+          if (!skipStaticCache && !wantDeep && mp && productId) {
+            const cross = await lookupCrossMarketplaceAiCache({
+              marketplace: mp,
+              productId,
+              productTitle,
+              article: resolvedArticle,
+            });
+            if (cross) {
+              const overlaid = withPriceInsightOverlay(cross.analysis, overlayInput);
+              await saveCachedFullAnalysis(cacheRef, overlaid, [], cardFp, productPrice, {
+                features: currentFeatures,
+                productTitle,
+                article: resolvedArticle,
+              });
+              void pipelineMetrics.aiCacheRemoteHit();
               return {
                 ok: true as const,
                 analysis: overlaid,
-                fromCache: viaIntel.card.fromCache,
-                analysisSource: viaIntel.card.fromCache
-                  ? ('remote_cache' as const)
-                  : ('cloud' as const),
-                cacheNote: viaIntel.card.fromCache
-                  ? 'Из общего AI Cache (product-intel).'
-                  : 'Свежий анализ через product-intel.',
+                fromCache: true,
+                analysisSource: 'remote_cache' as const,
+                cacheReason: 'CROSS_MARKETPLACE' as AiCacheReason,
+                cacheConfidence: cross.cacheConfidence,
+                cacheNote: 'Кэш с другой площадки (подтверждённый mapping).',
               };
             }
           }
 
-          const collected = await collectReviewsForProduct({
-            productUrl: canonicalUrl,
-            marketplace: mp,
-            article: resolvedArticle,
-            filter: 'all',
-            preferActiveTab: true,
-            preferCurrentPage: true,
-          });
-          const reviews = collected.reviews;
-          const totalFound = collected.totalFound;
+          const collected = await withSharedReviewCollect(mp, canonicalUrl, () =>
+            collectReviewsForProduct({
+              productUrl: canonicalUrl,
+              marketplace: mp,
+              article: resolvedArticle,
+              filter: 'all',
+              preferActiveTab: true,
+              preferCurrentPage: true,
+            }),
+          );
+          let reviews = collected.reviews;
+          let totalFound = collected.totalFound;
 
-          if (reviews.length < MIN_REVIEWS_FOR_ANALYSIS) {
+          const premium = await isPremium();
+          const minReviews = minReviewsForFullAnalysis(premium);
+
+          // Free: отзывы с карточки могут ещё грузиться — короткий retry перед gate
+          if (!premium && reviews.length < minReviews) {
+            for (let attempt = 0; attempt < 2 && reviews.length < minReviews; attempt++) {
+              await new Promise((r) => setTimeout(r, 700 + attempt * 500));
+              const retry = await collectReviewsForProduct({
+                productUrl: canonicalUrl,
+                marketplace: mp,
+                article: resolvedArticle,
+                filter: 'all',
+                preferActiveTab: true,
+                preferCurrentPage: true,
+                skipWhileCompareRunning: false,
+              });
+              if (retry.reviews.length > reviews.length) {
+                reviews = retry.reviews;
+                totalFound = Math.max(totalFound, retry.totalFound);
+              }
+            }
+          }
+
+          if (reviews.length < minReviews) {
             return {
               ok: false as const,
-              error: `Недостаточно отзывов (${reviews.length}). Откройте карточку товара и повторите.`,
+              error:
+                minReviews === 0
+                  ? `Недостаточно отзывов (${reviews.length}). Откройте карточку товара и повторите.`
+                  : `Недостаточно отзывов (${reviews.length}). Нужно минимум ${MIN_REVIEWS_FOR_ANALYSIS}. Откройте карточку товара и повторите.`,
             };
           }
 
-          // Повторный вызов product-intel с локальными отзывами
-          {
+          // product-intel generate (lite only)
+          if (!wantDeep) {
             const viaIntel = await analyzeViaProductIntel({
               url: canonicalUrl,
               marketplace: mp,
@@ -936,41 +1250,54 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
             if (viaIntel?.analysis && viaIntel.card.analysisStatus === 'ready') {
               const overlaid = withPriceInsightOverlay(viaIntel.analysis, overlayInput);
-              await saveCachedFullAnalysis(cacheRef, overlaid, reviews, cardFp);
+              await saveCachedFullAnalysis(cacheRef, overlaid, reviews, cardFp, productPrice, {
+                features: currentFeatures,
+                productTitle,
+                article: resolvedArticle,
+              });
               return {
                 ok: true as const,
                 analysis: overlaid,
-                fromCache: false,
+                fromCache: viaIntel.card.fromCache,
                 analysisSource: 'cloud' as const,
-                cacheNote: 'Анализ через product-intel (отзывы из расширения).',
+                cacheReason: (viaIntel.card.fromCache
+                  ? refineCacheReasonForSource('SAME_SKU', 'remote')
+                  : 'NEW_ANALYSIS') as AiCacheReason,
+                cacheConfidence: viaIntel.card.fromCache ? 90 : 100,
+                cacheNote: viaIntel.card.fromCache
+                  ? 'Из общего AI Cache (product-intel).'
+                  : 'Анализ через product-intel (отзывы из расширения).',
               };
             }
           }
 
-          // Soft refresh при свежем static (после проверки reviews hash)
-          if (
-            softRefresh &&
-            !skipStaticCache &&
-            shouldReturnCachedFullAnalysis(cached, reviews, false, cardFp)
-          ) {
-            void pipelineMetrics.aiCacheLocalHit();
-            return {
-              ok: true as const,
-              analysis: withPriceInsightOverlay(cached!.result, overlayInput),
-              fromCache: true,
-              analysisSource: 'cache' as const,
-              cacheNote: 'Обновлены цена и сравнение — AI-текст без изменений.',
-            };
-          }
-
-          if (shouldReturnCachedFullAnalysis(cached, reviews, skipStaticCache, cardFp)) {
-            void pipelineMetrics.aiCacheLocalHit();
-            return {
-              ok: true as const,
-              analysis: withPriceInsightOverlay(cached!.result, overlayInput),
-              fromCache: true,
-              analysisSource: 'cache' as const,
-            };
+          // Local confidence gate
+          if (!skipStaticCache && cached?.result) {
+            const localDec = evaluateLocalFullAnalysisCache({
+              cached,
+              reviews,
+              softRefresh: Boolean(softRefresh),
+              forceRefresh: false,
+              currentTitle: productTitle,
+              currentArticle: resolvedArticle,
+              currentPrice: productPrice,
+              sameSku: true,
+            });
+            if (localDec.reuse) {
+              void pipelineMetrics.aiCacheLocalHit();
+              return {
+                ok: true as const,
+                analysis: withPriceInsightOverlay(cached.result, overlayInput),
+                fromCache: true,
+                analysisSource: 'cache' as const,
+                cacheReason: localDec.cacheReason,
+                cacheConfidence: localDec.score,
+                cacheNote:
+                  localDec.cacheReason === 'SOFT_REFRESH'
+                    ? 'Обновлены цена и сравнение — AI-текст без изменений.'
+                    : undefined,
+              };
+            }
           }
 
           const fullAccess = await canRunFullAnalysis();
@@ -979,29 +1306,55 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           let remoteCachedAnalysis: FullProductAnalysis | null = null;
-          if (mp && productId && !skipStaticCache) {
+          if (mp && productId && !skipStaticCache && !wantDeep) {
             const remote = await getRemoteFullProductCache(mp, productId);
-            if (
-              remote?.fresh &&
-              remote.aiAnalysis &&
-              remoteCacheMatchesReviews(remote.rawReviews, reviews)
-            ) {
-              remoteCachedAnalysis = remote.aiAnalysis;
-              const overlaid = withPriceInsightOverlay(remote.aiAnalysis, overlayInput);
-              await saveCachedFullAnalysis(cacheRef, overlaid, reviews, cardFp);
-              void pipelineMetrics.aiCacheRemoteHit();
-              return {
-                ok: true as const,
-                analysis: overlaid,
-                fromCache: true,
-                analysisSource: 'remote_cache' as const,
-              };
+            if (remote?.fresh && remote.aiAnalysis && remoteCacheMatchesReviews(remote.rawReviews, reviews)) {
+              const cachedFeat = featuresFromTitle(remote.productTitle || productTitle);
+              const conf = computeAiCacheConfidence(currentFeatures, cachedFeat, {
+                article: resolvedArticle,
+                cachedArticle: productId,
+              });
+              const decided = decideAiCacheReuse({
+                sameSku: true,
+                reviewsHashMatch: true,
+                confidence: conf.score,
+                hardReject: conf.hardReject,
+                fresh: true,
+              });
+              if (decided.reuse) {
+                remoteCachedAnalysis = remote.aiAnalysis;
+                const overlaid = withPriceInsightOverlay(remote.aiAnalysis, overlayInput);
+                await saveCachedFullAnalysis(cacheRef, overlaid, reviews, cardFp, productPrice, {
+                  features: currentFeatures,
+                  productTitle,
+                  article: resolvedArticle,
+                });
+                void pipelineMetrics.aiCacheRemoteHit();
+                return {
+                  ok: true as const,
+                  analysis: overlaid,
+                  fromCache: true,
+                  analysisSource: 'remote_cache' as const,
+                  cacheReason: refineCacheReasonForSource('REVIEWS_MATCH', 'remote'),
+                  cacheConfidence: decided.score,
+                };
+              }
             }
           }
 
           void pipelineMetrics.aiCacheMiss();
 
-          // Soft refresh: не сбрасываем Sonar; hard — только по forceHardRefresh
+          if (wantDeep) {
+            const premiumDeep = await isPremium();
+            if (!premiumDeep) {
+              return {
+                ok: false as const,
+                error: 'Глубокий разбор (AI + веб) доступен в Premium',
+              };
+            }
+          }
+
+          // Soft refresh: не сбрасываем Sonar; hard + deep — forceRefreshWeb
           const runResult = await runFullProductAnalysis(
             {
               productTitle,
@@ -1010,13 +1363,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               marketplace,
               article,
               productId,
-              forceRefreshWeb: Boolean(forceHardRefresh),
+              forceRefreshWeb: Boolean(forceHardRefresh) && wantDeep,
               reviews,
               totalReviewsFound: totalFound,
               priceHistory: historyFormatted,
               compareOffers,
             },
             {
+              webResearch: wantDeep,
               staleCachedResult: cached?.result ?? remoteCachedAnalysis,
               staleCacheSavedAt: cached?.savedAt,
             },
@@ -1024,11 +1378,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           const analysisWithOverlay = withPriceInsightOverlay(runResult.analysis, overlayInput);
 
-          // Не сохраняем stale как fresh (анти-poison)
-          if (runResult.source === 'cloud' || runResult.source === 'local') {
-            await saveCachedFullAnalysis(cacheRef, analysisWithOverlay, reviews, cardFp);
-          } else if (runResult.source === 'cache') {
-            await saveCachedFullAnalysis(cacheRef, analysisWithOverlay, reviews, cardFp);
+          if (runResult.source === 'cloud' || runResult.source === 'local' || runResult.source === 'cache') {
+            await saveCachedFullAnalysis(
+              cacheRef,
+              analysisWithOverlay,
+              reviews,
+              cardFp,
+              productPrice,
+              {
+                features: currentFeatures,
+                productTitle,
+                article: resolvedArticle,
+              },
+            );
           }
 
           if (mp && productId && runResult.source === 'cloud') {
@@ -1042,25 +1404,55 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
           }
 
-          if (runResult.source === 'cloud' && (!cached || skipStaticCache)) {
-            await recordFullAnalysis();
-          }
-
           return {
             ok: true as const,
             analysis: analysisWithOverlay,
             fromCache: runResult.source === 'cache' || runResult.source === 'stale_cache',
             analysisSource: runResult.source,
             cacheNote: runResult.cacheNote,
+            cacheReason: (runResult.source === 'cache' || runResult.source === 'stale_cache'
+              ? 'LOCAL_CACHE'
+              : 'NEW_ANALYSIS') as AiCacheReason,
+            cacheConfidence: runResult.source === 'cloud' ? 100 : 80,
           };
+          })();
+
+          return applyQuotaAndJob(flightKey, productId, canonicalUrl, inner);
         });
 
-        sendResponse(result);
+        try {
+          sendResponse(result);
+        } catch {
+          // popup закрыт — результат уже в session job + кэше
+        }
       } catch (error) {
-        sendResponse({
-          ok: false,
-          error: formatApiErrorForUser(error, 'Ошибка полного анализа'),
-        });
+        const errMsg = formatApiErrorForUser(error, 'Ошибка полного анализа');
+        try {
+          await setFullAnalysisJobSnapshot({
+            flightKey: analysisSingleflightKey({
+              marketplace: marketplace as string,
+              productId,
+              url: productUrl,
+            }),
+            productId,
+            productUrl,
+            intent,
+            status: 'error',
+            startedAt: Date.now(),
+            finishedAt: Date.now(),
+            error: errMsg,
+          });
+        } catch {
+          // ignore
+        }
+        try {
+          sendResponse({
+            ok: false,
+            error: errMsg,
+          });
+        } catch {
+          // popup закрыт
+        }
       } finally {
         if (locked) await setFullAnalysisBusy(false);
       }

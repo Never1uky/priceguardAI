@@ -271,7 +271,8 @@ async function fetchWbFeedbacksUrl(url: string, limit: number): Promise<WbReview
   try {
     const response = await fetch(url, {
       headers: WB_FETCH_HEADERS,
-      credentials: 'include',
+      // omit: credentials+ACAO* на feedbacks*.wb.ru даёт CORS-шум в Console на странице WB
+      credentials: 'omit',
     });
     if (!response.ok) return [];
 
@@ -282,23 +283,36 @@ async function fetchWbFeedbacksUrl(url: string, limit: number): Promise<WbReview
   }
 }
 
+/** Не дергать feedbacks API из content script на карточке WB (CORS / Issues). Только SW / extension pages. */
+function isMarketplacePageContext(): boolean {
+  if (typeof window === 'undefined' || typeof location === 'undefined') return false;
+  try {
+    const host = location.hostname || '';
+    return /(?:^|\.)wildberries\.|^wb\.ru$|(?:^|\.)ozon\.|(?:^|\.)yandex\.|market\.yandex/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Отзывы WB через feedbacks API.
+ * Вызывать из service worker / extension page — не из content script на wildberries.ru.
+ */
 export async function fetchWildberriesReviews(nmId: string, limit = 30): Promise<WbReviewItem[]> {
+  if (!nmId || isMarketplacePageContext()) return [];
+
   const root = (await fetchWildberriesRoot(nmId)) ?? nmId;
+  const ids = root !== nmId ? [nmId, root] : [nmId];
 
-  const endpoints = [
-    `https://feedbacks1.wb.ru/feedbacks/v1/${nmId}?take=${limit}&skip=0&isAnswered=true`,
-    `https://feedbacks2.wb.ru/feedbacks/v1/${nmId}?take=${limit}&skip=0&isAnswered=true`,
-    `https://feedbacks1.wb.ru/feedbacks/v2/${nmId}?take=${limit}&skip=0`,
-    `https://feedbacks2.wb.ru/feedbacks/v2/${nmId}?take=${limit}&skip=0`,
-    `https://feedbacks1.wb.ru/feedbacks/v2/${root}?take=${limit}&skip=0`,
-    `https://feedbacks2.wb.ru/feedbacks/v2/${root}?take=${limit}&skip=0`,
-    `https://feedbacks1.wb.ru/feedbacks/v1/${root}?take=${limit}&skip=0&isAnswered=true`,
-    `https://feedbacks2.wb.ru/feedbacks/v1/${root}?take=${limit}&skip=0&isAnswered=true`,
-  ];
-
-  for (const endpoint of endpoints) {
-    const items = await fetchWbFeedbacksUrl(endpoint, limit);
-    if (items.length > 0) return items;
+  // v2 на feedbacks1/2 — обычно достаточно; без спама 8 URL подряд
+  for (const id of ids) {
+    for (const host of ['feedbacks1.wb.ru', 'feedbacks2.wb.ru'] as const) {
+      const items = await fetchWbFeedbacksUrl(
+        `https://${host}/feedbacks/v2/${id}?take=${limit}&skip=0`,
+        limit,
+      );
+      if (items.length > 0) return items;
+    }
   }
 
   return [];

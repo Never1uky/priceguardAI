@@ -5,19 +5,37 @@
 
 import {
   AUTO_PICK_CONFIDENCE_THRESHOLD,
+  CLOSE_MATCH_TIE_DELTA,
   MIN_COMPARE_MATCH_CONFIDENCE,
   isCloseMatchTie,
 } from '@/lib/product-match';
 import type { MarketplaceOffer, SearchCandidateOffer } from '@/types/comparison';
 
 /** Публичные статусы — без процентов */
-export type MatchStatus = 'verified' | 'probable' | 'needs_choice' | 'not_found';
+export type MatchStatus =
+  | 'verified'
+  | 'probable'
+  | 'needs_choice'
+  | 'not_found'
+  | 'loading_card'
+  | 'serp_only'
+  | 'oos'
+  | 'blocked'
+  | 'unverified_manual';
+
+/** Среди близких матчей: разброс цен ≥5% → ручной выбор */
+export const PRICE_SPREAD_FORCE_CHOICE_RATIO = 1.05;
 
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   verified: 'Проверено',
   probable: 'Лучшее предложение',
   needs_choice: 'Требуется выбор',
   not_found: 'Не найдено',
+  loading_card: 'Загрузка карточки…',
+  serp_only: 'Цена из поиска',
+  oos: 'Нет в наличии',
+  blocked: 'Площадка недоступна',
+  unverified_manual: 'Вручную (непроверено)',
 };
 
 export function matchStatusShortHint(
@@ -35,6 +53,16 @@ export function matchStatusShortHint(
       return alternativeCount > 0
         ? `Есть ${alternativeCount} похожих — выберите`
         : 'Требуется выбор';
+    case 'loading_card':
+      return 'Загрузка карточки…';
+    case 'serp_only':
+      return 'Цена из поиска';
+    case 'oos':
+      return 'Нет в наличии';
+    case 'blocked':
+      return 'Площадка недоступна';
+    case 'unverified_manual':
+      return 'Вручную · без алертов';
     default:
       return 'Не найдено';
   }
@@ -73,10 +101,13 @@ export function computeCandidatePriority(params: {
   referencePrice?: number;
   rating?: number | null;
   hasProductUrl?: boolean;
+  /** Boost from local pick history (0–5) */
+  historyBoost?: number;
 }): number {
   let priority = params.match;
 
   if (params.hasProductUrl) priority += 5;
+  if (params.historyBoost) priority += Math.min(5, Math.max(0, params.historyBoost));
 
   const rating = params.rating;
   if (rating != null && rating >= 4.7) priority += 4;
@@ -89,7 +120,9 @@ export function computeCandidatePriority(params: {
     const ratio = price / ref;
     if (ratio >= 0.75 && ratio <= 1.25) priority += 4;
     else if (ratio >= 0.6 && ratio <= 1.4) priority += 2;
-    if (price < ref) priority += 2;
+    // Prefer cheaper among similar matches (stronger than before)
+    if (price < ref) priority += 6;
+    else if (price > ref * 1.15) priority -= 4;
   }
 
   return Math.max(0, Math.min(120, Math.round(priority)));
@@ -101,9 +134,51 @@ export interface RankedCandidate {
   priority: number;
 }
 
-/** Сортировка пула: priority ↓, затем match ↓ */
+/** Сортировка пула: priority ↓, затем match ↓, затем цена ↑ */
 export function sortCandidatePool(pool: RankedCandidate[]): RankedCandidate[] {
-  return [...pool].sort((a, b) => b.priority - a.priority || b.match - a.match);
+  return [...pool].sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    if (b.match !== a.match) return b.match - a.match;
+    const pa = a.candidate.price ?? Number.POSITIVE_INFINITY;
+    const pb = b.candidate.price ?? Number.POSITIVE_INFINITY;
+    return pa - pb;
+  });
+}
+
+/** Среди кандидатов с confidence в пределах Δ от best — предпочесть минимальную цену */
+export function pickCheapestAmongCloseMatches<T extends { confidence: number; price?: number | null }>(
+  ranked: T[],
+  delta = CLOSE_MATCH_TIE_DELTA,
+): T[] {
+  if (ranked.length < 2) return ranked;
+  const best = ranked[0]!.confidence;
+  const close = ranked.filter((r) => best - r.confidence <= delta);
+  if (close.length < 2) return ranked;
+
+  const priced = close.filter((r) => r.price != null && r.price > 0);
+  if (priced.length < 2) return ranked;
+
+  const cheapestFirst = [...priced].sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+  const rest = ranked.filter((r) => !close.includes(r));
+  const closeRest = close.filter((r) => r !== cheapestFirst[0]);
+  return [cheapestFirst[0]!, ...closeRest, ...rest];
+}
+
+/** Spread ≥5% among close matches → force user pick */
+export function hasLargePriceSpreadAmongClose(
+  ranked: Array<{ confidence: number; price?: number | null }>,
+  delta = CLOSE_MATCH_TIE_DELTA,
+): boolean {
+  if (ranked.length < 2) return false;
+  const best = ranked[0]!.confidence;
+  const prices = ranked
+    .filter((r) => best - r.confidence <= delta)
+    .map((r) => r.price)
+    .filter((p): p is number => p != null && p > 0);
+  if (prices.length < 2) return false;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return max / min >= PRICE_SPREAD_FORCE_CHOICE_RATIO;
 }
 
 /**

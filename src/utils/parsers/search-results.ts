@@ -6,16 +6,54 @@ import type {
 import { buildMarketplaceSearchUrl } from '@/utils/comparison-url';
 import {
   MIN_COMPARE_MATCH_CONFIDENCE,
+  isProductPageUrl,
   pickBestMatchWithFallbackScored,
   pickTopMatchesWithScore,
 } from '@/lib/product-match';
 import { matchConfidencePercent } from '@/lib/fuzzy-match';
 import {
   computeCandidatePriority,
-  decideMatchOutcome,
+  hasLargePriceSpreadAmongClose,
+  pickCheapestAmongCloseMatches,
 } from '@/lib/match-status';
 import { parsePrice } from '@/utils/dom';
-import { normalizeMarketplaceRating } from '@/lib/compare-offers';
+import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
+import { isSafeMarketplaceUrl } from '@/utils/safe-marketplace-url';
+import { pickSerpTitleFromTile } from '@/lib/serp-title';
+import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
+import type { Marketplace } from '@/types/product';
+
+function marketplaceOrigin(marketplace: ComparisonMarketplace): string {
+  switch (marketplace) {
+    case 'wildberries':
+      return 'https://www.wildberries.ru';
+    case 'ozon':
+      return 'https://www.ozon.ru';
+    case 'yandex_market':
+      return 'https://market.yandex.ru';
+  }
+}
+
+function sanitizeCandidateUrl(
+  href: string,
+  marketplace: ComparisonMarketplace,
+): string | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+
+  let raw: string;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    raw = trimmed;
+  } else if (trimmed.startsWith('//')) {
+    raw = `https:${trimmed}`;
+  } else {
+    const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    raw = `${marketplaceOrigin(marketplace)}${path}`;
+  }
+
+  const mp = marketplace as Marketplace;
+  return isSafeMarketplaceUrl(raw, mp) ? raw.split('#')[0] : null;
+}
 
 export interface SearchCandidate {
   title: string;
@@ -25,6 +63,7 @@ export interface SearchCandidate {
   rating: number | null;
   reviewCount?: number;
   imageUrl?: string;
+  imageUrlAlternatives?: string[];
 }
 
 export interface SearchPickResult {
@@ -49,11 +88,12 @@ function parseRubPrices(text: string): number[] {
     .filter((n) => n >= 50);
 }
 
-function pickWbDisplayPrice(prices: number[], oldPrice?: number | null): number | null {
+/** Prefer sale/current price (min), not crossed-out max on the card. */
+export function pickWbDisplayPrice(prices: number[], oldPrice?: number | null): number | null {
   if (!prices.length) return null;
   const withoutOld = oldPrice ? prices.filter((p) => p < oldPrice * 0.98) : prices;
   const pool = withoutOld.length ? withoutOld : prices;
-  return Math.max(...pool);
+  return Math.min(...pool);
 }
 
 function parseRubPrice(text: string): number | null {
@@ -62,21 +102,7 @@ function parseRubPrice(text: string): number | null {
 }
 
 function parseOzonRating(text: string): { rating: number | null; reviewCount?: number } {
-  const ratingMatch =
-    text.match(/(\d[.,]\d)\s*(?:из\s*5|★|⭐)/i) ??
-    text.match(/рейтинг[:\s]*(\d[.,]\d)/i);
-
-  const rating = normalizeMarketplaceRating(
-    ratingMatch ? parseFloat(ratingMatch[1].replace(',', '.')) : null,
-  );
-
-  const reviewMatch =
-    text.match(/(\d[\d\s]*)\s*отзыв/i) ??
-    text.match(/(\d[\d\s]*)\s*оцен/i);
-
-  const reviewCount = reviewMatch ? parsePrice(reviewMatch[1]) : undefined;
-
-  return { rating, reviewCount };
+  return parseRatingFromMarketplaceText(text);
 }
 
 function candidateToOffer(
@@ -95,6 +121,7 @@ function candidateToOffer(
     reviewCount: candidate.reviewCount,
     url: candidate.url,
     imageUrl: candidate.imageUrl,
+    imageUrlAlternatives: candidate.imageUrlAlternatives,
     found: Boolean(candidate.price && candidate.price > 0),
     matchConfidence,
     ...extras,
@@ -121,6 +148,7 @@ function candidateToSearchCandidateOffer(
     matchConfidence: confidence,
     priority,
     imageUrl: candidate.imageUrl,
+    imageUrlAlternatives: candidate.imageUrlAlternatives,
     rating,
   };
 }
@@ -156,10 +184,16 @@ export function rankSearchCandidates(
     return { candidate: item, confidence, score, priority };
   });
 
-  return scored.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
+  return scored.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    const pa = a.candidate.price ?? Number.POSITIVE_INFINITY;
+    const pb = b.candidate.price ?? Number.POSITIVE_INFINITY;
+    return pa - pb;
+  });
 }
 
-/** Выбор из выдачи: статусы без процентов; автопривязка лучшего из пула */
+/** Выбор из выдачи: только пул карточек для cascade — без SERP found:true */
 export function pickSearchFromCandidates(
   marketplace: ComparisonMarketplace,
   query: string,
@@ -168,7 +202,6 @@ export function pickSearchFromCandidates(
   options: SearchPickOptions = {},
 ): SearchPickResult {
   const ref = referenceTitle && referenceTitle !== 'Товар' ? referenceTitle : query;
-  const searchUrl = buildMarketplaceSearchUrl(marketplace, query);
 
   if (!candidates.length) {
     return {
@@ -180,76 +213,64 @@ export function pickSearchFromCandidates(
     };
   }
 
-  const ranked = rankSearchCandidates(ref, candidates, options);
-  const top3 = ranked.slice(0, 3);
+  const rankedRaw = rankSearchCandidates(ref, candidates, options);
+  const ranked = pickCheapestAmongCloseMatches(
+    rankedRaw.map((r) => ({ ...r, price: r.candidate.price })),
+  );
+  const forceChoice = hasLargePriceSpreadAmongClose(ranked);
+  const top3 = ranked.slice(0, 3).filter((r) => {
+    const url = r.candidate.url;
+    return Boolean(url && isProductPageUrl(url));
+  });
   const searchCandidates = top3.map(({ candidate, confidence }) =>
     candidateToSearchCandidateOffer(candidate, confidence, options.referencePrice),
   );
 
-  const best = ranked[0];
-  const second = ranked[1];
-  const decision = decideMatchOutcome({
-    bestMatch: best?.confidence ?? 0,
-    secondMatch: second?.confidence,
-    alternativeCount: searchCandidates.length,
-  });
-
-  if (!best || decision.status === 'not_found') {
+  if (!searchCandidates.length) {
     return {
       offer: {
-        marketplace,
-        title: query,
-        price: null,
-        delivery: null,
-        rating: null,
-        url: searchUrl,
-        found: false,
-        searchCandidates: searchCandidates.length ? searchCandidates : undefined,
-        needsManualPick: searchCandidates.length > 0,
-        matchStatus: searchCandidates.length ? 'needs_choice' : 'not_found',
-        error: searchCandidates.length
-          ? 'Не удалось определить — выберите один раз'
-          : 'Не удалось определить товар',
+        ...buildSearchNotFoundOffer(
+          marketplace,
+          query,
+          'В выдаче нет ссылок на карточки товаров',
+        ),
+        matchStatus: 'not_found',
       },
-      ranked: top3,
+      ranked: [],
     };
   }
 
-  if (decision.needsChoice) {
-    return {
-      offer: {
-        marketplace,
-        title: best.candidate.title,
-        price: null,
-        delivery: null,
-        rating: null,
-        reviewCount: undefined,
-        url: searchUrl,
-        found: false,
-        matchConfidence: best.confidence,
-        matchStatus: 'needs_choice',
-        searchCandidates,
-        needsManualPick: true,
-        error:
-          searchCandidates.length > 1
-            ? `Есть ${searchCandidates.length} похожих варианта — выберите нужный`
-            : 'Требуется выбор товара',
-      },
-      ranked: top3,
-    };
-  }
+  const best = top3[0]!;
+  const shellUrl = buildMarketplaceSearchUrl(marketplace, query);
+  const shellRating =
+    searchCandidates.length === 1
+      ? normalizeMarketplaceRating(searchCandidates[0]!.rating)
+      : null;
 
-  // Автовыбор #1; остальные — свёрнутые альтернативы
-  const alternatives = searchCandidates.filter((c) => c.url !== best.candidate.url);
-  const offer = candidateToOffer(marketplace, best.candidate, best.confidence, {
-    found: true,
-    matchStatus: decision.status,
-    searchCandidates: alternatives.length ? alternatives : undefined,
-    needsManualPick: false,
-    error: undefined,
-  });
-
-  return { offer, ranked: top3 };
+  return {
+    offer: {
+      marketplace,
+      title: best.candidate.title,
+      price: null,
+      delivery: null,
+      rating: shellRating,
+      reviewCount:
+        searchCandidates.length === 1 ? best.candidate.reviewCount : undefined,
+      url: shellUrl,
+      found: false,
+      matchConfidence: best.confidence,
+      matchStatus: 'needs_choice',
+      searchCandidates,
+      needsManualPick: true,
+      error:
+        searchCandidates.length > 1
+          ? forceChoice
+            ? `Цены сильно отличаются — выберите нужный из ${searchCandidates.length}`
+            : `Есть ${searchCandidates.length} похожих варианта — проверяем карточки`
+          : 'Проверяем карточку товара',
+    },
+    ranked: top3,
+  };
 }
 
 function wbCardFromElement(card: Element, query: string): SearchCandidate | null {
@@ -287,11 +308,25 @@ function wbCardFromElement(card: Element, query: string): SearchCandidate | null
   const reviewMatch = ratingText.match(/(\d[\d\s]*)\s*оцен/i);
   const reviewCount = reviewMatch ? parsePrice(reviewMatch[1]) : undefined;
 
-  const url = href.includes('detail')
+  const urlRaw = href.includes('detail')
     ? href.split('?')[0]
     : `https://www.wildberries.ru/catalog/${nmId}/detail.aspx`;
+  const url = sanitizeCandidateUrl(urlRaw, 'wildberries');
+  if (!url) return null;
 
-  return { title, url, price, oldPrice: oldPrice && oldPrice > price ? oldPrice : undefined, rating, reviewCount };
+  const imageUrl = buildWbImageUrl(nmId);
+  const imageUrlAlternatives = buildWbImageUrlAlternatives(nmId).filter((u) => u !== imageUrl);
+
+  return {
+    title,
+    url,
+    price,
+    oldPrice: oldPrice && oldPrice > price ? oldPrice : undefined,
+    rating,
+    reviewCount,
+    imageUrl,
+    imageUrlAlternatives,
+  };
 }
 
 /** Парсинг выдачи WB из DOM (тестируется через DOMParser / content script) */
@@ -349,7 +384,13 @@ function scrapeOzonCandidates(query: string): SearchCandidate[] {
   for (const link of linkSet) {
     const href = link.href;
     if (!href.includes('/product/') || seen.has(href) || /\/category\//i.test(href)) continue;
+    const safeUrl = sanitizeCandidateUrl(
+      href.startsWith('http') ? href : `https://www.ozon.ru${href.startsWith('/') ? href : `/${href}`}`,
+      'ozon',
+    );
+    if (!safeUrl || seen.has(safeUrl)) continue;
     seen.add(href);
+    seen.add(safeUrl);
 
     const container =
       link.closest('[data-index]') ??
@@ -357,14 +398,16 @@ function scrapeOzonCandidates(query: string): SearchCandidate[] {
       link.closest('article') ??
       link.parentElement?.parentElement?.parentElement;
 
-    const title =
-      link.getAttribute('title')?.trim() ||
-      link.getAttribute('aria-label')?.trim() ||
-      container?.querySelector('[class*="tsBody"], [class*="tsHeadline"]')?.textContent?.trim() ||
-      link.textContent?.trim() ||
-      query;
-
     const containerText = container?.textContent ?? link.textContent ?? '';
+
+    const title = pickSerpTitleFromTile({
+      linkTitle: link.getAttribute('title'),
+      ariaLabel: link.getAttribute('aria-label'),
+      headline: container?.querySelector('[class*="tsBody"], [class*="tsHeadline"]')?.textContent?.trim(),
+      linkText: link.textContent?.trim(),
+      containerText,
+      fallback: query,
+    });
     const prices = parseRubPrices(containerText);
     if (!prices.length) continue;
 
@@ -376,7 +419,7 @@ function scrapeOzonCandidates(query: string): SearchCandidate[] {
 
     results.push({
       title: title.slice(0, 200),
-      url: href.startsWith('http') ? href : `https://www.ozon.ru${href}`,
+      url: safeUrl,
       price,
       oldPrice: oldPrice && oldPrice > price ? oldPrice : undefined,
       rating,
@@ -409,7 +452,13 @@ function scrapeYandexMarketCandidates(query: string): SearchCandidate[] {
       'a[href*="/card/"], a[href*="/product/"], a[href*="market.yandex"]',
     );
     if (!link?.href || seen.has(link.href) || link.href.includes('/search')) continue;
+
+    let url = link.href;
+    if (!url.startsWith('http')) url = `https://market.yandex.ru${url}`;
+    const safeUrl = sanitizeCandidateUrl(url, 'yandex_market');
+    if (!safeUrl || seen.has(safeUrl)) continue;
     seen.add(link.href);
+    seen.add(safeUrl);
 
     const title =
       item.querySelector('[data-auto="snippet-title"], [data-zone-name="title"], h3')?.textContent?.trim() ||
@@ -423,14 +472,13 @@ function scrapeYandexMarketCandidates(query: string): SearchCandidate[] {
 
     const price = Math.min(...prices);
     const ratingMatch = text.match(/(\d[.,]\d)\s*(?:из\s*5|★|⭐)/i);
-    const rating = ratingMatch ? parseFloat(ratingMatch[1].replace(',', '.')) : null;
-
-    let url = link.href;
-    if (!url.startsWith('http')) url = `https://market.yandex.ru${url}`;
+    const rating = normalizeMarketplaceRating(
+      ratingMatch ? ratingMatch[1].replace(',', '.') : null,
+    );
 
     results.push({
       title: title.slice(0, 200),
-      url,
+      url: safeUrl,
       price,
       rating,
       reviewCount: undefined,

@@ -1,12 +1,19 @@
-import { isProductPage } from '@/utils/marketplace';
 import { agentLog } from '@/lib/debug-log';
-import { getHiddenBrowserTabId, getHiddenBrowserWindowId } from '@/lib/hidden-browser';
+import {
+  getHiddenBrowserTabId,
+  getHiddenBrowserWindowId,
+  isHiddenBrowserTab,
+} from '@/lib/hidden-browser';
+import { ensureContentScriptReady, safeSendMessage } from '@/lib/safe-messaging';
+import { isProductPage } from '@/utils/marketplace';
 
 export interface TabLike {
   id?: number;
   active?: boolean;
   url?: string;
   windowId?: number;
+  /** chrome.windows.WindowState when known */
+  windowState?: string;
 }
 
 /** Выбрать вкладку с карточкой товара (popup не должен ломать currentWindow). */
@@ -15,9 +22,10 @@ export function pickActiveProductTab(tabs: TabLike[]): TabLike | null {
   const hiddenTab = getHiddenBrowserTabId();
   const productTabs = tabs.filter((tab) => {
     if (!tab.url || !isProductPage(tab.url)) return false;
-    // Не брать фоновую вкладку сравнения/поиска
     if (hiddenTab != null && tab.id === hiddenTab) return false;
     if (hiddenWin != null && tab.windowId === hiddenWin) return false;
+    if (isHiddenBrowserTab(tab.id, tab.windowId)) return false;
+    if (tab.windowState === 'minimized') return false;
     return true;
   });
   if (productTabs.length === 0) return null;
@@ -32,7 +40,10 @@ export async function findActiveProductTab(): Promise<chrome.tabs.Tab | null> {
   const hiddenWin = getHiddenBrowserWindowId();
   const normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
   const visibleWindows = normalWindows.filter(
-    (window) => window.id !== hiddenWin && window.state !== 'minimized',
+    (window) =>
+      window.id !== hiddenWin &&
+      window.state !== 'minimized' &&
+      !isHiddenBrowserTab(undefined, window.id),
   );
   const browserWindow =
     visibleWindows.find((window) => window.focused) ??
@@ -49,62 +60,43 @@ export async function findActiveProductTab(): Promise<chrome.tabs.Tab | null> {
   }
 
   const tabs = await chrome.tabs.query({});
-  const picked = pickActiveProductTab(tabs);
+  const windowStateById = new Map(normalWindows.map((w) => [w.id, w.state] as const));
+  const enriched: TabLike[] = tabs.map((tab) => ({
+    ...tab,
+    windowState: tab.windowId != null ? windowStateById.get(tab.windowId) : undefined,
+  }));
+  const picked = pickActiveProductTab(enriched);
   if (!picked?.id) return null;
   return picked as chrome.tabs.Tab;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getContentScriptFiles(): string[] {
-  const scripts = chrome.runtime.getManifest().content_scripts;
-  if (!scripts?.length) return [];
-  return scripts[0].js ?? [];
-}
-
-/** Инжект content script на вкладку, открытую до установки расширения. */
+/** @deprecated use ensureContentScriptReady from safe-messaging */
 export async function ensureContentScript(tabId: number): Promise<boolean> {
-  const files = getContentScriptFiles();
-  if (!files.length) return false;
-
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, files });
-    await delay(700);
-    return true;
-  } catch {
-    return false;
-  }
+  return ensureContentScriptReady(tabId);
 }
 
 export async function sendScrapeProductMessage(
   tabId: number,
   attempts = 4,
 ): Promise<unknown> {
-  let lastError: unknown;
-  let injected = false;
-
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return await chrome.tabs.sendMessage(tabId, { type: 'SCRAPE_PRODUCT' });
-    } catch (error) {
-      lastError = error;
-
-      if (!injected) {
-        injected = await ensureContentScript(tabId);
-        agentLog(
-          'active-product-tab.ts:sendScrapeProductMessage',
-          'content script inject fallback',
-          { tabId, injected, attempt },
-          'I',
-        );
-        if (injected) continue;
-      }
-
-      if (attempt < attempts - 1) await delay(400 * (attempt + 1));
-    }
+  const result = await safeSendMessage(
+    { type: 'tab', tabId },
+    { type: 'SCRAPE_PRODUCT' },
+    {
+      retries: Math.max(0, attempts - 1),
+      reinject: true,
+      backoffMs: [400, 800, 1200, 1600],
+      softFail: false,
+    },
+  );
+  if (result == null) {
+    agentLog(
+      'active-product-tab.ts:sendScrapeProductMessage',
+      'scrape message failed after retries',
+      { tabId },
+      'W',
+    );
+    throw new Error('Receiving end does not exist');
   }
-
-  throw lastError;
+  return result;
 }

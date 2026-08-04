@@ -8,6 +8,7 @@ import type {
   MarketplaceOffer,
   SearchCandidateOffer,
 } from '@/types/comparison';
+import { isOfferWithPrice, isPendingManualChoice } from '@/lib/compare-offers';
 import { isUrlExcluded, isProductPageUrl } from '@/lib/product-match';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 
@@ -113,10 +114,11 @@ export function syncPoolOntoProduct(
   };
 }
 
-/** Снять привязку карточки, сохранив пул и rejected */
+/** Снять привязку карточки; по умолчанию сохраняет пул (для reject). */
 export function clearBoundOffer(
   product: CompareProduct,
   marketplace: ComparisonMarketplace,
+  options: { clearPool?: boolean } = {},
 ): CompareProduct {
   const marketplaceUrls = { ...product.marketplaceUrls };
   delete marketplaceUrls[marketplace];
@@ -131,7 +133,9 @@ export function clearBoundOffer(
       found: false,
       needsManualPick: false,
       matchStatus: 'not_found',
-      searchCandidates: getCandidatePool(product, marketplace),
+      searchCandidates: options.clearPool
+        ? undefined
+        : getCandidatePool(product, marketplace),
       error: undefined,
     };
   }
@@ -139,11 +143,20 @@ export function clearBoundOffer(
   const manualMarketplaces = { ...product.manualMarketplaces };
   delete manualMarketplaces[marketplace];
 
+  const candidatePoolByMarketplace = { ...product.candidatePoolByMarketplace };
+  const poolFetchedAt = { ...product.poolFetchedAt };
+  if (options.clearPool) {
+    delete candidatePoolByMarketplace[marketplace];
+    delete poolFetchedAt[marketplace];
+  }
+
   return {
     ...product,
     marketplaceUrls,
     marketplaceOffers,
     manualMarketplaces,
+    candidatePoolByMarketplace,
+    poolFetchedAt,
   };
 }
 
@@ -189,13 +202,79 @@ export function markOfferRejectedKeepPool(
   return next;
 }
 
-/** Очистить bound на всех target-площадках для «Найти заново» */
+/** Очистить bound + пулы на target-площадках для «Найти заново» */
 export function clearAllBoundTargets(product: CompareProduct): CompareProduct {
   const targets: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
   let next = product;
   for (const mp of targets) {
     if (mp === product.sourceMarketplace) continue;
-    next = clearBoundOffer(next, mp);
+    next = clearBoundOffer(next, mp, { clearPool: true });
+  }
+  return next;
+}
+
+/** Слот сохраняется при «Найти заново»: ручная ссылка или подтверждённая карточка с ценой. */
+export function isResearchPreservedSlot(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+): boolean {
+  if (product.manualMarketplaces?.[marketplace]) return true;
+  const offer = product.marketplaceOffers?.[marketplace];
+  if (!offer) return false;
+  return (
+    offer.matchStatus === 'verified' &&
+    isOfferWithPrice(offer) &&
+    Boolean(offer.url) &&
+    isProductPageUrl(offer.url) &&
+    !offer.needsManualPick
+  );
+}
+
+function urlsLooselyMatch(a: string, b: string): boolean {
+  const na = normalizePoolUrl(a);
+  const nb = normalizePoolUrl(b);
+  return Boolean(na && nb && (na === nb || na.includes(nb) || nb.includes(na)));
+}
+
+/**
+ * Find a compare row that still has needs_choice and lists this URL as a candidate
+ * (user opened candidate in a tab → ENSURE must not wipe the picker).
+ */
+export function findPendingChoiceForProductUrl(
+  products: CompareProduct[],
+  url: string,
+): { product: CompareProduct; marketplace: ComparisonMarketplace } | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  for (const product of products) {
+    for (const mp of ['wildberries', 'ozon', 'yandex_market'] as ComparisonMarketplace[]) {
+      const offer = product.marketplaceOffers?.[mp];
+      if (!isPendingManualChoice(offer)) continue;
+      const fromOffer = offer!.searchCandidates ?? [];
+      const fromPool = product.candidatePoolByMarketplace?.[mp] ?? [];
+      const hit = [...fromOffer, ...fromPool].some((c) => c.url && urlsLooselyMatch(c.url, trimmed));
+      if (hit) return { product, marketplace: mp };
+    }
+  }
+  return null;
+}
+
+/** «Найти заново»: сброс только авто-слотов; manual / verified + price остаются. */
+export function researchClearAutoOnly(
+  product: CompareProduct,
+  options?: { preservePendingChoice?: boolean },
+): CompareProduct {
+  const targets: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+  let next = product;
+  for (const mp of targets) {
+    if (mp === product.sourceMarketplace) continue;
+    if (isResearchPreservedSlot(next, mp)) continue;
+    // ENSURE / soft re-entry: keep open picker (explicit «Найти заново» clears it)
+    if (options?.preservePendingChoice && isPendingManualChoice(next.marketplaceOffers?.[mp])) {
+      continue;
+    }
+    next = clearBoundOffer(next, mp, { clearPool: true });
   }
   return next;
 }

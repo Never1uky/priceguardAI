@@ -10,13 +10,24 @@ import { sendRuntimeMessage } from '@/lib/runtime-message';
 import type { CompareProduct, ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 import { useCallback, useEffect, useState } from 'react';
 
-import { SEARCHING_MP_KEY } from '@/lib/compare-jobs';
+import {
+  RUNNING_AT_KEY,
+  RUNNING_AT_MAP_KEY,
+  RUNNING_IDS_KEY,
+  RUNNING_KEY,
+  SEARCHING_MP_KEY,
+} from '@/lib/compare-jobs';
 import type { SearchingMarketplaceKey } from '@/lib/compare-jobs';
+import { normalizeRunningAtMap, normalizeRunningIds, pruneStaleRunning } from '@/lib/compare-running-state';
 
-const RUNNING_KEY = 'priceguard_compare_running';
-const RUNNING_AT_KEY = 'priceguard_compare_running_at';
+const RUNNING_STALE_MS = 4 * 60 * 1000;
 
-export function useCompareTab(isActive: boolean) {
+function readRunningIdsFromStore(stored: Record<string, unknown>): string[] {
+  const fromIds = normalizeRunningIds(stored[RUNNING_IDS_KEY]);
+  return fromIds.length ? fromIds : normalizeRunningIds(stored[RUNNING_KEY]);
+}
+
+export function useCompareTab(isActive: boolean, focusCompareId?: string | null) {
   const [products, setProducts] = useState<CompareProduct[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [offers, setOffers] = useState<MarketplaceOffer[]>([]);
@@ -30,20 +41,27 @@ export function useCompareTab(isActive: boolean) {
   const selectedProduct = products.find((p) => p.id === selectedId) ?? null;
 
   const syncRunningState = useCallback(async (productId: string | null) => {
-    const stored = await chrome.storage.local.get([RUNNING_KEY, RUNNING_AT_KEY, SEARCHING_MP_KEY]);
-    const runningId = stored[RUNNING_KEY] as string | undefined;
-    const startedAt = stored[RUNNING_AT_KEY] as number | undefined;
+    const stored = await chrome.storage.local.get([
+      RUNNING_KEY,
+      RUNNING_IDS_KEY,
+      RUNNING_AT_KEY,
+      RUNNING_AT_MAP_KEY,
+      SEARCHING_MP_KEY,
+    ]);
+    const ids = readRunningIdsFromStore(stored);
+    const startedAt = normalizeRunningAtMap(
+      stored[RUNNING_AT_MAP_KEY] ?? stored[RUNNING_AT_KEY],
+      ids,
+      Date.now(),
+    );
     const searchingMp = stored[SEARCHING_MP_KEY] as SearchingMarketplaceKey | undefined;
 
-    const stale = startedAt && Date.now() - startedAt > 4 * 60 * 1000;
-    if (stale && runningId) {
-      await chrome.storage.local.remove([RUNNING_KEY, RUNNING_AT_KEY, SEARCHING_MP_KEY]);
-      setIsRefreshing(false);
-      setSearchingMarketplace(null);
-      return;
+    const pruned = pruneStaleRunning(ids, startedAt, Date.now(), RUNNING_STALE_MS);
+    if (pruned.pruned.length) {
+      // Defer cleanup to compare-jobs getRunning*; locally just reflect non-stale.
     }
 
-    const running = Boolean(productId && runningId === productId);
+    const running = Boolean(productId && pruned.ids.includes(productId));
     setIsRefreshing(running);
     setSearchingMarketplace(running ? searchingMp ?? null : null);
   }, []);
@@ -52,15 +70,30 @@ export function useCompareTab(isActive: boolean) {
     const [list, selected] = await Promise.all([getCompareProducts(), getSelectedCompareId()]);
     setProducts(list);
 
-    if (selected && list.some((p) => p.id === selected)) {
-      setSelectedId(selected);
-      await syncRunningState(selected);
-    } else {
-      const nextId = list[0]?.id ?? null;
-      setSelectedId(nextId);
-      await syncRunningState(nextId);
-    }
-  }, [syncRunningState]);
+    const preferred =
+      (focusCompareId && list.some((p) => p.id === focusCompareId) && focusCompareId) ||
+      (selected && list.some((p) => p.id === selected) && selected) ||
+      list[0]?.id ||
+      null;
+
+    setSelectedId(preferred);
+    if (preferred) await setSelectedCompareId(preferred);
+    await syncRunningState(preferred);
+
+    // Soft hydrate missing thumbs after list paint
+    void (async () => {
+      try {
+        const { hydrateCompareImages } = await import('@/lib/product-image');
+        const { saveCompareProducts } = await import('@/lib/comparison-storage');
+        await hydrateCompareImages(list, async (updated) => {
+          await saveCompareProducts(updated);
+          setProducts(updated);
+        });
+      } catch {
+        // soft
+      }
+    })();
+  }, [syncRunningState, focusCompareId]);
 
   const applyProduct = useCallback((product: CompareProduct) => {
     setProducts((prev) => {
@@ -74,15 +107,57 @@ export function useCompareTab(isActive: boolean) {
   useEffect(() => {
     if (!isActive) return;
     void loadProducts();
-  }, [isActive, loadProducts]);
+
+    // X3: drain offline pick queue (max 3 due items)
+    void (async () => {
+      try {
+        const {
+          peekDuePickRetries,
+          dequeuePickRetry,
+          markPickRetryFailure,
+        } = await import('@/lib/pick-retry-queue');
+        const queue = await peekDuePickRetries(3);
+        for (const item of queue) {
+          try {
+            const response = await sendRuntimeMessage<{
+              ok?: boolean;
+              product?: CompareProduct;
+              error?: string;
+            }>({
+              type: 'SELECT_COMPARE_CANDIDATE',
+              payload: {
+                productId: item.productId,
+                marketplace: item.marketplace,
+                url: item.url,
+                title: item.title,
+                price: item.price,
+              },
+            });
+            if (response?.ok && response.product) {
+              applyProduct(response.product);
+              await dequeuePickRetry(item);
+            } else {
+              await markPickRetryFailure(item);
+            }
+          } catch {
+            await markPickRetryFailure(item);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [isActive, loadProducts, applyProduct]);
 
   useEffect(() => {
     if (!selectedProduct) {
       setOffers([]);
       return;
     }
+    // Depend on selectedProduct identity (updates when storage reloads marketplaceOffers /
+    // needs_choice), not only id+comparedAt — otherwise picker never refreshes mid-research.
     setOffers(offersFromCompareProduct(selectedProduct));
-  }, [selectedProduct?.id, selectedProduct?.comparedAt]);
+  }, [selectedProduct]);
 
   useEffect(() => {
     const onStorageChange = (
@@ -91,17 +166,60 @@ export function useCompareTab(isActive: boolean) {
     ) => {
       if (areaName !== 'local') return;
 
-      if (changes[RUNNING_KEY] || changes[RUNNING_AT_KEY] || changes[SEARCHING_MP_KEY]) {
-        const runningId = changes[RUNNING_KEY]?.newValue as string | undefined;
-        if (!runningId) {
-          setIsRefreshing(false);
-          setSearchingMarketplace(null);
-          void loadProducts();
-        } else {
-          setIsRefreshing(Boolean(selectedId && runningId === selectedId));
-          const mp = changes[SEARCHING_MP_KEY]?.newValue as SearchingMarketplaceKey | undefined;
-          setSearchingMarketplace(mp ?? null);
-        }
+      if (
+        changes[RUNNING_KEY] ||
+        changes[RUNNING_IDS_KEY] ||
+        changes[RUNNING_AT_KEY] ||
+        changes[RUNNING_AT_MAP_KEY] ||
+        changes[SEARCHING_MP_KEY]
+      ) {
+        void (async () => {
+          let runningIds: string[] = [];
+          try {
+            const stored = await chrome.storage.local.get([
+              RUNNING_KEY,
+              RUNNING_IDS_KEY,
+              RUNNING_AT_KEY,
+              RUNNING_AT_MAP_KEY,
+              SEARCHING_MP_KEY,
+            ]);
+            const ids = readRunningIdsFromStore(stored);
+            const startedAt = normalizeRunningAtMap(
+              stored[RUNNING_AT_MAP_KEY] ?? stored[RUNNING_AT_KEY],
+              ids,
+              Date.now(),
+            );
+            runningIds = pruneStaleRunning(ids, startedAt, Date.now(), RUNNING_STALE_MS).ids;
+          } catch {
+            runningIds = [];
+          }
+
+          if (!runningIds.length) {
+            setIsRefreshing(false);
+            setSearchingMarketplace(null);
+            void loadProducts();
+          } else {
+            const forSelected = Boolean(selectedId && runningIds.includes(selectedId));
+            setIsRefreshing(forSelected);
+            if (forSelected) {
+              const mp = changes[SEARCHING_MP_KEY]?.newValue as SearchingMarketplaceKey | undefined;
+              if (mp !== undefined) {
+                setSearchingMarketplace(mp ?? null);
+              } else {
+                try {
+                  const stored = await chrome.storage.local.get(SEARCHING_MP_KEY);
+                  setSearchingMarketplace(
+                    (stored[SEARCHING_MP_KEY] as SearchingMarketplaceKey | undefined) ?? null,
+                  );
+                } catch {
+                  setSearchingMarketplace(null);
+                }
+              }
+            } else {
+              setSearchingMarketplace(null);
+            }
+          }
+        })();
       }
 
       if (changes.priceguard_compare_products || changes.priceguard_compare_selected_id) {
@@ -166,8 +284,14 @@ export function useCompareTab(isActive: boolean) {
           payload: { productId: product.id },
         });
 
-        if (!response?.ok) {
-          setError(response?.error ?? 'Не удалось запустить поиск');
+        if (response == null) {
+          setError('Нет ответа от расширения — закройте и откройте popup снова');
+          setIsRefreshing(false);
+          return;
+        }
+
+        if (!response.ok) {
+          setError(response.error ?? 'Не удалось запустить поиск');
           setIsRefreshing(false);
           return;
         }
@@ -176,8 +300,52 @@ export function useCompareTab(isActive: boolean) {
           await syncRunningState(product.id);
           return;
         }
+
+        await syncRunningState(product.id);
       } catch {
-        setError('Ошибка связи с расширением');
+        setError('Ошибка связи с расширением — перезагрузите popup');
+        setIsRefreshing(false);
+      }
+    },
+    [syncRunningState],
+  );
+
+  const researchMarketplace = useCallback(
+    async (product: CompareProduct, marketplace: ComparisonMarketplace) => {
+      setError(null);
+      setIsRefreshing(true);
+
+      try {
+        const response = await sendRuntimeMessage<{
+          ok?: boolean;
+          error?: string;
+          started?: boolean;
+          alreadyRunning?: boolean;
+        }>({
+          type: 'RESEARCH_SINGLE_MARKETPLACE',
+          payload: { productId: product.id, marketplace },
+        });
+
+        if (response == null) {
+          setError('Нет ответа от расширения — закройте и откройте popup снова');
+          setIsRefreshing(false);
+          return;
+        }
+
+        if (!response.ok) {
+          setError(response.error ?? 'Не удалось запустить поиск');
+          setIsRefreshing(false);
+          return;
+        }
+
+        if (response.started === false && response.alreadyRunning) {
+          await syncRunningState(product.id);
+          return;
+        }
+
+        await syncRunningState(product.id);
+      } catch {
+        setError('Ошибка связи с расширением — перезагрузите popup');
         setIsRefreshing(false);
       }
     },
@@ -188,7 +356,32 @@ export function useCompareTab(isActive: boolean) {
     setSelectedId(id);
     await setSelectedCompareId(id);
     await syncRunningState(id);
+
+    const product = products.find((p) => p.id === id);
+    if (!product) return;
+    try {
+      const { ensureCompareProductImage, getCompareProductImageSources } = await import(
+        '@/lib/product-image'
+      );
+      if (getCompareProductImageSources(product).imageUrl) return;
+      const withImage = await ensureCompareProductImage(product, { force: true });
+      if (getCompareProductImageSources(withImage).imageUrl) {
+        const { updateCompareProduct } = await import('@/lib/comparison-storage');
+        await updateCompareProduct(withImage);
+        applyProduct(withImage);
+      }
+    } catch {
+      // soft
+    }
   };
+
+  useEffect(() => {
+    if (!isActive || !focusCompareId) return;
+    if (selectedId === focusCompareId) return;
+    if (!products.some((p) => p.id === focusCompareId)) return;
+    void handleSelect(focusCompareId);
+    // handleSelect intentionally omitted — focus id drives selection once per focus change
+  }, [focusCompareId, isActive, products, selectedId]);
 
   const handleRemove = async (id: string) => {
     if (!window.confirm('Удалить товар из списка сравнения?')) return;
@@ -205,15 +398,33 @@ export function useCompareTab(isActive: boolean) {
     setLinkingMarketplace(marketplace);
     setError(null);
 
-    try {
-      const response = await sendRuntimeMessage<{
+    const { resolveCompareCandidateUrl } = await import('@/utils/comparison-url');
+    const resolvedUrl = resolveCompareCandidateUrl(url, marketplace);
+
+    const linkOnce = async (confirmed?: boolean) =>
+      sendRuntimeMessage<{
         ok?: boolean;
         error?: string;
+        needsConfirm?: boolean;
         product?: CompareProduct;
       }>({
         type: 'LINK_MARKETPLACE_OFFER',
-        payload: { productId: selectedProduct.id, marketplace, url },
+        payload: { productId: selectedProduct.id, marketplace, url: resolvedUrl, confirmed },
       });
+
+    try {
+      let response = await linkOnce();
+
+      if (response?.needsConfirm) {
+        const ok = window.confirm(
+          response.error ??
+            'Похоже, это другой товар. Привязать эту ссылку всё равно?',
+        );
+        if (!ok) {
+          throw new Error('Привязка отменена');
+        }
+        response = await linkOnce(true);
+      }
 
       if (!response?.ok || !response.product) {
         throw new Error(response?.error ?? 'Не удалось привязать ссылку');
@@ -259,7 +470,41 @@ export function useCompareTab(isActive: boolean) {
     }
   };
 
-  const handleSelectCandidate = async (marketplace: ComparisonMarketplace, url: string) => {
+  const handleRejectCandidate = async (marketplace: ComparisonMarketplace, rejectedUrl: string) => {
+    if (!selectedProduct) return;
+
+    setRejectingMarketplace(marketplace);
+    setError(null);
+
+    try {
+      const response = await sendRuntimeMessage<{
+        ok?: boolean;
+        error?: string;
+        product?: CompareProduct;
+      }>({
+        type: 'REJECT_COMPARE_CANDIDATE',
+        payload: { productId: selectedProduct.id, marketplace, rejectedUrl },
+      });
+
+      if (!response?.ok || !response.product) {
+        throw new Error(response?.error ?? 'Не удалось отклонить вариант');
+      }
+
+      applyProduct(response.product);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Не удалось отклонить вариант';
+      setError(msg);
+      throw err;
+    } finally {
+      setRejectingMarketplace(null);
+    }
+  };
+
+  const handleSelectCandidate = async (
+    marketplace: ComparisonMarketplace,
+    url: string,
+    hint?: { title?: string; price?: number | null; rating?: number | null },
+  ) => {
     if (!selectedProduct) return;
 
     setSelectingMarketplace(marketplace);
@@ -272,7 +517,14 @@ export function useCompareTab(isActive: boolean) {
         product?: CompareProduct;
       }>({
         type: 'SELECT_COMPARE_CANDIDATE',
-        payload: { productId: selectedProduct.id, marketplace, url },
+        payload: {
+          productId: selectedProduct.id,
+          marketplace,
+          url,
+          title: hint?.title,
+          price: hint?.price,
+          rating: hint?.rating,
+        },
       });
 
       if (!response?.ok || !response.product) {
@@ -282,7 +534,22 @@ export function useCompareTab(isActive: boolean) {
       applyProduct(response.product);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Не удалось выбрать товар';
-      setError(msg);
+      const network =
+        /сеть|network|failed to fetch|timeout|связ/i.test(msg) ||
+        msg.includes('ComparePickNetworkError');
+      if (network && selectedProduct) {
+        const { enqueuePickRetry } = await import('@/lib/pick-retry-queue');
+        await enqueuePickRetry({
+          productId: selectedProduct.id,
+          marketplace,
+          url,
+          title: hint?.title,
+          price: hint?.price,
+        });
+        setError('Сеть недоступна — повтор при следующем открытии');
+      } else {
+        setError(msg);
+      }
       throw err;
     } finally {
       setSelectingMarketplace(null);
@@ -326,11 +593,13 @@ export function useCompareTab(isActive: boolean) {
     applyProduct,
     refreshCompare,
     researchCompare,
+    researchMarketplace,
     refreshAllComparePrices,
     handleSelect,
     handleRemove,
     handleManualLink,
     handleRejectOffer,
+    handleRejectCandidate,
     handleSelectCandidate,
     setError,
   };

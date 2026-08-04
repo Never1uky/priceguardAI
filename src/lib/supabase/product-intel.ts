@@ -75,25 +75,65 @@ export async function analyzeViaProductIntel(params: {
   productId?: string;
   productUrl?: string;
   reviews?: string[];
+  /** false = cache/lookup only, без генерации AI на Edge */
   allowGenerate?: boolean;
   forcePremium?: boolean;
+  /** Явный action: 'lookup' = только кэш по marketplace+productId */
+  action?: 'analyze' | 'lookup';
 }): Promise<{
   card: ProductIntelCardDto;
   analysis: FullProductAnalysis | null;
 } | null> {
   const premium = params.forcePremium ?? (await isPremium());
-  const data = await callEdgeSafe<ProductIntelAnalyzeResponse>('product-intel', {
-    action: 'analyze',
-    url: params.url,
-    marketplace: params.marketplace,
-    productId: params.productId,
-    productUrl: params.productUrl ?? params.url,
-    reviews: params.reviews,
-    allowGenerate: params.allowGenerate !== false,
-    isPremium: premium,
-  });
+  const action = params.action ?? 'analyze';
 
-  if (!data?.ok || !data.card) return null;
+  const body =
+    action === 'lookup'
+      ? {
+          action: 'lookup' as const,
+          marketplace: params.marketplace,
+          productId: params.productId,
+        }
+      : {
+          action: 'analyze' as const,
+          url: params.url,
+          marketplace: params.marketplace,
+          productId: params.productId,
+          productUrl: params.productUrl ?? params.url,
+          reviews: params.reviews,
+          allowGenerate: params.allowGenerate !== false,
+          isPremium: premium,
+        };
+
+  const data = await callEdgeSafe<ProductIntelAnalyzeResponse>('product-intel', body);
+
+  if (!data?.ok) return null;
+
+  // lookup returns { analysis } without card wrapper sometimes
+  if (action === 'lookup') {
+    const analysis = asAnalysis(
+      (data.analysis as Partial<FullProductAnalysis> | null | undefined) ??
+        data.card?.analysis,
+    );
+    if (!analysis) return null;
+    const card: ProductIntelCardDto = data.card ?? {
+      marketplace: params.marketplace!,
+      productId: String(params.productId ?? ''),
+      productKey: `${params.marketplace}:${params.productId}`,
+      url: params.productUrl ?? params.url,
+      title: '',
+      price: null,
+      rating: null,
+      imageUrl: null,
+      analysis,
+      fromCache: true,
+      analysisStatus: 'ready',
+      analyzedAt: analysis.analyzedAt,
+    };
+    return { card: { ...card, fromCache: true, analysisStatus: 'ready' }, analysis };
+  }
+
+  if (!data.card) return null;
   return {
     card: data.card,
     analysis: asAnalysis(data.card.analysis),

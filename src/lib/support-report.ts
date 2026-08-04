@@ -34,6 +34,9 @@ export function shouldReportExtensionError(message: string): boolean {
     /требуется вход/,
     /нужно войти/,
     /лимит бесплатной/,
+    /лимит:/,
+    /лимит\s+\d+/,
+    /товаров в «?мои товары/,
     /оформите premium/,
     /недостаточно отзывов/,
     /нет данных товара/,
@@ -43,6 +46,9 @@ export function shouldReportExtensionError(message: string): boolean {
     /supabase не настроен/,
     /networkerror|failed to fetch/,
     /ошибка связи с расширением/,
+    /не удалось добавить в сравнение/,
+    /уже в «?мои товары/,
+    /удалите лишние/,
   ];
 
   return !skipPatterns.some((re) => re.test(m));

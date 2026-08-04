@@ -7,8 +7,18 @@ import {
   updateCompareProduct,
 } from '@/lib/comparison-storage';
 import { resolveAndAddCompareProduct } from '@/lib/compare-resolve';
-import { clearAllBoundTargets } from '@/lib/candidate-pool';
-import type { CompareProduct, CompareProductHint, MarketplaceOffer } from '@/types/comparison';
+import {
+  clearBoundOffer,
+  isResearchPreservedSlot,
+  researchClearAutoOnly,
+} from '@/lib/candidate-pool';
+import { isSameProductPage } from '@/lib/reviews/tab-resolver';
+import type {
+  CompareProduct,
+  CompareProductHint,
+  ComparisonMarketplace,
+  MarketplaceOffer,
+} from '@/types/comparison';
 
 export interface EnsureCompareResult {
   product: CompareProduct;
@@ -20,6 +30,10 @@ export interface RefreshCompareOptions {
   onProgress?: (product: CompareProduct) => Promise<void> | void;
   /** refresh = цены по bound; research = полный поиск */
   mode?: 'refresh' | 'research';
+  /** Skip Premium Scrappey unlocker (client backup / periodic) */
+  skipUnlocker?: boolean;
+  /** Restrict target search to these marketplaces */
+  onlyMarketplaces?: ComparisonMarketplace[];
 }
 
 /** Добавить товар в сравнение и при необходимости запустить поиск (один раз, с кэшем). */
@@ -69,6 +83,8 @@ export async function refreshCompareProduct(
     force,
     mode: options?.mode ?? 'refresh',
     onProgress: options?.onProgress,
+    skipUnlocker: options?.skipUnlocker,
+    onlyMarketplaces: options?.onlyMarketplaces,
   });
   const withTimestamp: CompareProduct = { ...updated, comparedAt: Date.now() };
   await updateCompareProduct(withTimestamp);
@@ -81,11 +97,36 @@ export async function researchCompareProduct(
   product: CompareProduct,
   options?: RefreshCompareOptions,
 ): Promise<EnsureCompareResult> {
-  const cleared = clearAllBoundTargets(product);
+  const cleared = researchClearAutoOnly(product);
   await updateCompareProduct(cleared);
   return refreshCompareProduct(cleared, true, {
     ...options,
     mode: 'research',
+    onlyMarketplaces: undefined,
+  });
+}
+
+/** Сбросить один авто-слот и найти товар только на этой площадке. */
+export async function researchSingleMarketplace(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  options?: RefreshCompareOptions,
+): Promise<EnsureCompareResult> {
+  if (marketplace === product.sourceMarketplace) {
+    return refreshCompareProduct(product, true, {
+      ...options,
+      mode: 'refresh',
+    });
+  }
+
+  const cleared = isResearchPreservedSlot(product, marketplace)
+    ? product
+    : clearBoundOffer(product, marketplace, { clearPool: true });
+  await updateCompareProduct(cleared);
+  return refreshCompareProduct(cleared, true, {
+    ...options,
+    mode: 'research',
+    onlyMarketplaces: [marketplace],
   });
 }
 
@@ -93,7 +134,11 @@ export async function findCompareProductByUrl(url: string): Promise<CompareProdu
   const products = await getCompareProducts();
   const trimmed = url.trim();
   return (
-    products.find((p) => p.sourceUrl === trimmed || p.sourceUrl.split('?')[0] === trimmed.split('?')[0]) ??
-    null
+    products.find(
+      (p) =>
+        p.sourceUrl === trimmed ||
+        p.sourceUrl.split('?')[0] === trimmed.split('?')[0] ||
+        isSameProductPage(p.sourceUrl, trimmed),
+    ) ?? null
   );
 }

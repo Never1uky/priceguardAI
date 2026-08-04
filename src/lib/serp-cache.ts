@@ -1,10 +1,10 @@
 /**
- * Кэш результатов поиска (SERP) в chrome.storage.local — TTL 1 час.
+ * Кэш результатов поиска (SERP) в chrome.storage.local — TTL 45 мин.
  * Кэшируем только успешные находки / manual pick — не «не найдено».
  */
 import type { ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 
-export const SERP_CACHE_TTL_MS = 60 * 60 * 1000;
+export const SERP_CACHE_TTL_MS = 45 * 60 * 1000;
 const SERP_CACHE_KEY = 'priceguard_serp_cache_v1';
 const MAX_ENTRIES = 80;
 

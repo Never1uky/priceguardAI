@@ -18,9 +18,11 @@ npx supabase secrets set TELEGRAM_SUPPORT_CHAT_ID=ваш_telegram_user_id
 npx supabase functions deploy support-webhook --project-ref ihlfvpocwobvcpxbypsd
 
 $TOKEN = "ТОКЕН_priceguard_supportbot"
+$SECRET = "ваш-TELEGRAM_SUPPORT_WEBHOOK_SECRET"
 $URL = "https://ihlfvpocwobvcpxbypsd.supabase.co/functions/v1/support-webhook"
 curl.exe "https://api.telegram.org/bot$TOKEN/setWebhook" `
   -d "url=$URL" `
+  -d "secret_token=$SECRET" `
   -d "allowed_updates=[`"message`",`"callback_query`"]"
 ```
 
@@ -33,17 +35,17 @@ curl.exe "https://ihlfvpocwobvcpxbypsd.supabase.co/functions/v1/support-webhook"
 
 ## BotFather → /setcommands для @priceguard_supportbot
 
-Сейчас в меню только `start` / `help`. **Замените** на:
+Публичные команды (без `/status` — список товаров только в alerts-боте):
 
 ```
 start - Главное меню поддержки
 help - Справка
-status - Мои отслеживаемые товары
 premium - Тарифы Premium
+mykey - Лицензионный ключ
 feedback - Отзыв или предложение
 ```
 
-**Убрать** (если были): chatid и любые команды алертов — они у @PriceGuardAlertsBot.
+`/status` можно оставить в коде как soft-redirect на @PriceGuardAlertsBot, но **не** добавлять в BotFather.
 
 ## Команды и inline-кнопки
 
@@ -53,13 +55,17 @@ feedback - Отзыв или предложение
 | 👑 Подписка Premium | Цены 299 ₽/мес · 2490 ₽/год |
 | 🛠 Сообщить о проблеме | Ждёт текст → пересылает вам |
 | ⭐ Отзыв | Ждёт текст → пересылает вам |
-| 📋 Мои товары | `/status` (нужна привязка Chat ID в расширении) |
 | ℹ️ Справка | `/help` |
+| 📉 Бот алертов | Deep-link @PriceGuardAlertsBot |
 | `/premium` | То же, что кнопка Premium |
 | `/feedback` | Режим отзыва |
+| `/mykey` | Ключ лицензии (если привязан Chat ID) |
+| `/status` | Redirect: товары → @PriceGuardAlertsBot |
 | `/cancel` | Отмена режима отзыва |
 
 Тексты без FAQ автоматически уходят в `TELEGRAM_SUPPORT_CHAT_ID`.
+
+FAQ (автоответы в коде `support-bot.ts`): Premium, Telegram-алерты, troubleshooting, **пустой поиск / VPN / adblock**, отзывы.
 
 ## Как отвечать на обращения (админ)
 
@@ -68,7 +74,7 @@ feedback - Отзыв или предложение
 1. **Reply** на сообщение «Обращение в поддержку» — текст ответа уйдёт пользователю.
 2. Или команда: `/reply 487547625 ваш текст ответа`
 
-Обычные команды (`/mykey`, `/status`, `/premium` …) работают и из админ-чата — админ-режим включается только для `/reply` и Reply на обращение.
+Обычные команды (`/mykey`, `/premium` …) работают и из админ-чата — админ-режим включается только для `/reply` и Reply на обращение.
 
 Пользователь увидит: «Ответ поддержки: …».
 
@@ -77,5 +83,3 @@ feedback - Отзыв или предложение
 ```bash
 npx supabase functions deploy support-webhook --project-ref ihlfvpocwobvcpxbypsd
 ```
-
-(при смене FAQ алертов — ещё `telegram-webhook`).

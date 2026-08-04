@@ -1,31 +1,44 @@
-# @PriceGuardAlertsBot — алерты, product intel, /start webhook
+# @PriceGuardAlertsBot — алерты, product intel, Reply Keyboard, FAQ, status cards
 #
 # Деплой:
 #   npx supabase db push
-#   npx supabase functions deploy telegram-webhook product-intel reviews-fetch
+#   npx supabase functions deploy telegram-webhook daily-user-digest
 #
-# Миграция сессий: 20260717180000_telegram_product_sessions.sql
+# Миграции:
+#   20260717180000_telegram_product_sessions.sql
+#   20260723215943_digest_enabled.sql
 #
-# Привязать webhook (PowerShell, подставьте TOKEN):
+# Привязать webhook (PowerShell, подставьте TOKEN и SECRET):
 #
 #   $TOKEN = "123:ABC"
+#   $SECRET = "your-TELEGRAM_WEBHOOK_SECRET"
 #   $URL = "https://ihlfvpocwobvcpxbypsd.supabase.co/functions/v1/telegram-webhook"
 #   curl.exe "https://api.telegram.org/bot$TOKEN/setWebhook" `
 #     -d "url=$URL" `
+#     -d "secret_token=$SECRET" `
 #     -d "allowed_updates=[`"message`",`"callback_query`"]"
 #
 # Важно: allowed_updates должен включать callback_query (inline-кнопки).
+# Secret должен совпадать с TELEGRAM_WEBHOOK_SECRET в Edge secrets.
 #
 # Проверка:
 #   curl.exe "https://api.telegram.org/bot$TOKEN/getWebhookInfo"
 #
-# BotFather /setcommands для @PriceGuardAlertsBot:
-# start - Приветствие и Chat ID
-# status - Отслеживаемые товары и цены
-# add - Добавить товар в отслеживание
+# BotFather /setcommands для @PriceGuardAlertsBot (только публичные):
+# start - Приветствие и меню
 # help - Справка
-# chatid - Показать Chat ID
-# cancel - Отмена / выход из AI-чата
+# status - Мои товары
+# add - Добавить товар по ссылке
+#
+# Скрытые (работают, но не в меню BotFather):
+#   /chatid — показать Chat ID
+#   /cancel — выход из AI-чата / отмена /add
+#   /remove — fallback удаления по ссылке (UX: кнопка «Удалить» в «Мои товары»)
+#
+# Reply Keyboard: Мои товары · AI-анализ · FAQ · Помощь
+# /status — до 5 карточек с кнопками Анализ / Сравнение / Удалить
+# Сравнение в боте — только кэш (compare_products / mapping), без scrape
+# Дайджест: FAQ → «Дайджест» → вкл/выкл; cron: scripts/setup-daily-digest-cron.sql
 #
 # Ссылка на товар (без /add) → карточка AI + кнопки
 # /add — только трекинг цены

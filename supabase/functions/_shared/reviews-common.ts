@@ -179,9 +179,8 @@ export function mergeReviewItems(
   };
 }
 
-export function projectScraperCredentials(): { apiKey: string; zone: string } | null {
-  const apiKey = Deno.env.get('BRIGHTDATA_API_KEY')?.trim() ?? '';
-  const zone = Deno.env.get('BRIGHTDATA_ZONE')?.trim() ?? '';
-  if (!apiKey || !zone) return null;
-  return { apiKey, zone };
+export function projectScraperCredentials(): { apiKey: string } | null {
+  const apiKey = Deno.env.get('SCRAPPEY_API_KEY')?.trim() ?? '';
+  if (!apiKey) return null;
+  return { apiKey };
 }

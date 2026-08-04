@@ -30,7 +30,9 @@ const PRODUCT_PAGE_PATTERNS: Record<Exclude<Marketplace, 'yandex_market'>, RegEx
 export function detectMarketplace(url: string): Marketplace | null {
   if (/wildberries\.ru/i.test(url)) return 'wildberries';
   if (/ozon\.ru/i.test(url)) return 'ozon';
-  if (/market\.yandex\.ru/i.test(url)) return 'yandex_market';
+  if (/market\.yandex\.ru/i.test(url) || /(?:^|\/\/)(?:www\.)?ya\.ru/i.test(url)) {
+    return 'yandex_market';
+  }
   return null;
 }
 

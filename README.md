@@ -2,7 +2,7 @@
 
 Chrome-расширение (Manifest V3) + Telegram-боты для покупок на **Wildberries**, **Ozon** и **Яндекс.Маркет**.
 
-**Текущая версия:** 2.20.8
+**Текущая версия:** 0.9.90 (Early access)
 
 ## Что умеет
 
@@ -14,7 +14,7 @@ Chrome-расширение (Manifest V3) + Telegram-боты для покуп�
 - Поддержка: **@priceguard_supportbot**
 
 Free: до 5 отслеживаемых, до **3** AI-анализов/сутки (после входа).  
-Premium: без лимита AI и отслеживания, приоритет серверной проверки.
+Premium: без лимита AI, до **50** товаров, приоритет серверной проверки.
 
 ## Стек
 
@@ -40,7 +40,7 @@ npm run dev
 npm run package:zip
 ```
 
-Артефакт: `priceguard-ai-v{version}.zip` в корне проекта (сейчас `priceguard-ai-v2.20.8.zip`).
+Артефакт: `priceguard-ai-v{version}.zip` в корне проекта (сейчас `priceguard-ai-v0.9.90.zip`).
 
 ## Документация
 

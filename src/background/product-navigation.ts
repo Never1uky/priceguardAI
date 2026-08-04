@@ -30,7 +30,13 @@ function handleNavigation(tabId: number, url: string): void {
   broadcastProductPageChanged(tabId, url);
 }
 
+let navigationSetupDone = false;
+
+/** Идемпотентно: SW может вызвать setup несколько раз (module + onInstalled/onStartup). */
 export function setupProductPageNavigation(): void {
+  if (navigationSetupDone) return;
+  navigationSetupDone = true;
+
   chrome.webNavigation.onCompleted.addListener((details) => {
     if (details.frameId !== 0) return;
     handleNavigation(details.tabId, details.url);

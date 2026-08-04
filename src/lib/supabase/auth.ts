@@ -5,8 +5,22 @@
 import { createClient, type Session, type SupabaseClient, type User } from '@supabase/supabase-js';
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import { runPostLoginHooks, teardownPostLogin } from '@/lib/supabase/post-login';
+import { isContextInvalidatedError, isExtensionContextValid } from '@/lib/extension-context';
 
 const AUTH_STORAGE_KEY = 'priceguard_supabase_auth';
+
+/** Content scripts die on extension reload — never run auto-refresh timers there. */
+function isContentScriptWorld(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      typeof location !== 'undefined' &&
+      location.protocol !== 'chrome-extension:'
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** Домены, куда письма Supabase без своего SMTP часто не доходят (РФ). */
 const UNRELIABLE_AUTH_EMAIL_DOMAINS = new Set([
@@ -33,14 +47,32 @@ export function isUnreliableAuthEmail(email: string): boolean {
 
 const chromeStorageAdapter = {
   getItem: async (key: string): Promise<string | null> => {
-    const stored = await chrome.storage.local.get(key);
-    return (stored[key] as string | undefined) ?? null;
+    try {
+      if (!isExtensionContextValid()) return null;
+      const stored = await chrome.storage.local.get(key);
+      return (stored[key] as string | undefined) ?? null;
+    } catch (error) {
+      if (isContextInvalidatedError(error)) return null;
+      throw error;
+    }
   },
   setItem: async (key: string, value: string): Promise<void> => {
-    await chrome.storage.local.set({ [key]: value });
+    try {
+      if (!isExtensionContextValid()) return;
+      await chrome.storage.local.set({ [key]: value });
+    } catch (error) {
+      if (isContextInvalidatedError(error)) return;
+      throw error;
+    }
   },
   removeItem: async (key: string): Promise<void> => {
-    await chrome.storage.local.remove(key);
+    try {
+      if (!isExtensionContextValid()) return;
+      await chrome.storage.local.remove(key);
+    } catch (error) {
+      if (isContextInvalidatedError(error)) return;
+      throw error;
+    }
   },
 };
 
@@ -56,7 +88,7 @@ export function getSupabaseAuthClient(): SupabaseClient | null {
         storage: chromeStorageAdapter,
         storageKey: AUTH_STORAGE_KEY,
         persistSession: true,
-        autoRefreshToken: true,
+        autoRefreshToken: !isContentScriptWorld(),
         detectSessionInUrl: false,
         flowType: 'pkce',
       },

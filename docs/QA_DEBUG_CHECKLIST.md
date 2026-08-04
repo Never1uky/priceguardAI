@@ -1,4 +1,4 @@
-﻿# PriceGuard AI — полный debug и QA-чеклист
+# PriceGuard AI — полный debug и QA-чеклист
 
 Версия: **2.20.8**  
 Дата: 17 июля 2026
@@ -33,7 +33,7 @@ npm run package:zip
 | # | Шаг | Команда / действие | Ожидание | ✓ |
 |---|-----|-------------------|----------|---|
 | 0.1 | TypeScript | `npx tsc --noEmit` | exit 0 | ☐ |
-| 0.2 | Юнит-тесты | `npm run test` | 82+ passed | ☐ |
+| 0.2 | Юнит-тесты | `npm run test` | 160+ passed | ☐ |
 | 0.3 | Production build | `npm run build` | dist/ без ошибок | ☐ |
 | 0.4 | Preflight script | `npm run qa:preflight` | все ✓ | ☐ |
 | 0.5 | Версии совпадают | package.json = manifest.json = zip | 2.20.8 | ☐ |
@@ -131,10 +131,10 @@ npm run package:zip
 | 3.16 | Анализ отзывов | WB товар с отзывами | вердикт, pros/cons | ☐ |
 | 3.17 | Кэш local | Повторный анализ | fromCache, быстро | ☐ |
 | 3.18 | Кэш Supabase | Другой device_id, тот же товар | fromCache remote | ☐ |
-| 3.19 | Квота free | 6-й AI-запрос за сутки | сообщение о лимите | ☐ |
+| 3.19 | Квота free | 4-й AI-запрос за сутки (лимит 3/day) | сообщение о лимите | ☐ |
 | 3.20 | Локальный fallback | Supabase выключен / offline | эвристический анализ | ☐ |
-| 3.21 | Полный анализ | Free user | Premium upsell, кнопка disabled | ☐ |
-| 3.22 | Полный анализ | Premium / demo key | quality score, аналоги | ☐ |
+| 3.21 | Полный анализ | Free в рамках 3/day | вердикт / quality; 4-й → лимит | ☐ |
+| 3.22 | Полный анализ | Premium (после ЮKassa / license) | quality score, аналоги, без дневного лимита | ☐ |
 | 3.23 | AI proxy test | `node scripts/test-ai-proxy.mjs` | ok: true | ☐ |
 
 ### Аккаунт и синхронизация
@@ -151,10 +151,10 @@ npm run package:zip
 
 | # | Шаг | Действие | Ожидание | ✓ |
 |---|-----|----------|----------|---|
-| 3.29 | Demo key | PREMIUM-DEMO-… | tier=premium | ☐ |
+| 3.29 | License key (после ЮKassa) | Вставить выданный `PGAI-…` (нужен вход) | tier=premium | ☐ |
 | 3.30 | Лимиты сняты | >5 tracked, AI | без блокировки | ☐ |
-| 3.31 | YooKassa (staging) | Создать платёж | redirect, check-payment | ☐ |
-| 3.32 | License validate | validate-license edge | ok + expiresAt | ☐ |
+| 3.31 | YooKassa (test shop) | См. `docs/YOOKASSA_SMOKE.md` | redirect, webhook, Premium | ☐ |
+| 3.32 | License validate | validate-license edge + JWT | ok + expiresAt | ☐ |
 
 ### Настройки
 
@@ -256,6 +256,35 @@ chrome.storage.local.get('priceguard_device_id', console.log);
 E2E_LIVE=1 npm run test -- src/e2e/live-pipeline.test.ts
 E2E_AI_LIVE=1 npm run test -- src/e2e/live-pipeline.test.ts
 ```
+
+### Scrappey / server unlocker smoke
+
+| # | Шаг | Команда / действие | Ожидание | ✓ |
+|---|-----|-------------------|----------|---|
+| 6.1 | Local Scrappey | `SCRAPPEY_API_KEY=… npm run smoke:scrappey` | Ozon/YM/WB HTML + price parse | ☐ |
+| 6.2 | Edge product-intel Ozon | POST product-intel analyze URL | `ok` + `card.price` | ☐ |
+| 6.3 | Edge product-intel WB | POST product-intel WB detail URL | `ok` + `card.price` | ☐ |
+| 6.4 | Edge reviews-fetch Ozon | POST reviews-fetch | `ok`, `usedUnlocker: true` | ☐ |
+| 6.5 | Cron update-prices | POST + `x-cron-secret` | `scrappeyConfigured: true` | ☐ |
+
+### Telegram product-intel (@PriceGuardAlertsBot)
+
+| # | Шаг | Действие | Ожидание | ✓ |
+|---|-----|----------|----------|---|
+| 6.6 | /start | Команда боту | Chat ID + инструкция | ☐ |
+| 6.7 | Ссылка на товар | URL WB/Ozon/YM | карточка + кнопки `pi:*` | ☐ |
+| 6.8 | pi:cheap | Callback «Где дешевле» | офферы / Scrappey path | ☐ |
+| 6.9 | pi:hist | Callback «История» | точки / нет данных | ☐ |
+| 6.10 | pi:ask | Вопрос AI по товару | ответ через ai-proxy | ☐ |
+| 6.11 | /add + /status | Добавить товар, статус | в списке, last_checked | ☐ |
+| 6.12 | Support bot | @priceguard_supportbot /help | команды, /mykey | ☐ |
+
+### Landing HTTP
+
+| # | URL | Ожидание | ✓ |
+|---|-----|----------|---|
+| 6.13 | `/` `/offer` `/privacy` `/requisites` `/payment/success` | HTTP 200 | ☐ |
+| 6.14 | `/privacy` текст | Scrappey (не Bright Data), 299/2490 | ☐ |
 
 ---
 

@@ -14,8 +14,10 @@ describe('analyzePriceHistory fake discount', () => {
   it('short history → unconfirmed strikethrough, not fake', () => {
     const insight = analyzePriceHistory(hist(215_609), 215_609, 277_490);
     expect(insight.kind).toBe('unconfirmed_strikethrough');
-    expect(insight.label).toMatch(/не подтверждена/i);
-    expect(insight.detail).toMatch(/1 проверк/);
+    expect(insight.label).toBe('Скидка не подтверждена историей');
+    expect(insight.detail).toMatch(/рано судить|проверк/i);
+    expect(insight.label).not.toMatch(/зачёркнутая/i);
+    expect(insight.detail).not.toMatch(/зачёркнутая/i);
   });
 
   it('long history without strike → fake_discount', () => {
@@ -23,6 +25,8 @@ describe('analyzePriceHistory fake discount', () => {
     expect(prices.length).toBeGreaterThanOrEqual(FAKE_DISCOUNT_MIN_HISTORY);
     const insight = analyzePriceHistory(hist(...prices), 215_609, 277_490);
     expect(insight.kind).toBe('fake_discount');
+    expect(insight.detail).toMatch(/до скидки/i);
+    expect(insight.detail).not.toMatch(/зачёркнутая/i);
   });
 
   it('strike seen in history (±2%) → not fake', () => {

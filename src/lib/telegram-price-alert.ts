@@ -6,6 +6,7 @@
 import { callEdgeSafe } from '@/lib/supabase/edge';
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import { makeReferralLinkAsync } from '@/utils/referral';
+import { telemetry } from '@/lib/telemetry/log';
 import type { Marketplace } from '@/types/product';
 
 export interface TelegramPriceAlertPayload {
@@ -14,7 +15,7 @@ export interface TelegramPriceAlertPayload {
   url?: string;
   marketplace?: Marketplace;
   /** Структурированный алерт — Edge сам соберёт красивый текст + кнопку */
-  type?: 'price_drop' | 'target_price' | 'generic' | 'cheaper_elsewhere';
+  type?: 'price_drop' | 'compare_price_drop' | 'target_price' | 'generic' | 'cheaper_elsewhere';
   title?: string;
   oldPrice?: number;
   newPrice?: number;
@@ -55,8 +56,26 @@ export async function sendTelegramPriceAlert(
   );
 
   if (!res?.ok) {
+    telemetry.warn({
+      stage: 'telegram',
+      name: 'TELEGRAM_SEND',
+      success: false,
+      marketplace: payload.marketplace,
+      errorCode: 'telegram_send_failed',
+      errorMessage: res?.error,
+      data: { type: payload.type ?? 'generic' },
+    });
     return { sent: false, error: res?.error ?? 'Не удалось отправить в Telegram' };
   }
 
-  return { sent: Boolean(res.sent), error: res.error };
+  const sent = Boolean(res.sent);
+  telemetry.event('TELEGRAM_SEND', {
+    level: sent ? 'info' : 'warn',
+    stage: 'telegram',
+    success: sent,
+    marketplace: payload.marketplace,
+    data: { type: payload.type ?? 'generic' },
+  });
+
+  return { sent, error: res.error };
 }

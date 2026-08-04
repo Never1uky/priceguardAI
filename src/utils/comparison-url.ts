@@ -4,7 +4,14 @@ import { toCanonicalProductUrl } from '@/utils/product-url';
 const MARKETPLACE_HOSTS: Record<ComparisonMarketplace, RegExp> = {
   wildberries: /wildberries\.ru/i,
   ozon: /ozon\.ru/i,
-  yandex_market: /market\.yandex\.(ru|com)/i,
+  // ya.ru — короткие ссылки Маркета (как в safe-marketplace-url)
+  yandex_market: /market\.yandex\.(ru|com)|(?:^|\/\/)(?:www\.)?ya\.ru/i,
+};
+
+const MARKETPLACE_ORIGIN: Record<ComparisonMarketplace, string> = {
+  wildberries: 'https://www.wildberries.ru',
+  ozon: 'https://www.ozon.ru',
+  yandex_market: 'https://market.yandex.ru',
 };
 
 export function detectComparisonMarketplace(url: string): ComparisonMarketplace | null {
@@ -15,6 +22,33 @@ export function detectComparisonMarketplace(url: string): ComparisonMarketplace 
     if (pattern.test(url)) return marketplace;
   }
   return null;
+}
+
+/**
+ * Trim + absolute URL for compare pick / manual paste.
+ * Relative paths resolve against the selected marketplace origin.
+ */
+export function resolveCompareCandidateUrl(
+  raw: string,
+  marketplace?: ComparisonMarketplace | null,
+): string {
+  const trimmed = raw.trim().replace(/^['"]+|['"]+$/g, '');
+  if (!trimmed) return '';
+
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+
+  if (trimmed.startsWith('/') && marketplace) {
+    return `${MARKETPLACE_ORIGIN[marketplace]}${trimmed}`;
+  }
+
+  // Bare path fragment (product--… / catalog/…)
+  if (marketplace && /^[\w./%-]+/.test(trimmed) && !/\s/.test(trimmed)) {
+    const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return `${MARKETPLACE_ORIGIN[marketplace]}${path}`;
+  }
+
+  return trimmed;
 }
 
 export function isSupportedCompareUrl(url: string): boolean {
@@ -69,7 +103,11 @@ export function buildMarketplaceSearchUrl(
     case 'wildberries':
       return `https://www.wildberries.ru/catalog/0/search.aspx?search=${encoded}`;
     case 'ozon':
-      return `https://www.ozon.ru/search/?text=${encoded}`;
+      // from_global + deny_* — меньше редиректов на /category/…prediction
+      return (
+        `https://www.ozon.ru/search/?text=${encoded}` +
+        `&deny_category_prediction=true&from_global=true&__rr=1`
+      );
     case 'yandex_market':
       return `https://market.yandex.ru/search?text=${encoded}`;
   }

@@ -3,6 +3,8 @@
  * На карточке крупная зелёная цена часто «с Пэй» — для сравнения предпочитаем basePrice, если есть.
  */
 
+import { parseListingRubNumbers } from '@/lib/listing-rub-prices';
+
 export interface YandexPriceBreakdown {
   /** Цена для сравнения и алертов (предпочтительно без Пэй) */
   price: number;
@@ -13,12 +15,6 @@ export interface YandexPriceBreakdown {
 
 const PAY_HINT = /п[еэ]й|pay|ya\.?pay|яндекс.?п[еэ]й/i;
 
-function parseRubNumbers(text: string): number[] {
-  return [...text.replace(/\u00a0/g, ' ').matchAll(/(\d[\d\s]*)\s*(?:₽|руб)/gi)]
-    .map((m) => parseInt(m[1].replace(/\s/g, ''), 10))
-    .filter((n) => Number.isFinite(n) && n >= 50 && n < 50_000_000);
-}
-
 /**
  * Из текста ценового блока (DOM) вытащить base / pay / old.
  */
@@ -26,7 +22,7 @@ export function parseYandexPriceBlockText(blockText: string): YandexPriceBreakdo
   const text = blockText.replace(/\u00a0/g, ' ').trim();
   if (!text) return null;
 
-  const all = parseRubNumbers(text);
+  const all = parseListingRubNumbers(text);
   if (!all.length) return null;
 
   const unique = [...new Set(all)].sort((a, b) => a - b);
@@ -43,7 +39,7 @@ export function parseYandexPriceBlockText(blockText: string): YandexPriceBreakdo
     oldPrice = maxAll;
   }
 
-  const working = oldPrice ? unique.filter((p) => p < oldPrice! * 0.98) : unique;
+  const working = oldPrice ? unique.filter((p) => p < oldPrice! * 0.98) : [...unique];
   if (!working.length) working.push(minAll);
 
   // Явный «Пэй» у блока: меньшая цена = Pay; если есть ещё одна — base

@@ -1,6 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getCompareProducts } from '@/lib/comparison-storage';
+import { getCompareProductImageSources, seedProductImageSync } from '@/lib/product-image';
 import { getTrackedProducts } from '@/lib/storage';
 import { formatPrice } from '@/lib/utils';
 import { ProductImage } from '@/popup/components/ProductImage';
@@ -17,11 +18,12 @@ export interface ReviewProductPickerProps {
   onSelect: (product: Product) => void;
 }
 
-type PickerItem = Product & { sourceLabel: 'Список' | 'Сравнение' };
+type PickerItem = Product & { sourceLabel: 'Мои товары' | 'Из сравнения' };
 
 function compareToProduct(c: CompareProduct): Product {
   const offer = c.sourceOffer ?? c.marketplaceOffers?.[c.sourceMarketplace];
-  return {
+  const images = getCompareProductImageSources(c);
+  const base: Product = {
     id: c.id,
     marketplace: c.sourceMarketplace as Marketplace,
     title: c.title,
@@ -29,9 +31,15 @@ function compareToProduct(c: CompareProduct): Product {
     currency: 'RUB',
     article: c.article ?? c.articlesByMarketplace?.[c.sourceMarketplace] ?? '',
     url: c.sourceUrl,
-    imageUrl: offer?.imageUrl,
+    imageUrl: images.imageUrl || offer?.imageUrl,
+    imageUrlAlternatives: images.imageUrlAlternatives,
     scrapedAt: c.addedAt,
   };
+  return seedProductImageSync(base);
+}
+
+function trackedToPickerItem(p: TrackedProduct): PickerItem {
+  return { ...seedProductImageSync(p), sourceLabel: 'Мои товары' };
 }
 
 function dedupeKey(p: Product): string {
@@ -47,10 +55,11 @@ function buildPickerList(tracked: TrackedProduct[], compare: CompareProduct[]): 
   const items: PickerItem[] = [];
 
   for (const p of tracked) {
-    const key = dedupeKey(p);
+    const item = trackedToPickerItem(p);
+    const key = dedupeKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ ...p, sourceLabel: 'Список' });
+    items.push(item);
   }
 
   for (const c of compare) {
@@ -58,7 +67,7 @@ function buildPickerList(tracked: TrackedProduct[], compare: CompareProduct[]): 
     const key = dedupeKey(product);
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ ...product, sourceLabel: 'Сравнение' });
+    items.push({ ...product, sourceLabel: 'Из сравнения' });
   }
 
   return items;
@@ -103,7 +112,7 @@ export function ReviewProductPicker({
   if (items.length === 0) {
     return (
       <p className="pg-body py-3 text-center text-muted-foreground">
-        Добавьте товар во вкладку Список или Сравнение
+        Добавьте товар в «Мои товары» или сравнение
       </p>
     );
   }

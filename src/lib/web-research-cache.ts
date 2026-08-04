@@ -1,11 +1,11 @@
 /**
- * Локальный кэш веб-исследования Sonar (TTL 7 дней).
+ * Локальный кэш веб-исследования Sonar (TTL 14 дней).
  * Ключ: marketplace + productId — не зависит от hash отзывов.
  */
 
 import type { WebResearchSource } from '@/types/full-analysis';
 import type { Marketplace } from '@/types/product';
-import { PRODUCT_CACHE_TTL_MS } from '@/lib/supabase/product-cache';
+import { WEB_RESEARCH_CACHE_TTL_MS } from '@/lib/supabase/product-cache';
 
 export interface WebResearchCacheEntry {
   text: string;
@@ -20,7 +20,7 @@ function cacheKey(marketplace: Marketplace | string, productId: string): string 
 }
 
 export function isWebResearchFresh(savedAt: number): boolean {
-  return Date.now() - savedAt < PRODUCT_CACHE_TTL_MS;
+  return Date.now() - savedAt < WEB_RESEARCH_CACHE_TTL_MS;
 }
 
 /** Прочитать локальный кэш веб-исследования. */

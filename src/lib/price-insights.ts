@@ -29,7 +29,7 @@ const INSIGHT_LABELS: Record<PriceInsightKind, string> = {
   average: 'Средняя цена',
   high_price: 'Цена выше обычной',
   fake_discount: 'Возможна фейковая скидка',
-  unconfirmed_strikethrough: 'Зачёркнутая цена не подтверждена историей',
+  unconfirmed_strikethrough: 'Скидка не подтверждена историей',
 };
 
 /** Была ли зачёркнутая цена (±2%) хотя бы раз в истории наблюдений */
@@ -59,24 +59,24 @@ export function analyzePriceHistory(
   const strike = hasStrike ? oldPrice! : undefined;
   const strikeSeen = strike ? strikethroughSeenInHistory(history, strike) : true;
 
-  // Короткая история + зачёркнутая не встречалась → мягкое предупреждение (не «фейк»)
+  // Короткая история + цена «до скидки» не встречалась → мягкое предупреждение (не «фейк»)
   if (strike && !strikeSeen && history.length < FAKE_DISCOUNT_MIN_HISTORY) {
     return {
       kind: 'unconfirmed_strikethrough',
       label: INSIGHT_LABELS.unconfirmed_strikethrough,
-      detail: `Зачёркнутая цена не подтверждена историей (${history.length} ${pluralChecks(history.length)})`,
+      detail: `Пока ${history.length} ${pluralChecks(history.length)} — рано судить о реальной скидке`,
       minPrice,
       maxPrice,
       avgPrice,
     };
   }
 
-  // Достаточная история: зачёркнутая никогда не наблюдалась (±2%)
+  // Достаточная история: цена «до скидки» никогда не наблюдалась (±2%)
   if (strike && !strikeSeen && history.length >= FAKE_DISCOUNT_MIN_HISTORY) {
     return {
       kind: 'fake_discount',
       label: INSIGHT_LABELS.fake_discount,
-      detail: `Зачёркнутая ${formatRub(strike)} не встречалась за ${history.length} проверок (макс. в истории ${formatRub(maxPrice!)})`,
+      detail: `Цена «до скидки» ${formatRub(strike)} не встречалась за ${history.length} проверок (макс. в истории ${formatRub(maxPrice!)})`,
       minPrice,
       maxPrice,
       avgPrice,

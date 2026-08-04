@@ -37,4 +37,23 @@ describe('ozon prices', () => {
     expect(prices.basePrice).toBe(15_990);
     expect(prices.oldPrice).toBe(17_999);
   });
+
+  it('ignores «за 1 шт» unit price when splitting bank vs other banks', () => {
+    const text =
+      '1199 ₽ С банками 1332 ₽ С другими банками 3446 ₽ 600 ₽ за 1 шт';
+    const prices = ozonBreakdownToOfferPrices(parseOzonPriceBlockText(text)!);
+    expect(prices.payPrice).toBe(1_199);
+    expect(prices.basePrice).toBe(1_332);
+    expect(prices.price).toBe(1_332);
+    expect(prices.oldPrice).toBe(3_446);
+  });
+
+  it('numbers: drops pack unit (×2) so it is not bank price', () => {
+    const prices = ozonBreakdownToOfferPrices(
+      ozonPricesFromNumbers([600, 1_199, 1_332, 3_446])!,
+    );
+    expect(prices.payPrice).toBe(1_199);
+    expect(prices.basePrice).toBe(1_332);
+    expect(prices.oldPrice).toBe(3_446);
+  });
 });

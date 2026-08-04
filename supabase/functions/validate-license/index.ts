@@ -30,7 +30,13 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: 'Неверный формат ключа' }, 400);
     }
 
-    const authUser = await requireAuthUser(req, false);
+    const authUser = await requireAuthUser(req, true);
+    if (!authUser) {
+      return jsonResponse(
+        { ok: false, error: 'Войдите во вкладку «Аккаунт», чтобы активировать ключ', code: 'auth_required' },
+        401,
+      );
+    }
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
@@ -56,16 +62,14 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: 'Срок действия ключа истёк' }, 410);
     }
 
-    // Anti-hijack: если ключ уже у другого аккаунта — отказ при попытке bind
-    if (authUser) {
-      const bind = await bindLicenseToUser(supabase, authUser.id, {
-        id: license.id,
-        plan: license.plan,
-        expires_at: license.expires_at,
-      });
-      if (!bind.ok && bind.code === 'LICENSE_OWNED_BY_OTHER') {
-        return jsonResponse({ ok: false, error: bind.error, code: bind.code }, 403);
-      }
+    // Anti-hijack: ключ уже у другого аккаунта — отказ
+    const bind = await bindLicenseToUser(supabase, authUser.id, {
+      id: license.id,
+      plan: license.plan,
+      expires_at: license.expires_at,
+    });
+    if (!bind.ok && bind.code === 'LICENSE_OWNED_BY_OTHER') {
+      return jsonResponse({ ok: false, error: bind.error, code: bind.code }, 403);
     }
 
     const { data: existingActivation } = await supabase
@@ -87,7 +91,7 @@ Deno.serve(async (req) => {
         license_key_id: license.id,
         device_id: deviceId,
         extension_version: body.extensionVersion ?? null,
-        user_id: authUser?.id ?? null,
+        user_id: authUser.id,
       });
 
       if (insertError) {
@@ -100,15 +104,12 @@ Deno.serve(async (req) => {
         .update({ activations_count: license.activations_count + 1 })
         .eq('id', license.id);
     } else {
-      const activationUpdate: Record<string, unknown> = {
-        last_seen_at: new Date().toISOString(),
-      };
-      if (authUser) {
-        activationUpdate.user_id = authUser.id;
-      }
       await supabase
         .from('license_activations')
-        .update(activationUpdate)
+        .update({
+          last_seen_at: new Date().toISOString(),
+          user_id: authUser.id,
+        })
         .eq('license_key_id', license.id)
         .eq('device_id', deviceId);
     }
@@ -123,9 +124,16 @@ Deno.serve(async (req) => {
       expiresAt: expiresAtMs,
       isDemo: license.is_demo,
       isLifetime: license.plan === 'lifetime' && !license.expires_at,
-      accountBound: Boolean(authUser),
+      accountBound: true,
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : 'error';
+    if (msg === 'auth_required' || msg === 'invalid_token') {
+      return jsonResponse(
+        { ok: false, error: 'Войдите во вкладку «Аккаунт», чтобы активировать ключ', code: 'auth_required' },
+        401,
+      );
+    }
     console.error('validate-license:', error);
     return jsonResponse({ ok: false, error: 'Внутренняя ошибка' }, 500);
   }

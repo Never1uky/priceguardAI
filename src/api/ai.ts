@@ -10,7 +10,9 @@ import { ApiError, formatApiErrorForUser } from '@/api/errors';
 import { callEdge, EdgeError } from '@/lib/supabase/edge';
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import { getDeviceId } from '@/lib/supabase/device-id';
+import { AI_AUTH_REQUIRED_MESSAGE, canUseCloudFeatures } from '@/lib/supabase/auth-guard';
 import { AI_REQUEST_DEFAULTS } from '@/lib/ai/schemas';
+import { telemetry } from '@/lib/telemetry/log';
 import type { WebResearchSource } from '@/types/full-analysis';
 
 export type AiProviderName = 'grok' | 'openai';
@@ -30,14 +32,16 @@ export interface SendToAiOptions {
   apiKey?: string;
   temperature?: number;
   maxTokens?: number;
-  /** Premium: двухшаговый Sonar → GPT на сервере */
+  /** @deprecated use sendFullAnalysisViaProxy with webResearch */
   fullAnalysis?: boolean;
 }
+
+export type AiPipeline = 'single' | 'lite' | 'sonar_gpt';
 
 export interface SendToAiResult {
   text: string;
   providerUsed: AiProviderName;
-  pipeline?: 'single' | 'sonar_gpt';
+  pipeline?: AiPipeline;
   webResearchUsed?: boolean;
   webResearchCached?: boolean;
   webResearchText?: string;
@@ -139,6 +143,9 @@ function resolveProviderOrder(settings: AiApiSettings): AiProviderName {
 }
 
 function mapAiProxyErrorMessage(message: string, status?: number): string {
+  if (status === 429 && /глубокого разбора|sonar_daily|веб/i.test(message)) {
+    return message;
+  }
   if (status === 429 || message.includes('лимит')) {
     return 'Превышен лимит AI-запросов (40 в час). Попробуйте позже.';
   }
@@ -180,6 +187,14 @@ async function sendViaProxy(
     });
   }
 
+  if (!(await canUseCloudFeatures())) {
+    throw new ApiError({
+      code: 'unauthorized',
+      retryable: false,
+      userMessage: AI_AUTH_REQUIRED_MESSAGE,
+    });
+  }
+
   let deviceId = '';
   try {
     deviceId = await getDeviceId();
@@ -188,6 +203,8 @@ async function sendViaProxy(
   }
 
   try {
+    const aiStarted = Date.now();
+    const promptChars = systemPrompt.length + userPrompt.length;
     const data = await callEdge<{
       ok: boolean;
       text?: string;
@@ -211,6 +228,14 @@ async function sendViaProxy(
 
     const text = data.text ?? '';
     if (!text.trim()) {
+      telemetry.warn({
+        stage: 'ai',
+        name: 'AI_EMPTY',
+        success: false,
+        elapsedMs: Date.now() - aiStarted,
+        errorCode: 'empty_response',
+        data: { provider, promptChars, fullAnalysis: false },
+      });
       throw new ApiError({
         code: 'empty_response',
         provider: 'AI',
@@ -218,6 +243,19 @@ async function sendViaProxy(
         userMessage: 'AI вернул пустой ответ. Попробуйте ещё раз.',
       });
     }
+    telemetry.info({
+      stage: 'ai',
+      name: 'AI_SUCCESS',
+      success: true,
+      elapsedMs: Date.now() - aiStarted,
+      data: {
+        provider: data.provider ?? provider,
+        pipeline: data.pipeline ?? 'single',
+        promptChars,
+        completionChars: text.length,
+        fullAnalysis: false,
+      },
+    });
     return {
       text,
       providerUsed: (data.provider as AiProviderName) ?? provider,
@@ -225,6 +263,16 @@ async function sendViaProxy(
       webResearchUsed: Boolean(data.webResearchUsed),
     };
   } catch (error) {
+    if (!(error instanceof ApiError)) {
+      telemetry.error({
+        stage: 'ai',
+        name: 'AI_FAILED',
+        success: false,
+        errorCode: error instanceof EdgeError ? String(error.status ?? 'edge') : 'ai_error',
+        error,
+        data: { provider, fullAnalysis: false },
+      });
+    }
     if (error instanceof ApiError) throw error;
     if (error instanceof EdgeError) {
       const retryable = error.status === 429 || error.status === 502 || error.status === 503;
@@ -267,17 +315,26 @@ export async function sendToAIWithFallback(
 }
 
 /**
- * Premium полный анализ: ai-proxy выполняет Sonar → GPT на сервере.
+ * Глубокий разбор: ai-proxy Sonar → GPT (только при webResearch; кэш v3 пропускает Sonar).
  * @throws ApiError
  */
 export async function sendFullAnalysisViaProxy(
   payload: FullAnalysisProxyPayload,
+  options: { webResearch?: boolean } = {},
 ): Promise<SendToAiResult> {
   if (!isCloudAiAvailable()) {
     throw new ApiError({
       code: 'not_configured',
       retryable: false,
       userMessage: 'AI-сервер не настроен. Обратитесь к разработчику расширения.',
+    });
+  }
+
+  if (!(await canUseCloudFeatures())) {
+    throw new ApiError({
+      code: 'unauthorized',
+      retryable: false,
+      userMessage: AI_AUTH_REQUIRED_MESSAGE,
     });
   }
 
@@ -290,15 +347,17 @@ export async function sendFullAnalysisViaProxy(
 
   const settings = await loadAiApiSettings();
   const provider = resolveProviderOrder(settings);
+  const webResearch = options.webResearch !== false;
 
   try {
+    const aiStarted = Date.now();
     const data = await callEdge<{
       ok: boolean;
       text?: string;
       provider?: AiProviderName;
       error?: string;
       code?: string;
-      pipeline?: 'single' | 'sonar_gpt';
+      pipeline?: AiPipeline;
       webResearchUsed?: boolean;
       webResearchCached?: boolean;
       webResearchText?: string;
@@ -306,6 +365,8 @@ export async function sendFullAnalysisViaProxy(
     }>('ai-proxy', {
       provider,
       fullAnalysis: true,
+      webResearch,
+      pipeline: webResearch ? 'sonar_gpt' : 'lite',
       temperature: AI_REQUEST_DEFAULTS.temperature,
       deviceId,
       payload,
@@ -313,6 +374,14 @@ export async function sendFullAnalysisViaProxy(
 
     const text = data.text ?? '';
     if (!text.trim()) {
+      telemetry.warn({
+        stage: 'ai',
+        name: 'AI_EMPTY',
+        success: false,
+        elapsedMs: Date.now() - aiStarted,
+        errorCode: 'empty_response',
+        data: { fullAnalysis: true, webResearch, provider },
+      });
       throw new ApiError({
         code: 'empty_response',
         provider: 'AI',
@@ -321,16 +390,41 @@ export async function sendFullAnalysisViaProxy(
       });
     }
 
+    telemetry.info({
+      stage: 'ai',
+      name: data.webResearchCached ? 'AI_CACHE_HIT' : 'AI_SUCCESS',
+      success: true,
+      elapsedMs: Date.now() - aiStarted,
+      data: {
+        provider: data.provider ?? 'openai',
+        pipeline: data.pipeline ?? (webResearch ? 'sonar_gpt' : 'lite'),
+        completionChars: text.length,
+        fullAnalysis: true,
+        webResearch,
+        webResearchUsed: Boolean(data.webResearchUsed),
+        webResearchCached: Boolean(data.webResearchCached),
+      },
+    });
+
     return {
       text,
       providerUsed: (data.provider as AiProviderName) ?? 'openai',
-      pipeline: data.pipeline ?? 'sonar_gpt',
+      pipeline: data.pipeline ?? (webResearch ? 'sonar_gpt' : 'lite'),
       webResearchUsed: Boolean(data.webResearchUsed),
       webResearchCached: Boolean(data.webResearchCached),
       webResearchText: data.webResearchText,
       webSources: data.webSources,
     };
   } catch (error) {
+    if (!(error instanceof ApiError)) {
+      telemetry.error({
+        stage: 'ai',
+        name: 'AI_FAILED',
+        success: false,
+        error,
+        data: { fullAnalysis: true, webResearch },
+      });
+    }
     if (error instanceof ApiError) throw error;
     if (error instanceof EdgeError) {
       const retryable = error.status === 429 || error.status === 502 || error.status === 503;

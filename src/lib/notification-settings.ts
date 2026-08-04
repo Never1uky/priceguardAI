@@ -4,6 +4,7 @@
 
 import { getPriceAlertSettings, type PriceAlertSettings } from '@/lib/compare-price-alerts';
 import { getTrackedProduct } from '@/lib/storage';
+import { syncAlertSettingsToCloud } from '@/lib/supabase/alert-settings-sync';
 import type { TrackedProduct } from '@/types/product';
 
 const SETTINGS_KEY = 'priceguard_price_alert_settings';
@@ -28,18 +29,35 @@ export function isProductNotificationsEnabled(product: TrackedProduct): boolean 
 
 export async function savePriceAlertSettings(
   patch: Partial<PriceAlertSettings>,
-  options?: { skipCloudSync?: boolean; clearTelegram?: boolean },
-): Promise<PriceAlertSettings> {
+  options?: {
+    skipCloudSync?: boolean;
+    clearTelegram?: boolean;
+    /** Wait for Edge sync (always on when clearTelegram). */
+    awaitCloudSync?: boolean;
+  },
+): Promise<PriceAlertSettings & { cloudSyncOk?: boolean; cloudSyncError?: string }> {
   const current = await getPriceAlertSettings();
   const next = { ...current, ...patch };
   await chrome.storage.local.set({ [SETTINGS_KEY]: next });
 
-  if (!options?.skipCloudSync) {
-    // Free/Premium + Telegram → серверный мониторинг (cron); Premium — приоритет
-    void import('@/lib/supabase/alert-settings-sync').then((m) =>
-      m.syncAlertSettingsToCloud({ clearTelegram: options?.clearTelegram }),
-    );
+  if (options?.skipCloudSync) {
+    return next;
   }
 
+  const shouldAwait = Boolean(options?.clearTelegram || options?.awaitCloudSync);
+
+  if (shouldAwait) {
+    const sync = await syncAlertSettingsToCloud({
+      clearTelegram: options?.clearTelegram,
+    });
+    return {
+      ...next,
+      cloudSyncOk: Boolean(sync?.ok),
+      cloudSyncError: sync?.error,
+    };
+  }
+
+  // Free/Premium + Telegram → серверный мониторинг (cron); Premium — приоритет
+  void syncAlertSettingsToCloud({ clearTelegram: options?.clearTelegram });
   return next;
 }

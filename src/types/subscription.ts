@@ -15,8 +15,14 @@ export interface SubscriptionState {
 
 /** Лимиты бесплатной версии */
 export const FREE_LIMITS = {
-  /** Отслеживаемые товары (план: 3–5, верхняя граница) */
+  /**
+   * Единый лимит «Мои товары» (следить + сравнивать в одном слоте).
+   * maxTrackedProducts / maxCompareProducts оставлены как алиасы для совместимости.
+   */
+  maxMyProducts: 5,
+  /** @deprecated используйте maxMyProducts */
   maxTrackedProducts: 5,
+  /** @deprecated используйте maxMyProducts */
   maxCompareProducts: 5,
   /** @deprecated используйте maxAiRequestsPerDay */
   maxReviewAnalysesPerMonth: 5,
@@ -29,27 +35,35 @@ export const FREE_LIMITS = {
   maxMarketplacesCompare: 3,
 } as const;
 
+/** Лимиты Premium / trial (AI без дневного freemium-cap; товары — потолок) */
+export const PREMIUM_LIMITS = {
+  maxMyProducts: 50,
+  maxTrackedProducts: 50,
+  maxCompareProducts: 50,
+  maxPriceAlerts: 50,
+} as const;
+
 /**
  * План уведомлений:
  * Free — до N товаров, алерты да
- * Premium — без лимита, алерты + приоритет серверной проверки
+ * Premium — до PREMIUM_LIMITS, алерты + приоритет серверной проверки
  */
 export const ALERT_PLAN = {
   free: {
-    maxTracked: FREE_LIMITS.maxTrackedProducts,
+    maxTracked: FREE_LIMITS.maxMyProducts,
     alerts: true,
     priority: false,
     label: 'Алерты · до 5 товаров',
   },
   premium: {
-    maxTracked: Infinity,
+    maxTracked: PREMIUM_LIMITS.maxMyProducts,
     alerts: true,
     priority: true,
-    label: 'Алерты · без лимита · приоритет',
+    label: 'Алерты · до 50 товаров · приоритет',
   },
 } as const;
 
-/** Длительность пробного периода Premium */
+/** Длительность пробного периода Premium (дней). Sync with Edge claim-trial TRIAL_DAYS. */
 export const TRIAL_DAYS = 7;
 
 export const PREMIUM_PLANS = {

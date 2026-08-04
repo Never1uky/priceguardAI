@@ -55,6 +55,8 @@ export interface MarketplaceOffer {
   reviewCount?: number;
   url: string;
   imageUrl?: string;
+  /** Fallback CDN URLs (WB basket hosts) if primary imageUrl 404s */
+  imageUrlAlternatives?: string[];
   /** Краткие характеристики с карточки товара */
   specs?: string;
   found: boolean;
@@ -62,7 +64,16 @@ export interface MarketplaceOffer {
   /** Сходство заголовка с эталоном, 0–100 % — только для алгоритма, не показывать в UI */
   matchConfidence?: number;
   /** Статус уверенности для UI (без процентов) */
-  matchStatus?: 'verified' | 'probable' | 'needs_choice' | 'not_found';
+  matchStatus?:
+    | 'verified'
+    | 'probable'
+    | 'needs_choice'
+    | 'not_found'
+    | 'loading_card'
+    | 'serp_only'
+    | 'oos'
+    | 'blocked'
+    | 'unverified_manual';
   /** Топ кандидатов из выдачи — пул для выбора / альтернатив */
   searchCandidates?: SearchCandidateOffer[];
   /** Требуется ручной выбор из searchCandidates */
@@ -79,6 +90,7 @@ export interface SearchCandidateOffer {
   /** Внутренний priority для ранжирования пула */
   priority?: number;
   imageUrl?: string;
+  imageUrlAlternatives?: string[];
   rating?: number | null;
 }
 

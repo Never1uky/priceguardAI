@@ -1,11 +1,13 @@
 import { ApiError } from '@/api/errors';
 import { analyzeFullViaCloud, canUseCloudFullAnalysis } from '@/lib/ai/full-analysis-cloud';
+import { analyzeFullLocally } from '@/lib/ai/full-analysis-local';
 import {
   FULL_ANALYSIS_SYSTEM_PROMPT,
   buildFullAnalysisUserPrompt,
 } from '@/lib/ai/prompts';
 import { AI_REQUEST_DEFAULTS } from '@/lib/ai/schemas';
 import { isPremium } from '@/lib/subscription';
+import { minReviewsForFullAnalysis } from '@/types/review-analysis';
 import type { FullAnalysisInput, FullProductAnalysis } from '@/types/full-analysis';
 
 export type FullAnalysisSource = 'cloud' | 'local' | 'cache' | 'stale_cache';
@@ -23,7 +25,13 @@ export interface FullAnalysisRunOptions {
   /** Последний кэш для fallback при сбое API */
   staleCachedResult?: FullProductAnalysis | null;
   staleCacheSavedAt?: number;
-  /** Принудительно Premium pipeline (иначе определяется через isPremium) */
+  /**
+   * true = Sonar→GPT deep pipeline.
+   * false/omit = lite (Grok/mini). Не путать с Premium tier —
+   * Premium открывает deep, но default Run всегда lite.
+   */
+  webResearch?: boolean;
+  /** @deprecated use webResearch */
   forceFullPipeline?: boolean;
 }
 
@@ -49,8 +57,8 @@ function withStaleNote(
 
 /**
  * Полный анализ:
- * Free → один вызов Grok/GPT-mini
- * Premium → Sonar → GPT (fullAnalysis: true)
+ * lite (default) → один вызов Grok/GPT-mini
+ * webResearch → Sonar → GPT
  * Fallback: stale cache → локальная эвристика
  */
 export async function runFullProductAnalysis(
@@ -61,20 +69,22 @@ export async function runFullProductAnalysis(
     return { analysis: options.cachedResult, source: 'cache' };
   }
 
-  if (input.reviews.length < 5) {
+  const premium = await isPremium();
+  const useWebResearch =
+    options.webResearch === true || options.forceFullPipeline === true;
+  const minReviews = minReviewsForFullAnalysis(premium);
+  if (input.reviews.length < minReviews) {
     throw new ApiError({
       code: 'bad_request',
       retryable: false,
-      userMessage: `Недостаточно отзывов (${input.reviews.length}). Нужно минимум 5.`,
+      userMessage: `Недостаточно отзывов (${input.reviews.length}). Нужно минимум ${minReviews}.`,
     });
   }
-
-  const premium = options.forceFullPipeline ?? (await isPremium());
 
   if (canUseCloudFullAnalysis()) {
     try {
       const analysis = await analyzeFullViaCloud(input, {
-        fullAnalysis: premium,
+        webResearch: useWebResearch,
       });
       return { analysis, source: 'cloud' };
     } catch (error) {
@@ -89,9 +99,7 @@ export async function runFullProductAnalysis(
           ? error.userMessage
           : 'Облачный AI недоступен. Используем локальную оценку.';
 
-      const local = await import('@/lib/ai/full-analysis-local').then((m) =>
-        m.analyzeFullLocally(input),
-      );
+      const local = analyzeFullLocally(input);
       return {
         analysis: local,
         source: 'local',
@@ -104,7 +112,6 @@ export async function runFullProductAnalysis(
     return withStaleNote(options.staleCachedResult, options.staleCacheSavedAt);
   }
 
-  const { analyzeFullLocally } = await import('@/lib/ai/full-analysis-local');
   return {
     analysis: analyzeFullLocally(input),
     source: 'local',

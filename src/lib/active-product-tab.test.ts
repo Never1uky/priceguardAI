@@ -35,6 +35,20 @@ describe('pickActiveProductTab', () => {
     ]);
     expect(result?.id).toBe(1);
   });
+
+  it('never picks minimized / hidden scrape windows', () => {
+    const result = pickActiveProductTab([
+      {
+        id: 99,
+        active: true,
+        url: ozonProduct,
+        windowId: 7,
+        windowState: 'minimized',
+      },
+      { id: 2, active: false, url: wbProduct, windowState: 'normal' },
+    ]);
+    expect(result?.id).toBe(2);
+  });
 });
 
 describe('isProductPage (WB)', () => {
@@ -49,25 +63,30 @@ describe('sendScrapeProductMessage inject fallback', () => {
   });
 
   it('injects content script when sendMessage initially fails', async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Receiving end does not exist')) // SCRAPE
+      .mockRejectedValueOnce(new Error('Receiving end does not exist')) // PING before inject
+      .mockResolvedValueOnce({ ok: true }) // PING after inject
+      .mockResolvedValueOnce({ ok: true, product: { title: 'GPU' } }); // SCRAPE retry
+
     vi.stubGlobal('chrome', {
       runtime: {
         getManifest: () => ({ content_scripts: [{ js: ['assets/loader.js'] }] }),
       },
-      tabs: {
-        sendMessage: vi
-          .fn()
-          .mockRejectedValueOnce(new Error('Receiving end does not exist'))
-          .mockResolvedValueOnce({ ok: true, product: { title: 'GPU' } }),
-      },
+      tabs: { sendMessage },
       scripting: {
-        executeScript: vi.fn().mockResolvedValue(undefined),
+        executeScript: vi
+          .fn()
+          .mockResolvedValueOnce(undefined) // file inject
+          .mockResolvedValue([{ result: true }]), // waitForDomReady
       },
     });
 
     const { sendScrapeProductMessage } = await import('@/lib/active-product-tab');
     const response = await sendScrapeProductMessage(42, 2);
     expect(response).toEqual({ ok: true, product: { title: 'GPU' } });
-    expect(chrome.scripting.executeScript).toHaveBeenCalledOnce();
+    expect(chrome.scripting.executeScript).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 });

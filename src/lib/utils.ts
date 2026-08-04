@@ -18,7 +18,7 @@ export function paymentDiscountLabel(
   marketplace: 'wildberries' | 'ozon' | 'yandex_market' | string,
 ): string {
   if (marketplace === 'yandex_market') return 'с Пэй';
-  if (marketplace === 'ozon') return 'с банками';
+  if (marketplace === 'ozon') return 'с озон банк';
   return 'со скидкой оплаты';
 }
 

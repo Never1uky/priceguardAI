@@ -1,13 +1,13 @@
 /**
- * Shared price scrape cache (TTL 2h) for update-prices / Bright Data.
+ * Shared price scrape cache (TTL 6h) for update-prices / Scrappey.
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
-export const PRICE_SCRAPE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+export const PRICE_SCRAPE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export type CacheMarketplace = 'wildberries' | 'ozon' | 'yandex_market';
-export type CacheWriteSource = 'brightdata' | 'legacy';
+export type CacheWriteSource = 'scrappey' | 'legacy';
 
 export interface CachedFetchedPrice {
   price: number;

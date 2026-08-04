@@ -1,5 +1,6 @@
 /**
  * Сборка MarketplaceOffer из ranked SERP-кандидатов (API / in-tab / DOM).
+ * SERP never declares found:true — only a candidate pool for card cascade.
  */
 import type {
   ComparisonMarketplace,
@@ -8,8 +9,13 @@ import type {
 } from '@/types/comparison';
 import { MAX_CANDIDATE_POOL } from '@/lib/candidate-pool';
 import { normalizeMarketplaceRating } from '@/lib/compare-offers';
-import { decideMatchOutcome, resolveMatchStatus } from '@/lib/match-status';
-import { computeMatchConfidence } from '@/lib/product-match';
+import {
+  hasLargePriceSpreadAmongClose,
+  pickCheapestAmongCloseMatches,
+} from '@/lib/match-status';
+import { isProductPageUrl } from '@/lib/product-match';
+import { isTitleCategoryCompatible } from '@/lib/match-category';
+import { sanitizeCandidateTitle } from '@/lib/serp-title';
 
 function notFoundOffer(
   marketplace: ComparisonMarketplace,
@@ -25,33 +31,53 @@ function notFoundOffer(
     rating: null,
     url: searchUrl,
     found: false,
+    matchStatus: 'not_found',
     error: error ?? 'Товар не найден',
   };
 }
 
-function withMatchConfidence(offer: MarketplaceOffer, referenceTitle: string): MarketplaceOffer {
-  if (!offer.title || !referenceTitle || referenceTitle === 'Товар') return offer;
-  return {
-    ...offer,
-    matchConfidence: computeMatchConfidence(referenceTitle, offer.title),
-  };
-}
-
-/** Собрать Top-N offer из ranked API/DOM кандидатов */
+/** Собрать Top-N pool из ranked API/DOM кандидатов — успех только после card cascade */
 export function buildOfferFromRankedCandidates(
   marketplace: ComparisonMarketplace,
   query: string,
   searchUrl: string,
   ranked: Array<{ offer: MarketplaceOffer; confidence: number }>,
+  referenceTitle?: string,
 ): MarketplaceOffer {
   if (!ranked.length) {
     return notFoundOffer(marketplace, query, searchUrl, 'Подходящий товар не найден в выдаче');
   }
 
-  const searchCandidates: SearchCandidateOffer[] = ranked
+  const refTitle =
+    referenceTitle && referenceTitle.trim() && referenceTitle !== 'Товар'
+      ? referenceTitle
+      : query;
+
+  const categoryFiltered = ranked.filter((r) =>
+    isTitleCategoryCompatible(refTitle, r.offer.title ?? ''),
+  );
+  if (!categoryFiltered.length) {
+    return notFoundOffer(
+      marketplace,
+      query,
+      searchUrl,
+      'В выдаче нет товаров той же категории',
+    );
+  }
+
+  const withPrice = categoryFiltered.map((r) => ({
+    ...r,
+    confidence: r.confidence,
+    price: r.offer.price,
+  }));
+  const reordered = pickCheapestAmongCloseMatches(withPrice);
+  const forceChoice = hasLargePriceSpreadAmongClose(reordered);
+
+  const searchCandidates: SearchCandidateOffer[] = reordered
     .slice(0, MAX_CANDIDATE_POOL)
+    .filter((r) => r.offer.url && isProductPageUrl(r.offer.url))
     .map((r, i) => ({
-      title: r.offer.title,
+      title: sanitizeCandidateTitle(r.offer.title, undefined, r.offer.url),
       url: r.offer.url,
       price: r.offer.price,
       matchConfidence: r.confidence,
@@ -60,50 +86,38 @@ export function buildOfferFromRankedCandidates(
       rating: normalizeMarketplaceRating(r.offer.rating),
     }));
 
-  const best = ranked[0]!;
-  const second = ranked[1];
-  const decision = decideMatchOutcome({
-    bestMatch: best.confidence,
-    secondMatch: second?.confidence,
-    alternativeCount: searchCandidates.length,
-  });
-
-  if (decision.needsChoice || !decision.autoPick) {
-    return {
+  if (!searchCandidates.length) {
+    return notFoundOffer(
       marketplace,
-      title: best.offer.title,
-      price: null,
-      delivery: null,
-      rating: null,
-      reviewCount: undefined,
-      url: searchUrl,
-      found: false,
-      matchConfidence: best.confidence,
-      matchStatus: 'needs_choice',
-      searchCandidates,
-      needsManualPick: true,
-      error:
-        searchCandidates.length > 1
-          ? `Есть ${searchCandidates.length} похожих варианта — выберите нужный`
-          : 'Требуется выбор товара',
-    };
+      query,
+      searchUrl,
+      'В выдаче нет ссылок на карточки товаров',
+    );
   }
 
-  const alternatives = searchCandidates.filter((c) => c.url !== best.offer.url);
-  return withMatchConfidence(
-    {
-      ...best.offer,
-      rating: normalizeMarketplaceRating(best.offer.rating),
-      matchConfidence: best.confidence,
-      matchStatus: resolveMatchStatus({
-        found: true,
-        matchConfidence: best.confidence,
-        alternativeCount: alternatives.length,
-      }),
-      searchCandidates: alternatives.length ? alternatives : undefined,
-      needsManualPick: false,
-      found: true,
-    },
-    best.offer.title,
-  );
+  const best = searchCandidates[0]!;
+  const shellUrl = searchUrl;
+  const shellRating =
+    searchCandidates.length === 1 ? normalizeMarketplaceRating(best.rating) : null;
+
+  return {
+    marketplace,
+    title: best.title,
+    price: null,
+    delivery: null,
+    rating: shellRating,
+    reviewCount: undefined,
+    url: shellUrl,
+    found: false,
+    matchConfidence: best.matchConfidence,
+    matchStatus: 'needs_choice',
+    searchCandidates,
+    needsManualPick: true,
+    error:
+      searchCandidates.length > 1
+        ? forceChoice
+          ? `Цены сильно отличаются — выберите нужный из ${searchCandidates.length}`
+          : `Есть ${searchCandidates.length} похожих варианта — проверяем карточки`
+        : 'Проверяем карточку товара',
+  };
 }

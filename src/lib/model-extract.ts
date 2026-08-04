@@ -3,6 +3,13 @@
  * Пример: «Смартфон Apple iPhone 13 128GB синий» → «iPhone 13»
  */
 
+import { stripQueryNoiseForCategory, cameraBodyMismatchPenalty as cameraBodyPenalty } from '@/lib/category-plugins';
+import {
+  buildPrimaryEntityQuery,
+  extractEntityFromTitle,
+} from '@/lib/entity-extract';
+import { isDependentProductRole } from '@/lib/match-rules/types';
+import type { ProductCategory } from '@/lib/match-category';
 import { parseModelFromSpecsText } from '@/lib/specs-model';
 
 export interface ProductModelInfo {
@@ -45,10 +52,36 @@ const BRANDS = [
   'metabo',
   'deko',
   'intel',
+  'nike',
+  'adidas',
+  'puma',
+  'reebok',
+  'persil',
+  'ariel',
+  'fairy',
+  'domestos',
+  'jbl',
+  'amazfit',
+  'roborock',
+  'dreame',
+  'redmond',
+  'polaris',
+  'loreal',
+  "l'oreal",
+  'oral-b',
+  'oralb',
+  'braun',
+  'maybelline',
+  'optimum',
+  'dyson',
+  'nespresso',
 ];
 
 /** Паттерны моделей (более специфичные — первыми) */
 const MODEL_PATTERNS: RegExp[] = [
+  // Entity-named accessories before host consoles (PlayStation / PS5)
+  /\bdual\s*sense\b/i,
+  /\bdualshock\b/i,
   /\biphone\s*(se\s*(?:\d{4}|\(\d{4}\))?|\d{1,2}\s*(?:pro\s*max|pro|plus|mini)?)\b/i,
   /\bgalaxy\s*((?:s|a|m|z|f|note)\s*\d{1,2}(?:\s*(?:ultra|plus|fe|\+))?|z\s*fold\s*\d|z\s*flip\s*\d)\b/i,
   /\bmacbook\s*(?:air|pro)?\s*(?:m[1-4](?:\s*pro)?|\d{4})?\b/i,
@@ -59,6 +92,22 @@ const MODEL_PATTERNS: RegExp[] = [
   /\bairpods\s*pro\s*(?:\d(?:\s*(?:го|го поколения))?|\s*(?:2|3))?\b/i,
   /\bairpods\s*(?:\d|anc)\b/i,
   /\bairpods\b/i,
+  // TWS Buds generations (before generic redmi\d phone patterns)
+  /\b(?:redmi|xiaomi)\s+buds\s*\d{1,2}(?:\s*(?:pro|live|fe|plus|\+|titan|play|active))?\b/i,
+  /\b(?:redmi|xiaomi).{0,40}?\bbuds\s*\d{1,2}(?:\s*(?:pro|live|fe|plus|\+|titan|play|active))?\b/i,
+  /\b(?:samsung\s+)?galaxy\s+buds\s*\d{1,2}(?:\s*(?:pro|live|fe|plus|\+|2))?\b/i,
+  /\bbuds\s*\d{1,2}(?:\s*(?:pro|live|fe|plus|\+|titan|play|active))?\b/i,
+  /\bjbl\s+tune\s*\d{3}\b/i,
+  /\bjbl\s+(?:live|wave|quantum)\s*\d{2,3}\b/i,
+  /\bamazfit\s+(?:gtr|bip|balance|cheetah|t-rex)\s*\d{1,2}\b/i,
+  /\bxiaomi\s+smart\s+band\s*\d{1,2}\b/i,
+  /\bmi\s+band\s*\d{1,2}\b/i,
+  /\broborock\s+s\d{1,2}(?:\s*pro)?(?:\s*ultra)?\b/i,
+  /\bdreame\s+[a-z]?\d{2,4}\b/i,
+  /\bredmond\s+rmc[-\s]?[a-z]?\d{3,5}[a-z]?\b/i,
+  /\bpolaris\s+[a-z]{2,5}[\s-]?\d{3,5}\b/i,
+  /\bsamsung\s+ww\d{2}[a-z]?\d{3,5}[a-z]?\b/i,
+  /\boptimum\s+nutrition\s+gold\s+standard\b/i,
   /\b(?:redmi|poco|xiaomi)\s*(?:note\s*)?\d{1,2}(?:\s*(?:pro|ultra|\+|t|s|c))?\b/i,
   /\brealme\s*(?:\d{1,2}(?:\s*5g)?(?:\s*pro)?|note\s*\d+)\b/i,
   /\bredmi\s+\d{1,2}\b/i,
@@ -72,6 +121,18 @@ const MODEL_PATTERNS: RegExp[] = [
   /\binstax\s*(?:mini|wide|square)\b/i,
   /\bxbox\s*series\s*[xs]\b/i,
   /\bnintendo\s*switch(?:\s*(?:oled|lite))?\b/i,
+  /\bcanon\s+eos\s*\d{3,4}\s*d?\b/i,
+  /\beos\s*\d{3,4}\s*d\b/i,
+  /\bcanon\s+\d{3,4}\s*d\b/i,
+  /\bnikon\s+d\d{3,4}\b/i,
+  /\bsony\s+(?:alpha|α)\s*\d{1,2}\b/i,
+  /\bfujifilm\s+x-?[st]\d{1,2}\b/i,
+  /\b(?:ef|rf)\s*-?\s*\d{1,3}\s*mm\s*f\/?[\d.]+/i,
+  /\b\d{1,3}\s*mm\s*f\/?[\d.]+\b/i,
+  /\bplaystation\s*[45]\b/i,
+  /\bps\s*[45]\b/i,
+  /\bxbox\s+series\s*[xs]\b/i,
+  /\bsteam\s+deck\b/i,
   /\b(?:bosch|makita|metabo|deko|интерскол)\s+[a-z]{2,5}[\s-]?\d{3,5}[a-z]?\b/i,
   /\bgsb\s*\d{3,4}\b/i,
   /\b[a-z]{1,4}-[a-z]?\d{3,6}[a-z0-9]*(?:\s*[a-z]-?\d{1,3}[a-z]{1,3})?\b/i,
@@ -121,11 +182,24 @@ function extractByPatterns(title: string): string | null {
 function trimNoiseWords(title: string): string {
   return title
     .replace(
-      /\b(смартфон|телефон|ноутбук|видеокарта|наушники|планшет|чехол|зарядка|кабель|чёрный|белый|синий|128|256|512|1024)\b/gi,
+      /\b(смартфон|телефон|ноутбук|видеокарта|наушники|планшет|фотоаппарат|чехол|зарядка|кабель|чёрный|белый|синий|128|256|512|1024)\b/gi,
       '',
     )
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Убрать kit-объектив из поискового запроса камер. */
+export { stripCameraKitNoise } from '@/lib/category-plugins';
+
+/** Category-specific query cleanup before cross-marketplace SERP. */
+export function stripCategoryQueryNoise(category: ProductCategory, text: string): string {
+  return stripQueryNoiseForCategory(category, text);
+}
+
+/** Штраф за разные body-модели камер (650D ≠ 600D). Re-export from category registry. */
+export function cameraBodyMismatchPenalty(referenceTitle: string, candidateTitle: string): number {
+  return cameraBodyPenalty(referenceTitle, candidateTitle);
 }
 
 export function extractProductModel(title: string): ProductModelInfo {
@@ -135,6 +209,18 @@ export function extractProductModel(title: string): ProductModelInfo {
   }
 
   const brand = detectBrand(cleaned);
+
+  // Dependent SKUs: model/query from primary entity, not compatibility host
+  const entity = extractEntityFromTitle(cleaned);
+  if (isDependentProductRole(entity.productRole) && entity.primaryEntity.length >= 3) {
+    const lead = buildPrimaryEntityQuery(entity);
+    return {
+      model: entity.primaryEntity.slice(0, 80),
+      brand: entity.brand ?? brand,
+      searchQuery: (lead || entity.primaryEntity).slice(0, 80),
+    };
+  }
+
   const fromPattern = extractByPatterns(cleaned);
 
   if (fromPattern) {
@@ -168,9 +254,9 @@ export function inferProductModel(
   title: string,
   specsOrModelField?: string,
 ): ProductModelInfo {
-  const fromSpecs = specsOrModelField
-    ? parseModelFromSpecsText(specsOrModelField) ?? specsOrModelField.trim()
-    : null;
+  // Only structured model lines from specs — never the whole kit dump
+  // (e.g. «В комплекте DualSense» must not become the console's searchQuery).
+  const fromSpecs = specsOrModelField ? parseModelFromSpecsText(specsOrModelField) : null;
 
   if (fromSpecs && fromSpecs.length >= 3) {
     const info = extractProductModel(fromSpecs);

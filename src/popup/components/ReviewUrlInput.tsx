@@ -61,9 +61,10 @@ export function ReviewUrlInput({ onLoaded }: ReviewUrlInputProps) {
               void handleSubmit();
             }
           }}
-          placeholder="Ссылка или артикул WB"
+          placeholder="Ссылка или артикул (WB, Ozon, Маркет)"
+          aria-label="Ссылка или артикул товара"
           disabled={loading}
-          className="min-w-0 flex-1 rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none ring-primary focus:ring-1 disabled:opacity-60"
+          className="min-w-0 flex-1 rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
         />
         <Button
           type="button"

@@ -154,9 +154,9 @@ const cwsPublishRows = [
   ['3', 'P.3', 'Store listing → Short description', '132 символа RU', 'Лист «Контент»', '', ''],
   ['4', 'P.4', 'Store listing → Screenshots', '5 шт. 1280×800', '', '', ''],
   ['5', 'P.5', 'Store listing → Icon', '128×128 PNG', '', '', ''],
-  ['6', 'P.6', 'Privacy → Privacy policy URL', 'https://USER.github.io/priceguard-ai/privacy/', '', '', ''],
+  ['6', 'P.6', 'Privacy → Privacy policy URL', 'https://priceguard-landing.vercel.app/privacy', '', '', ''],
   ['7', 'P.7', 'Privacy → Single purpose', 'Текст из листа Контент', '', '', ''],
-  ['8', 'P.8', 'Privacy → Data use', 'Product URLs, prices, reviews', '', '', ''],
+  ['8', 'P.8', 'Privacy → Data use', 'Product URLs, prices, reviews (AI), search metrics, email/device_id/Telegram (opt), processors: Supabase/AI/Scrappey/YooKassa/Telegram', '', '', ''],
   ['9', 'P.9', 'Privacy → Permissions justification', 'См. лист Permissions', '', '', ''],
   ['10', 'P.10', 'Distribution → Visibility', 'Public / Unlisted', '', 'Сначала Unlisted для теста'],
   ['11', 'P.11', 'Submit for review', 'Отправить на модерацию', '', '1–3 рабочих дня'],
@@ -165,18 +165,15 @@ const cwsPublishRows = [
 
 const cwsPermissionsRows = [
   ['Permission', 'Обоснование для CWS (RU)', 'Готово'],
-  ['storage', 'Сохранение списка отслеживаемых товаров, истории цен, настроек уведомлений и AI', ''],
-  ['activeTab', 'Чтение цены и отзывов с открытой карточки товара на маркетплейсе', ''],
-  ['tabs', 'Определение активной вкладки с товаром для отображения данных в popup', ''],
+  ['storage', 'Сохранение списка отслеживаемых товаров, истории цен, настроек уведомлений и сессии', ''],
   ['scripting', 'Сбор данных о цене и отзывах со страниц маркетплейсов по запросу пользователя', ''],
   ['notifications', 'Уведомления пользователю о падении цены на отслеживаемые товары', ''],
   ['alarms', 'Периодическая фоновая проверка цен отслеживаемых товаров', ''],
-  ['identity', 'Вход через Google OAuth для синхронизации списка между устройствами', ''],
   ['webNavigation', 'Определение перехода на другую карточку товара для обновления данных', ''],
-  ['host: wildberries.ru', 'Чтение публичных цен и отзывов Wildberries', ''],
+  ['host: wildberries.ru / WB APIs', 'Чтение публичных цен и отзывов Wildberries', ''],
   ['host: ozon.ru', 'Чтение публичных цен и отзывов Ozon', ''],
   ['host: market.yandex.ru', 'Чтение публичных цен и отзывов Яндекс.Маркет', ''],
-  ['host: supabase.co', 'Синхронизация, AI-прокси и облачный кэш анализа', ''],
+  ['host: ihlfvpocwobvcpxbypsd.supabase.co', 'Синхронизация, AI-прокси, лицензии, Telegram', ''],
 ];
 
 const summaryRows = [
@@ -190,7 +187,7 @@ const summaryRows = [
   ['Windows Chrome версия', ''],
   ['macOS Chrome версия', ''],
   ['Zip для теста', ''],
-  ['Privacy Policy URL', 'https://USER.github.io/priceguard-ai/privacy/'],
+  ['Privacy Policy URL', 'https://priceguard-landing.vercel.app/privacy'],
   ['', ''],
   ['Итог QA', ''],
   ['P0 пройдено (Win)', ''],

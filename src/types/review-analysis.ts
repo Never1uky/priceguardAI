@@ -4,8 +4,13 @@ export type FakeRiskLevel = 'low' | 'medium' | 'high';
 
 export type PurchaseVerdict = 'buy_now' | 'wait_discount' | 'not_recommended';
 
-/** Минимум отзывов для выдачи вердикта и уведомлений */
+/** Минимум отзывов для выдачи вердикта и уведомлений (Free / локальный pipeline) */
 export const MIN_REVIEWS_FOR_ANALYSIS = 5;
+
+/** Минимум отзывов для полного AI-анализа: Free — только карточка; Premium/Trial — Sonar web-first. */
+export function minReviewsForFullAnalysis(isPremium: boolean): number {
+  return isPremium ? 0 : MIN_REVIEWS_FOR_ANALYSIS;
+}
 
 export const VERDICT_LABELS: Record<PurchaseVerdict, string> = {
   buy_now: 'Купить сейчас',

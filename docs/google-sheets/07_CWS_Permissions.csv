@@ -1,14 +1,10 @@
-﻿Permission,Обоснование для CWS (RU),Готово
+Permission,Обоснование для CWS (RU),Готово
 storage,"Сохранение списка отслеживаемых товаров, истории цен, настроек уведомлений и сессии аккаунта",
-activeTab,Чтение цены и отзывов с открытой карточки товара на маркетплейсе,
-tabs,Определение активной вкладки с товаром для отображения данных в popup,
-windows,"Фоновый поиск на Ozon/Я.Маркет через свёрнутое окно (HiddenBrowser), без показа пользователю",
 scripting,Сбор данных о цене и отзывах со страниц маркетплейсов по запросу пользователя,
 notifications,Уведомления пользователю о падении цены на отслеживаемые товары,
 alarms,Периодическая фоновая проверка цен отслеживаемых товаров,
 webNavigation,Определение перехода на другую карточку товара для обновления данных,
-host: wildberries.ru,Чтение публичных цен и отзывов Wildberries,
-host: card.wb.ru / search.wb.ru / feedbacks*.wb.ru,Публичные API карточек поиска и отзывов Wildberries,
-host: ozon.ru / api.ozon.ru,Чтение публичных цен и отзывов Ozon,
+host: wildberries.ru / card.wb.ru / search.wb.ru / feedbacks*.wb.ru,Чтение публичных цен и отзывов Wildberries,
+host: ozon.ru / www.ozon.ru,Чтение публичных цен и отзывов Ozon,
 host: market.yandex.ru,Чтение публичных цен и отзывов Яндекс.Маркет,
-host: supabase.co,"Синхронизация списка товаров, AI-прокси, лицензии Premium, настройки Telegram",
+host: ihlfvpocwobvcpxbypsd.supabase.co,"Синхронизация списка товаров, AI-прокси, лицензии Premium, настройки Telegram",

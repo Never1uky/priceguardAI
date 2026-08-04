@@ -140,6 +140,17 @@ export function buildFullAnalysisUserPrompt(input: {
     );
   }
 
+  if (input.reviews.length === 0) {
+    if (input.webResearch?.trim()) {
+      lines.push(
+        '',
+        'На маркетплейсе нет отзывов для анализа. Опирайся на данные Sonar.',
+        'fakeRisk: medium (если данных мало — укажи в fakeRiskExplanation); qualityScore — из обзоров в сети.',
+      );
+    }
+    return lines.join('\n');
+  }
+
   const reviewsBlock = input.reviews
     .slice(0, 16)
     .map((r, i) => `--- Отзыв ${i + 1} ---\n${r.slice(0, 420)}`)

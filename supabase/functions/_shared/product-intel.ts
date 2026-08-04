@@ -13,13 +13,20 @@ import {
   stripProductIdPrefix,
   toPrefixedProductId,
 } from './product-id.ts';
+import {
+  FULL_PRODUCT_CACHE_VERSION,
+  isProductCacheFresh,
+  PRODUCT_CACHE_TTL_MS,
+  upsertProductCacheVersioned,
+} from './product-cache-store.ts';
 import type { Marketplace, ParsedProductLink } from './product-url.ts';
 import { fetchWildberriesReviewsServer, guessWbImageUrl } from './wb-reviews.ts';
 import { fetchOzonReviewsServer } from './ozon-reviews.ts';
 import { fetchYandexMarketReviewsServer } from './ym-reviews.ts';
 import { projectScraperCredentials } from './reviews-common.ts';
+import type { ScraperCredentials } from './scrappey.ts';
 
-export const FULL_PRODUCT_CACHE_VERSION = 2;
+export { FULL_PRODUCT_CACHE_VERSION };
 const MIN_REVIEWS = 5;
 const OTHER_MPS: Marketplace[] = ['wildberries', 'ozon', 'yandex_market'];
 
@@ -106,7 +113,7 @@ async function loadCacheEntry(
   productId: string,
 ): Promise<{ analysis: FullProductAnalysisLike; cacheProductId: string; lastUpdated: string } | null> {
   const candidates = productIdLookupCandidates(marketplace, productId);
-  const ttlMs = 7 * 24 * 60 * 60 * 1000;
+  const ttlMs = PRODUCT_CACHE_TTL_MS;
 
   for (const id of candidates) {
     const { data, error } = await supabase
@@ -118,8 +125,7 @@ async function loadCacheEntry(
       .maybeSingle();
 
     if (error || !data?.ai_analysis) continue;
-    const ts = Date.parse(String(data.last_updated ?? ''));
-    if (!Number.isFinite(ts) || Date.now() - ts >= ttlMs) continue;
+    if (!isProductCacheFresh(data.last_updated, ttlMs)) continue;
     const analysis = asAnalysis(data.ai_analysis);
     if (!analysis) continue;
     return {
@@ -143,19 +149,15 @@ async function putCacheEntry(
   },
 ): Promise<void> {
   const cacheProductId = toPrefixedProductId(params.marketplace, params.productId);
-  await supabase.from('product_cache').upsert(
-    {
-      marketplace: params.marketplace,
-      product_id: cacheProductId,
-      product_title: params.productTitle.slice(0, 500),
-      model: params.model ?? null,
-      raw_reviews: params.reviews,
-      ai_analysis: params.analysis,
-      last_updated: new Date().toISOString(),
-      cache_version: FULL_PRODUCT_CACHE_VERSION,
-    },
-    { onConflict: 'marketplace,product_id,cache_version' },
-  );
+  await upsertProductCacheVersioned(supabase, {
+    marketplace: params.marketplace,
+    productId: cacheProductId,
+    productTitle: params.productTitle.slice(0, 500),
+    model: params.model ?? null,
+    rawReviews: params.reviews,
+    aiAnalysis: params.analysis,
+    cacheVersion: FULL_PRODUCT_CACHE_VERSION,
+  });
 }
 
 export async function lookupCheapOffers(
@@ -163,6 +165,7 @@ export async function lookupCheapOffers(
   marketplace: Marketplace,
   productId: string,
   sourcePrice: number | null,
+  scraper?: ScraperCredentials | null,
 ): Promise<CheapOffer[]> {
   const bare = stripProductIdPrefix(marketplace, productId);
   const idCandidates = productIdLookupCandidates(marketplace, bare);
@@ -201,7 +204,7 @@ export async function lookupCheapOffers(
       target,
       stripProductIdPrefix(target, targetId),
       targetUrl,
-      { supabase },
+      { supabase, scraper },
     );
 
     const price = fetched?.price && fetched.price > 0 ? fetched.price : null;
@@ -361,17 +364,22 @@ async function runFullAnalysisViaProxy(params: {
   productId: string;
   reviews: string[];
   deviceId: string;
-  /** Premium → Sonar→GPT; Free → один JSON-вызов */
-  premium: boolean;
+  /**
+   * true → Sonar→GPT (deep). Default false = lite JSON без Sonar.
+   * Premium tier alone does NOT enable Sonar.
+   */
+  webResearch?: boolean;
 }): Promise<{ analysis: FullProductAnalysisLike | null; error?: string; model?: string }> {
   const deviceId = params.deviceId.slice(0, 64);
   const article = stripProductIdPrefix(params.marketplace, params.productId);
   const productIdPrefixed = toPrefixedProductId(params.marketplace, params.productId);
 
   try {
-    if (params.premium) {
+    if (params.webResearch) {
       const premiumBody = {
         fullAnalysis: true,
+        webResearch: true,
+        pipeline: 'sonar_gpt',
         mode: 'full_analysis',
         provider: 'openai',
         deviceId,
@@ -389,7 +397,7 @@ async function runFullAnalysisViaProxy(params: {
       let result = await invokeAiProxy(premiumBody);
       // Fallback: если nested invoke «съел» fullAnalysis → messages path
       if (!result.ok && (result.body.error === 'messages required' || result.status === 400)) {
-        console.warn('[product-intel] premium fullAnalysis failed, fallback to messages', result.body.error);
+        console.warn('[product-intel] deep fullAnalysis failed, fallback to messages', result.body.error);
         result = await invokeAiProxy({
           provider: 'openai',
           jsonMode: true,
@@ -415,7 +423,7 @@ async function runFullAnalysisViaProxy(params: {
       return parseProxyAnalysisResult(result.body);
     }
 
-    // Free: один вызов без Sonar
+    // Lite: один вызов без Sonar (Free + Premium default + TG)
     const freeResult = await invokeAiProxy({
       provider: 'grok',
       jsonMode: true,
@@ -494,8 +502,10 @@ export async function runProductIntel(params: {
   parsed: ParsedProductLink;
   chatId?: string;
   userId?: string | null;
-  /** Premium → Sonar full pipeline */
+  /** Premium tier (min reviews / limits) — does NOT imply Sonar */
   isPremium?: boolean;
+  /** Explicit deep pipeline Sonar→GPT (Premium only from callers) */
+  webResearch?: boolean;
   /** Разрешить cold-start AI */
   allowGenerate?: boolean;
   /** Отзывы уже собраны (extension) — пропуск server fetch */
@@ -506,6 +516,7 @@ export async function runProductIntel(params: {
   const key = productKey(parsed.marketplace, bareId);
   const allowGenerate = params.allowGenerate !== false;
   const isPremium = Boolean(params.isPremium);
+  const webResearch = Boolean(params.webResearch) && isPremium;
   const scraper = projectScraperCredentials();
 
   const fetched = await fetchMarketplacePriceDetailed(
@@ -540,6 +551,7 @@ export async function runProductIntel(params: {
     ? params.reviews.map((r) => String(r).trim()).filter((r) => r.length >= 5)
     : null;
 
+  // Do not scrape reviews when serving from cache or generate disabled
   if (!analysis && allowGenerate) {
     if (!params.userId && !providedReviews) {
       analysisStatus = 'missing';
@@ -547,7 +559,8 @@ export async function runProductIntel(params: {
         'Чтобы запустить AI-анализ, привяжите Telegram в расширении (Настройки → «Подключить и проверить»).';
     } else {
       let reviews = providedReviews ?? [];
-      if (reviews.length < MIN_REVIEWS) {
+      const minReviews = isPremium ? 0 : MIN_REVIEWS;
+      if (minReviews > 0 && reviews.length < minReviews) {
         const fetchedReviews = await fetchServerReviews({
           marketplace: parsed.marketplace,
           productId: bareId,
@@ -556,10 +569,10 @@ export async function runProductIntel(params: {
         reviews = fetchedReviews.reviews;
       }
 
-      if (reviews.length < MIN_REVIEWS) {
+      if (reviews.length < minReviews) {
         analysisStatus = 'insufficient_reviews';
         analysisNote =
-          `Недостаточно отзывов для AI (${reviews.length}/${MIN_REVIEWS}). ` +
+          `Недостаточно отзывов для AI (${reviews.length}/${minReviews}). ` +
           (parsed.marketplace === 'wildberries'
             ? 'Откройте товар в расширении или попробуйте позже.'
             : 'Попробуйте позже или сделайте анализ в расширении Chrome.');
@@ -575,7 +588,7 @@ export async function runProductIntel(params: {
             : params.userId
               ? `uid:${params.userId}`
               : `pi:${bareId}`,
-          premium: isPremium,
+          webResearch,
         });
         if (ai.analysis) {
           analysis = {
@@ -603,7 +616,7 @@ export async function runProductIntel(params: {
     }
   }
 
-  const offers = await lookupCheapOffers(supabase, parsed.marketplace, bareId, price);
+  const offers = await lookupCheapOffers(supabase, parsed.marketplace, bareId, price, scraper);
 
   return {
     marketplace: parsed.marketplace,

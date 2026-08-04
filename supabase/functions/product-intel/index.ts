@@ -11,6 +11,7 @@ import {
 import { stripProductIdPrefix } from '../_shared/product-id.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 import type { Marketplace } from '../_shared/product-url.ts';
+import { isPremiumRowActive, PREMIUM_ROW_SELECT } from '../_shared/premium-active.ts';
 
 function serviceClient() {
   return createClient(
@@ -25,11 +26,10 @@ async function isPremiumUser(
 ): Promise<boolean> {
   const { data } = await supabase
     .from('user_premium')
-    .select('expires_at')
+    .select(PREMIUM_ROW_SELECT)
     .eq('user_id', userId)
     .maybeSingle();
-  if (!data) return false;
-  return !data.expires_at || new Date(data.expires_at) > new Date();
+  return isPremiumRowActive(data);
 }
 
 Deno.serve(async (req) => {
@@ -80,15 +80,8 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: 'url required' }, 400);
       }
 
-      const userId =
-        (body.userId ? String(body.userId) : null) ||
-        authUser?.id ||
-        null;
-      const premium = body.isPremium != null
-        ? Boolean(body.isPremium)
-        : userId
-          ? await isPremiumUser(supabase, userId)
-          : false;
+      const userId = authUser?.id ?? null;
+      const premium = userId ? await isPremiumUser(supabase, userId) : false;
 
       const reviews = Array.isArray(body.reviews)
         ? body.reviews.map((r: unknown) => String(r))
@@ -100,6 +93,8 @@ Deno.serve(async (req) => {
         chatId: body.chatId ? String(body.chatId) : undefined,
         userId,
         isPremium: premium,
+        // Deep Sonar only when explicitly requested (Premium gated inside runProductIntel)
+        webResearch: body.webResearch === true || body.pipeline === 'sonar_gpt',
         allowGenerate: body.allowGenerate !== false,
         reviews,
       });

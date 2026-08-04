@@ -1,5 +1,6 @@
 /**
- * Сбор отзывов без открытия вкладок: WB API + фоновая вкладка Я.Маркет.
+ * Сбор отзывов без открытия вкладок: WB API (SW) + фоновая вкладка Я.Маркет.
+ * Не использовать из compare-jobs.
  */
 import { getRunningCompareProductId } from '@/lib/compare-jobs';
 import { scrapeYandexReviewsViaHiddenTab } from '@/lib/reviews/ym-reviews-tab';

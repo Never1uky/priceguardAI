@@ -1,10 +1,17 @@
 import type { Product } from '@/types/product';
 import { isProductPage } from '@/utils/marketplace';
+import { parseRatingFromMarketplaceText } from '@/lib/compare-offers';
 import { parseOzonProduct } from '@/utils/parsers/ozon';
 import { parseWildberriesProduct } from '@/utils/parsers/wildberries';
 import { parseYandexMarketProduct, scrapeYandexMarketSpecs } from '@/utils/parsers/yandex-market';
 
 export { detectMarketplace, isProductPage, buildWildberriesUrl } from '@/utils/marketplace';
+
+export type PageOfferMeta = {
+  rating: number | null;
+  reviewCount?: number;
+  specs?: string;
+};
 
 export async function scrapeCurrentPage(): Promise<Product | null> {
   if (!isProductPage()) return null;
@@ -25,12 +32,26 @@ export async function scrapeCurrentPage(): Promise<Product | null> {
   return null;
 }
 
-/** Доп. данные для Яндекс.Маркета (рейтинг, характеристики) */
-export function scrapeYandexMeta():
-  | { rating: number | null; reviewCount?: number; specs?: string }
-  | null {
-  if (!/market\.yandex\.ru/i.test(window.location.href)) return null;
-  return scrapeYandexMarketSpecs();
+/** Доп. данные карточки: рейтинг (и specs на YM) для MarketplaceOffer */
+export function scrapeProductPageMeta(): PageOfferMeta | null {
+  if (!isProductPage()) return null;
+
+  const url = window.location.href;
+  if (/market\.yandex\.ru/i.test(url)) {
+    return scrapeYandexMarketSpecs();
+  }
+
+  // WB / Ozon: рейтинг из видимого текста карточки (API-путь обычно уже с rating)
+  const { rating, reviewCount } = parseRatingFromMarketplaceText(
+    document.body?.textContent ?? '',
+  );
+  if (rating == null && reviewCount == null) return null;
+  return { rating, reviewCount };
+}
+
+/** @deprecated use scrapeProductPageMeta */
+export function scrapeYandexMeta(): PageOfferMeta | null {
+  return scrapeProductPageMeta();
 }
 
 /** @deprecated используйте scrapeCurrentPage() */

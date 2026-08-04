@@ -21,7 +21,7 @@
     <article class="card">
       <h1>Privacy Policy</h1>
       <p class="meta">
-        <strong>Effective date:</strong> 17 July 2026 · <strong>Version:</strong> 2.0<br />
+        <strong>Effective date:</strong> 24 July 2026 · <strong>Version:</strong> 2.4<br />
         <strong>Contact:</strong> <a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a><br />
         <strong>Support Telegram:</strong> @priceguard_supportbot
       </p>
@@ -40,31 +40,33 @@
       <p><strong>Where:</strong> primarily <code>chrome.storage.local</code>; with an account — also Supabase (<code>tracked_products</code>, and <code>product_price_history</code> when server monitoring is on).</p>
 
       <h3>2.2 Reviews and AI analysis</h3>
-      <p>When you run AI analysis (extension or Telegram alerts bot), review texts and short product fields are sent via our Edge proxy to AI providers. Results may be stored in a shared <code>product_cache</code> (~7-day TTL) keyed by marketplace + product id (not by your email). AI API keys are never stored in the extension.</p>
+      <p>When you run AI analysis (extension or Telegram alerts bot), we may send via our Edge proxy to AI providers: review texts (limited sample), short product fields (title, SKU, marketplace, prices), price-history snippets, comparison offer data, and for Telegram “ask AI” — your question, recent Q&amp;A, and cached analysis. Raw reviews and results may be cached (~7-day freshness) keyed by marketplace + product id (not by email). AI API keys are never stored in the extension.</p>
 
       <h3>2.3 Account (optional)</h3>
       <p>Via Supabase Auth: email, user UUID, session tokens (local). We do not store plaintext passwords.</p>
 
-      <h3>2.4 device_id</h3>
-      <p>Random UUID for AI rate limits, license binding, anonymous telemetry. Not linked to identity until you sign in.</p>
+      <h3>2.4 device_id and license</h3>
+      <p>Random UUID for AI rate limits, license binding, and telemetry. Not linked to identity until you sign in.</p>
+      <p>If you activate Premium, the <strong>license key</strong> may be stored locally in the extension until deactivated or the extension is uninstalled.</p>
 
       <h3>2.5 Telegram (optional)</h3>
-      <p>If you provide a Chat ID: delivery of price alerts; product session for AI card buttons; AI chat threads (~48h TTL); support messages forwarded to the operator. Bots: <strong>@PriceGuardAlertsBot</strong>, <strong>@priceguard_supportbot</strong>. Chat ID is not sold.</p>
+      <p>If you provide a Chat ID: price alerts; product session for AI card buttons; AI chat threads (~48h, then purged); support messages (may include Telegram username / name). Bots: <strong>@PriceGuardAlertsBot</strong>, <strong>@priceguard_supportbot</strong>. Chat ID is not sold.</p>
+      <p><strong>To stop:</strong> disconnect Telegram in extension <strong>Settings</strong> (signed in). Deleting the bot chat alone does not clear the server Chat ID.</p>
 
-      <h3>2.6 Server price monitoring (Bright Data)</h3>
-      <p>With Telegram server monitoring enabled, our servers fetch product pages/data. For antibot marketplaces we may use <strong>Bright Data Web Unlocker</strong> (product URL in, HTML/content out). Your browser cookies are <strong>not</strong> sent to Bright Data. Short price results may be cached (~2 hours).</p>
+      <h3>2.6 Server scrape (Scrappey)</h3>
+      <p>Servers may fetch product pages via <strong>Scrappey</strong> (product URL in, HTML out) for antibot marketplaces when Telegram server monitoring is on and/or a signed-in user triggers server unlock / compare research. Browser cookies are <strong>not</strong> sent. Short price results may be cached (~2 hours).</p>
 
-      <h3>2.7 Telemetry</h3>
-      <p>Anonymous search metrics, AI request logs (provider, success, duration), authenticity events, extension version. No full browsing history or card PANs.</p>
+      <h3>2.7 Telemetry, matching feedback, and support</h3>
+      <p>When signed in: AI request logs (provider, success, duration), authenticity events, extension version, <strong>match feedback</strong> (accepted/rejected candidate IDs/URLs), and <strong>compare-research</strong> (title + source URL). Search summaries may go to <code>search_metrics</code>. Detailed WARN/ERROR stay on-device; remote upload is opt-in via developer diagnostics only. <strong>Automatic support reports</strong> (no confirm dialog): error text ≤800 chars, optional context, version, userId → Edge <code>support-notify</code> → operator Telegram. No full browsing history or card PANs.</p>
 
       <h3>2.8 Premium payments</h3>
-      <p>Processed by <strong>YooKassa</strong>. We receive payment status and license binding data only.</p>
+      <p>Processed by <strong>YooKassa</strong>. We do not store card numbers. We may send/store plan, amount, status, account email and user UUID (metadata/receipt), plus license binding data.</p>
 
       <h3>2.9 Optional affiliate URL parameters</h3>
       <p>Technical partner query params may be appended to product links from local settings. No separate sale of personal data for ads.</p>
 
-      <h3>2.10 Website</h3>
-      <p>Technical cookies/localStorage for payment/session pages. No marketing email without consent.</p>
+      <h3>2.10 Website and cookies</h3>
+      <p>Website: technical cookies/localStorage. Extension: <code>chrome.storage</code>; no <code>cookies</code> permission; cookie values are not sent to PriceGuard servers, AI providers, or Scrappey. No marketing email without consent.</p>
 
       <h2>3. Purposes</h2>
       <p>Provide extension and bot features; AI analysis and caching; alerts and comparison; Premium billing; support and security; improve search/AI quality via aggregated telemetry.</p>
@@ -76,7 +78,7 @@
           <tr><td>Local settings &amp; history</td><td>Your browser</td></tr>
           <tr><td>Account, sync, cache, logs</td><td>Supabase</td></tr>
           <tr><td>AI requests</td><td>xAI (Grok), OpenAI, Perplexity (incl. via AITunnel)</td></tr>
-          <tr><td>Server scrape</td><td>Bright Data (page URL)</td></tr>
+          <tr><td>Server scrape</td><td>Scrappey (page URL)</td></tr>
           <tr><td>Payments</td><td>YooKassa</td></tr>
           <tr><td>Bot messages</td><td>Telegram</td></tr>
           <tr><td>Website</td><td>Hosting (e.g. Vercel)</td></tr>
@@ -84,11 +86,10 @@
       </table>
 
       <h2>5. Retention</h2>
-      <p>Account/license while active (+ reasonable period after); local data until uninstall/clear; product_cache ~7 days; scrape cache ~2 hours; Telegram AI threads ~48 hours; service logs typically up to 90 days unless security requires longer.</p>
+      <p>Account/license while active (+ reasonable period after); local data until uninstall/clear; cloud price history while account/watchlist is active. Periodic purge: product_cache ~7 days; scrape cache ~2 hours; expired Telegram AI threads ~48 hours; search/AI logs ~90 days.</p>
 
       <h2>6. Your rights and deletion</h2>
-      <p>You may request access, correction, restriction or deletion of account-related data.</p>
-      <p>Email <a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a> with subject “Data deletion” and your account email. Local data is removed with the extension. To stop Telegram: disconnect in Settings and/or delete the bot chat.</p>
+      <p>Email <a href="mailto:priceguardAlsupp0rt@yandex.ru">priceguardAlsupp0rt@yandex.ru</a> with subject “Data deletion” and your account email. Local data is removed with the extension. To stop Telegram: disconnect in <strong>Settings</strong> (signed in); deleting the bot chat alone is not enough.</p>
 
       <h2>7. Security</h2>
       <p>HTTPS; secrets server-side only; access controls.</p>

@@ -5,6 +5,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
+import { authorizeCronOrServiceRole } from '../_shared/cron-auth.ts';
 
 function serviceClient() {
   return createClient(
@@ -54,6 +55,10 @@ Deno.serve(async (req) => {
   }
   if (req.method !== 'POST') {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
+  }
+
+  if (!authorizeCronOrServiceRole(req)) {
+    return jsonResponse({ ok: false, error: 'Unauthorized' }, 401);
   }
 
   try {

@@ -2,7 +2,7 @@
  * Серверный сбор отзывов Ozon (Unlocker HTML + JSON/markup extract).
  */
 
-import { fetchViaBrightData, type BrightDataCredentials } from './brightdata.ts';
+import { fetchViaScrappey, type ScraperCredentials } from './scrappey.ts';
 import {
   emptyReviews,
   extractReviewsFromHtmlJson,
@@ -92,13 +92,13 @@ export async function fetchOzonReviewsServer(
   productId: string,
   productUrl: string,
   limit = 40,
-  scraper?: BrightDataCredentials | null,
+  scraper?: ScraperCredentials | null,
 ): Promise<ServerReviewsResult> {
   const candidates = reviewsUrlCandidates(productUrl, productId);
 
   for (const url of candidates) {
     if (scraper) {
-      const unlocked = await fetchViaBrightData(url, scraper, { country: 'ru' });
+      const unlocked = await fetchViaScrappey(url, scraper, { country: 'ru' });
       if (unlocked.html) {
         const parsed = parseHtml(unlocked.html, limit);
         if (parsed.totalFound > 0) return parsed;

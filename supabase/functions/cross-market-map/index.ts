@@ -3,20 +3,59 @@
 // Actions:
 //   lookup   → { ok, mappings: row[] }  (active, ordered by rank)
 //   upsert   → write primary (+ optional alternates)
-//   dispute  → mark edge disputed
+//   dispute  → mark edge disputed + demote confidence/hits
 //   reportFail → increment fail_count; dead at >= 3
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
+import { requireAuthUser } from '../_shared/auth.ts';
 
 const VALID = ['wildberries', 'ozon', 'yandex_market'];
 const MAX_ALTERNATES = 2;
+const DISPUTE_CONFIDENCE_PENALTY = 35;
+const DISPUTE_HITS_PENALTY = 2;
+const REJECT_FEEDBACK_BLOCK_DAYS = 30;
 
 function serviceClient() {
   return createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+}
+
+function demoteOnDispute(existing: { confidence?: number | null; hits?: number | null }) {
+  return {
+    confidence: Math.max(0, (existing.confidence ?? 0) - DISPUTE_CONFIDENCE_PENALTY),
+    hits: Math.max(0, (existing.hits ?? 0) - DISPUTE_HITS_PENALTY),
+  };
+}
+
+async function hasRecentRejectFeedback(
+  supabase: ReturnType<typeof serviceClient>,
+  params: {
+    sourceMarketplace: string;
+    sourceProductId: string;
+    targetMarketplace: string;
+    targetProductId: string;
+  },
+): Promise<boolean> {
+  const since = new Date();
+  since.setDate(since.getDate() - REJECT_FEEDBACK_BLOCK_DAYS);
+  const { data, error } = await supabase
+    .from('match_feedback')
+    .select('id')
+    .eq('source_marketplace', params.sourceMarketplace)
+    .eq('source_product_id', params.sourceProductId)
+    .eq('target_marketplace', params.targetMarketplace)
+    .eq('candidate_product_id', params.targetProductId)
+    .eq('accepted', false)
+    .gte('created_at', since.toISOString())
+    .limit(1);
+  if (error) {
+    console.warn('match_feedback reject check', error);
+    return false;
+  }
+  return Boolean(data?.length);
 }
 
 Deno.serve(async (req) => {
@@ -44,12 +83,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: 'sourceProductId required' }, 400);
     }
 
+    // Mutations require JWT; lookup stays public (shared product IDs only).
+    let authUserId: string | null = null;
+    if (action !== 'lookup') {
+      const user = await requireAuthUser(req, true);
+      authUserId = user!.id;
+    }
+
     const supabase = serviceClient();
     const selectCols =
       'source_marketplace, source_product_id, target_marketplace, target_product_id, target_url, confidence, hits, rank, status, evidence, fail_count, last_verified_at';
 
     if (action === 'lookup') {
-      const { data, error } = await supabase
+      const { data: activeRows, error } = await supabase
         .from('cross_market_mapping')
         .select(selectCols)
         .eq('source_marketplace', sourceMarketplace)
@@ -64,7 +110,17 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: 'Read failed' }, 500);
       }
 
-      const rows = data ?? [];
+      const { data: unverifiedRows } = await supabase
+        .from('cross_market_mapping')
+        .select(selectCols)
+        .eq('source_marketplace', sourceMarketplace)
+        .eq('source_product_id', sourceProductId)
+        .eq('target_marketplace', targetMarketplace)
+        .eq('status', 'unverified')
+        .order('rank', { ascending: true })
+        .limit(MAX_ALTERNATES);
+
+      const rows = activeRows ?? [];
       if (rows[0]) {
         void supabase
           .from('cross_market_mapping')
@@ -78,11 +134,16 @@ Deno.serve(async (req) => {
           .eq('target_product_id', rows[0].target_product_id);
       }
 
-      // Compat: mapping = primary
+      const alternatesUnverified = (unverifiedRows ?? []).map((r) => ({
+        ...r,
+        unverified: true,
+      }));
+
       return jsonResponse({
         ok: true,
         mapping: rows[0] ?? null,
         mappings: rows,
+        unverifiedAlternates: alternatesUnverified,
       });
     }
 
@@ -102,7 +163,38 @@ Deno.serve(async (req) => {
 
       const now = new Date().toISOString();
 
-      // If writing primary (rank 0), demote previous primary of other product ids
+      const { data: existing } = await supabase
+        .from('cross_market_mapping')
+        .select('hits, fail_count, evidence, status, confidence')
+        .eq('source_marketplace', sourceMarketplace)
+        .eq('source_product_id', sourceProductId)
+        .eq('target_marketplace', targetMarketplace)
+        .eq('target_product_id', targetProductId)
+        .maybeSingle();
+
+      if (evidence === 'auto') {
+        if (existing?.status === 'disputed' || existing?.status === 'dead') {
+          return jsonResponse({ ok: true, skipped: 'disputed_or_dead' });
+        }
+        if (
+          await hasRecentRejectFeedback(supabase, {
+            sourceMarketplace,
+            sourceProductId,
+            targetMarketplace,
+            targetProductId,
+          })
+        ) {
+          return jsonResponse({ ok: true, skipped: 'reject_feedback' });
+        }
+      }
+
+      if (
+        (existing?.status === 'disputed' || existing?.status === 'dead') &&
+        evidence !== 'manual'
+      ) {
+        return jsonResponse({ ok: true, skipped: 'disputed_or_dead' });
+      }
+
       if (rank === 0) {
         await supabase
           .from('cross_market_mapping')
@@ -115,14 +207,36 @@ Deno.serve(async (req) => {
           .eq('rank', 0);
       }
 
-      const { data: existing } = await supabase
-        .from('cross_market_mapping')
-        .select('hits, fail_count')
-        .eq('source_marketplace', sourceMarketplace)
-        .eq('source_product_id', sourceProductId)
-        .eq('target_marketplace', targetMarketplace)
-        .eq('target_product_id', targetProductId)
-        .maybeSingle();
+      const evidenceRank: Record<string, number> = { auto: 0, multi_user: 1, manual: 2 };
+      const existingRank = evidenceRank[existing?.evidence ?? 'auto'] ?? 0;
+      const incomingRank = evidenceRank[evidence] ?? 0;
+      const resolvedEvidence =
+        existing?.evidence && existingRank > incomingRank ? existing.evidence : evidence;
+
+      const matchConfidence =
+        body.matchConfidence != null
+          ? Math.round(Number(body.matchConfidence))
+          : confidence;
+      const lowConfidenceManual =
+        evidence === 'manual' &&
+        matchConfidence != null &&
+        matchConfidence < 70;
+
+      let resolvedStatus: string =
+        existing?.status === 'disputed' || existing?.status === 'dead'
+          ? existing.status
+          : lowConfidenceManual
+          ? 'unverified'
+          : 'active';
+
+      // Manual high-confidence can lift unverified → active
+      if (
+        evidence === 'manual' &&
+        existing?.status === 'unverified' &&
+        !lowConfidenceManual
+      ) {
+        resolvedStatus = 'active';
+      }
 
       const row = {
         source_marketplace: sourceMarketplace,
@@ -130,11 +244,11 @@ Deno.serve(async (req) => {
         target_marketplace: targetMarketplace,
         target_product_id: targetProductId,
         target_url: targetUrl,
-        confidence,
+        confidence: matchConfidence ?? confidence,
         hits: (existing?.hits ?? 0) + 1,
-        rank,
-        status: 'active',
-        evidence,
+        rank: lowConfidenceManual ? Math.max(rank, 1) : rank,
+        status: resolvedStatus,
+        evidence: resolvedEvidence,
         fail_count: existing?.fail_count ?? 0,
         last_verified_at: now,
         updated_at: now,
@@ -149,13 +263,36 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: 'Write failed' }, 500);
       }
 
-      // Optional alternates: [{ targetProductId, targetUrl, confidence? }]
       const alternates = Array.isArray(body.alternates) ? body.alternates.slice(0, MAX_ALTERNATES) : [];
       for (let i = 0; i < alternates.length; i++) {
         const alt = alternates[i];
         const altId = String(alt?.targetProductId ?? '').slice(0, 64);
         const altUrl = String(alt?.targetUrl ?? '').slice(0, 500);
         if (!altId || !altUrl || altId === targetProductId) continue;
+
+        const { data: altExisting } = await supabase
+          .from('cross_market_mapping')
+          .select('status')
+          .eq('source_marketplace', sourceMarketplace)
+          .eq('source_product_id', sourceProductId)
+          .eq('target_marketplace', targetMarketplace)
+          .eq('target_product_id', altId)
+          .maybeSingle();
+
+        if (altExisting?.status === 'disputed' || altExisting?.status === 'dead') continue;
+        if (evidence === 'auto') {
+          if (
+            await hasRecentRejectFeedback(supabase, {
+              sourceMarketplace,
+              sourceProductId,
+              targetMarketplace,
+              targetProductId: altId,
+            })
+          ) {
+            continue;
+          }
+        }
+
         await supabase.from('cross_market_mapping').upsert(
           {
             source_marketplace: sourceMarketplace,
@@ -181,7 +318,7 @@ Deno.serve(async (req) => {
       }
 
       const sourceUrl = String(body.sourceUrl ?? '').trim();
-      if (sourceUrl.startsWith('http') && rank === 0) {
+      if (sourceUrl.startsWith('http') && rank === 0 && evidence === 'manual') {
         await supabase.from('cross_market_mapping').upsert(
           {
             source_marketplace: targetMarketplace,
@@ -215,9 +352,31 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: 'targetProductId or targetUrl required' }, 400);
       }
 
+      if (authUserId && targetProductId) {
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: recent } = await supabase
+          .from('mapping_moderation_events')
+          .select('id')
+          .eq('user_id', authUserId)
+          .eq('action', action)
+          .eq('source_marketplace', sourceMarketplace)
+          .eq('source_product_id', sourceProductId)
+          .eq('target_marketplace', targetMarketplace)
+          .eq('target_product_id', targetProductId)
+          .gte('created_at', since)
+          .limit(1);
+        if (recent?.length) {
+          return jsonResponse({
+            ok: false,
+            code: 'moderation_cooldown',
+            error: 'Повторный dispute/reportFail по этому mapping можно через 24 часа',
+          }, 429);
+        }
+      }
+
       let query = supabase
         .from('cross_market_mapping')
-        .select('target_product_id, fail_count, target_url')
+        .select('target_product_id, fail_count, target_url, confidence, hits')
         .eq('source_marketplace', sourceMarketplace)
         .eq('source_product_id', sourceProductId)
         .eq('target_marketplace', targetMarketplace);
@@ -242,9 +401,15 @@ Deno.serve(async (req) => {
 
       for (const row of toUpdate) {
         if (action === 'dispute') {
+          const demoted = demoteOnDispute(row);
           await supabase
             .from('cross_market_mapping')
-            .update({ status: 'disputed', updated_at: now })
+            .update({
+              status: 'disputed',
+              confidence: demoted.confidence,
+              hits: demoted.hits,
+              updated_at: now,
+            })
             .eq('source_marketplace', sourceMarketplace)
             .eq('source_product_id', sourceProductId)
             .eq('target_marketplace', targetMarketplace)
@@ -263,6 +428,54 @@ Deno.serve(async (req) => {
             .eq('target_marketplace', targetMarketplace)
             .eq('target_product_id', row.target_product_id);
         }
+
+        if (authUserId) {
+          await supabase.from('mapping_moderation_events').insert({
+            user_id: authUserId,
+            action,
+            source_marketplace: sourceMarketplace,
+            source_product_id: sourceProductId,
+            target_marketplace: targetMarketplace,
+            target_product_id: row.target_product_id,
+          });
+        }
+      }
+
+      if (action === 'dispute' && toUpdate.length === 0 && targetProductId) {
+        const stubUrl =
+          targetUrl && targetUrl.startsWith('http')
+            ? targetUrl.slice(0, 500)
+            : `https://www.ozon.ru/product/${targetProductId}/`;
+        await supabase.from('cross_market_mapping').upsert(
+          {
+            source_marketplace: sourceMarketplace,
+            source_product_id: sourceProductId,
+            target_marketplace: targetMarketplace,
+            target_product_id: targetProductId,
+            target_url: stubUrl,
+            confidence: 0,
+            hits: 0,
+            rank: 0,
+            status: 'disputed',
+            evidence: 'auto',
+            fail_count: 0,
+            updated_at: now,
+          },
+          {
+            onConflict:
+              'source_marketplace,source_product_id,target_marketplace,target_product_id',
+          },
+        );
+        if (authUserId) {
+          await supabase.from('mapping_moderation_events').insert({
+            user_id: authUserId,
+            action: 'dispute',
+            source_marketplace: sourceMarketplace,
+            source_product_id: sourceProductId,
+            target_marketplace: targetMarketplace,
+            target_product_id: targetProductId,
+          });
+        }
       }
 
       return jsonResponse({ ok: true, updated: toUpdate.length });
@@ -270,6 +483,10 @@ Deno.serve(async (req) => {
 
     return jsonResponse({ ok: false, error: 'Unknown action' }, 400);
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg === 'auth_required' || msg === 'invalid_token') {
+      return jsonResponse({ ok: false, error: 'Требуется авторизация' }, 401);
+    }
     console.error('cross-market-map error', error);
     return jsonResponse({ ok: false, error: 'Server error' }, 500);
   }

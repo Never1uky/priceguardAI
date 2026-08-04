@@ -2,25 +2,106 @@
  * Выбор кандидата из топ-3 SERP после низкого confidence.
  */
 import { applyOffersToCompareProduct, isOfferWithPrice } from '@/lib/compare-offers';
-import { enrichOfferRatingIfMissing, resolveOfferForUrl } from '@/lib/marketplace-search';
+import { enrichOfferRatingIfMissing } from '@/lib/marketplace-search';
+import { fetchOfferFromUrl } from '@/lib/offer-fetch';
 import { computeMatchConfidence } from '@/lib/product-match';
 import { rememberCrossMarketMapping, resolveSourceProductId } from '@/lib/cross-market-map';
 import { recordMatchFeedback } from '@/lib/match-feedback';
 import { getCompareProducts, saveCompareProducts } from '@/lib/comparison-storage';
 import { getBestTitle } from '@/lib/compare-merge';
-import type { CompareProduct, ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
+import { isOutOfStockError } from '@/lib/out-of-stock';
+import { rememberPickHistory } from '@/lib/pick-history';
+import { normalizeCompareUrl as normalizeUrlForMatch } from '@/utils/comparison-url';
+import type {
+  CompareProduct,
+  ComparisonMarketplace,
+  MarketplaceOffer,
+  SearchCandidateOffer,
+} from '@/types/comparison';
 import {
   detectComparisonMarketplace,
   extractComparisonArticle,
   normalizeCompareUrl,
+  resolveCompareCandidateUrl,
 } from '@/utils/comparison-url';
+
+export interface SelectCandidateHint {
+  title?: string;
+  price?: number | null;
+  imageUrl?: string;
+  rating?: number | null;
+}
+
+export class ComparePickNetworkError extends Error {
+  constructor(message = 'Ошибка сети при загрузке карточки') {
+    super(message);
+    this.name = 'ComparePickNetworkError';
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function urlsMatch(a: string, b: string): boolean {
+  const na = normalizeUrlForMatch(a);
+  const nb = normalizeUrlForMatch(b);
+  return na === nb || a === b || na.includes(b) || nb.includes(a);
+}
+
+function findStoredCandidate(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  candidateUrl: string,
+): SearchCandidateOffer | undefined {
+  const fromOffer = product.marketplaceOffers?.[marketplace]?.searchCandidates ?? [];
+  const fromPool = product.candidatePoolByMarketplace?.[marketplace] ?? [];
+  const pool = [...fromOffer, ...fromPool];
+  return pool.find((c) => urlsMatch(c.url, candidateUrl));
+}
+
+function isNetworkError(error: unknown): boolean {
+  if (error instanceof ComparePickNetworkError) return true;
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted') ||
+    msg.includes('ошибка сети')
+  );
+}
+
+async function fetchCardWithRetry(
+  url: string,
+  marketplace: ComparisonMarketplace,
+  skipUnlocker: boolean,
+): Promise<MarketplaceOffer | null> {
+  const delays = [0, 300, 800];
+  let lastError: unknown;
+  for (const wait of delays) {
+    if (wait) await delay(wait);
+    try {
+      return await fetchOfferFromUrl(url, marketplace, { skipUnlocker });
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkError(error)) return null;
+    }
+  }
+  if (lastError && isNetworkError(lastError)) {
+    throw new ComparePickNetworkError();
+  }
+  return null;
+}
 
 export async function selectCompareSearchCandidate(
   productId: string,
   marketplace: ComparisonMarketplace,
   candidateUrl: string,
+  uiHint?: SelectCandidateHint,
 ): Promise<CompareProduct> {
-  const trimmedUrl = candidateUrl.trim();
+  const absoluteUrl = resolveCompareCandidateUrl(candidateUrl, marketplace);
+  const trimmedUrl = absoluteUrl.trim();
   const detected = detectComparisonMarketplace(trimmedUrl);
 
   if (!detected) {
@@ -38,7 +119,43 @@ export async function selectCompareSearchCandidate(
   }
 
   const normalizedUrl = normalizeCompareUrl(trimmedUrl);
-  let offer = await resolveOfferForUrl(normalizedUrl, marketplace);
+  const stored = findStoredCandidate(product, marketplace, normalizedUrl);
+  const hint: SelectCandidateHint = {
+    title: uiHint?.title || stored?.title,
+    price: uiHint?.price ?? stored?.price ?? null,
+    imageUrl: uiHint?.imageUrl || stored?.imageUrl,
+    rating: uiHint?.rating ?? stored?.rating ?? null,
+  };
+
+  const hasSerpPrice = hint.price != null && hint.price > 0;
+  // E4: with SERP price — never burn Premium unlocker
+  const fromCard = await fetchCardWithRetry(normalizedUrl, marketplace, hasSerpPrice);
+
+  let offer: MarketplaceOffer | null = null;
+  let usedSerpOnly = false;
+
+  // OOS card → never promote SERP price into an alertable priced offer
+  if (isOutOfStockError(fromCard?.error)) {
+    throw new Error('Товар недоступен / нет в наличии по этой ссылке');
+  }
+
+  if (fromCard && isOfferWithPrice(fromCard)) {
+    offer = fromCard;
+  } else if (hasSerpPrice) {
+    usedSerpOnly = true;
+    offer = {
+      ...candidateOfferFromUrl(
+        marketplace,
+        normalizedUrl,
+        hint.title || getBestTitle(product),
+        hint.price!,
+        stored?.matchConfidence ?? 80,
+      ),
+      imageUrl: hint.imageUrl,
+      rating: hint.rating ?? null,
+      matchStatus: 'serp_only',
+    };
+  }
 
   if (!offer || !isOfferWithPrice(offer)) {
     throw new Error('Не удалось загрузить данные с карточки');
@@ -52,13 +169,18 @@ export async function selectCompareSearchCandidate(
     url: normalizedUrl,
     found: true,
     matchConfidence: confidence,
-    matchStatus: 'verified',
+    matchStatus: usedSerpOnly ? 'serp_only' : 'verified',
     needsManualPick: false,
     searchCandidates: undefined,
     error: undefined,
   };
 
-  offer = await enrichOfferRatingIfMissing(offer);
+  try {
+    offer = await enrichOfferRatingIfMissing(offer);
+    if (!usedSerpOnly) offer = { ...offer, matchStatus: 'verified' };
+  } catch {
+    // keep SERP/card offer as-is
+  }
 
   const article = extractComparisonArticle(normalizedUrl, marketplace) || undefined;
   const updated = applyOffersToCompareProduct(product, [offer]);
@@ -69,14 +191,19 @@ export async function selectCompareSearchCandidate(
     articlesByMarketplace: article
       ? { ...updated.articlesByMarketplace, [marketplace]: article }
       : updated.articlesByMarketplace,
-    // Фиксируем выбор пользователя — при refresh не запускаем поиск заново
     manualMarketplaces: { ...updated.manualMarketplaces, [marketplace]: true },
     comparedAt: Date.now(),
   };
 
   await saveCompareProducts([withMeta, ...products.filter((p) => p.id !== productId)]);
 
-  // Ручной выбор — самый надёжный сигнал для глобального кэша и обучения
+  void rememberPickHistory({
+    referenceTitle,
+    marketplace,
+    url: normalizedUrl,
+    title: offer.title,
+  });
+
   if (marketplace !== product.sourceMarketplace) {
     const sourceId = resolveSourceProductId({
       sourceMarketplace: product.sourceMarketplace,

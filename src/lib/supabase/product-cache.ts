@@ -21,11 +21,14 @@ export const PRODUCT_CACHE_VERSION = 1;
 /** Отдельная версия для полного AI-анализа товара (не перезаписывает кэш отзывов). */
 export const FULL_PRODUCT_CACHE_VERSION = 2;
 
-/** Кэш веб-исследования Sonar (текст + источники), TTL 7 дней. */
+/** Кэш веб-исследования Sonar (текст + источники). */
 export const WEB_RESEARCH_CACHE_VERSION = 3;
 
-/** TTL кэша — 7 дней. */
+/** TTL полного анализа / отзывов — see AI_CACHE_CONFIG.remoteTtlMs */
 export const PRODUCT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** TTL веб-исследования (v3) — see AI_CACHE_CONFIG.webResearchTtlMs */
+export const WEB_RESEARCH_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 export interface RemoteCacheEntry {
   marketplace: Marketplace;
@@ -155,7 +158,7 @@ export async function getRemoteWebResearchCache(
     text: cached.text,
     sources: Array.isArray(cached.sources) ? cached.sources : [],
     lastUpdated,
-    fresh: Date.now() - lastUpdated < PRODUCT_CACHE_TTL_MS,
+    fresh: Date.now() - lastUpdated < WEB_RESEARCH_CACHE_TTL_MS,
   };
 }
 

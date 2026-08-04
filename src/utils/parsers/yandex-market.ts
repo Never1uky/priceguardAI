@@ -1,4 +1,5 @@
 import { detectAuthenticityFromDom } from '@/lib/authenticity/detect-dom';
+import { parseRatingFromMarketplaceText } from '@/lib/compare-offers';
 import { offerPricesFromYandexDomText } from '@/lib/yandex-offer';
 import {
   canonicalUrl,
@@ -9,7 +10,7 @@ import {
   parsePrice,
   queryFirst,
 } from '@/utils/dom';
-import { isProductPage } from '@/utils/marketplace';
+import { extractArticle, isProductPage } from '@/utils/marketplace';
 import type { Product } from '@/types/product';
 
 
@@ -145,27 +146,9 @@ function extractImageUrl(): string | undefined {
 
 
 function extractRating(): { rating: number | null; reviewCount?: number } {
-
   const block = queryFirst(RATING_SELECTORS);
-
   const text = block?.textContent ?? document.body.textContent ?? '';
-
-
-
-  const ratingMatch = text.match(/(\d[.,]\d)\s*(?:из|★|⭐)?/);
-
-  const rating = ratingMatch ? parseFloat(ratingMatch[1].replace(',', '.')) : null;
-
-
-
-  const reviewMatch = text.match(/(\d[\d\s]*)\s*отзыв/i);
-
-  const reviewCount = reviewMatch ? parsePrice(reviewMatch[1]) : undefined;
-
-
-
-  return { rating, reviewCount };
-
+  return parseRatingFromMarketplaceText(text);
 }
 
 
@@ -209,12 +192,8 @@ export function parseYandexMarketProduct(): Product | null {
 
 
   const url = canonicalUrl();
-
-  const articleMatch = url.match(/\/(\d+)(?:\?|$)/);
-
-  const article = articleMatch?.[1] ?? url.split('/').pop() ?? 'ym';
-
-
+  const article = extractArticle(url, 'yandex_market');
+  if (!article) return null;
 
   const title = getTextFromSelectors(TITLE_SELECTORS);
 

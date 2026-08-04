@@ -11,7 +11,16 @@ import { formatDate, formatPrice, paymentDiscountLabel } from '@/lib/utils';
 import { MARKETPLACE_LABELS, marketplaceBadgeVariant } from '@/utils/marketplace';
 import type { PricePoint, Product } from '@/types/product';
 import { ProductLink } from '@/popup/components/ProductLink';
-import { Bell, BellOff, ExternalLink, RefreshCw, Scale, TrendingDown } from 'lucide-react';
+import {
+  BellOff,
+  ExternalLink,
+  Info,
+  PackagePlus,
+  RefreshCw,
+  Search,
+  Shield,
+  TrendingDown,
+} from 'lucide-react';
 
 interface CurrentPriceTabProps {
   product: Product | null;
@@ -21,8 +30,8 @@ interface CurrentPriceTabProps {
   error: string | null;
   onTrack: () => void;
   onUntrack: () => void;
-  onRefresh: () => void;
-  onCompare: () => void;
+  /** Единый add + research → «Мои товары» */
+  onAddToMyProducts: () => void;
   isComparePending?: boolean;
   fullAnalysisBusy?: boolean;
 }
@@ -37,8 +46,7 @@ export function CurrentPriceTab({
   error,
   onTrack,
   onUntrack,
-  onRefresh,
-  onCompare,
+  onAddToMyProducts,
   isComparePending = false,
   fullAnalysisBusy = false,
 }: CurrentPriceTabProps) {
@@ -91,30 +99,36 @@ export function CurrentPriceTab({
           </div>
 
           <div className="flex gap-3">
-            <ProductImage product={product} className="h-20 w-20 rounded-sm" />
-            <div className="min-w-0 flex-1">
-              <h2 className="line-clamp-3 pg-title">{product.title}</h2>
-              <p className="pg-caption mt-1.5">Арт. {product.article}</p>
+            <ProductImage product={product} className="h-24 w-24 rounded-md shadow-soft" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <h2 className="line-clamp-3 pg-title text-[16px]">{product.title}</h2>
+              <p className="pg-caption">Арт. {product.article}</p>
+              <div>
+                <p className="inline-flex items-center gap-1 pg-caption text-muted-foreground">
+                  Текущая цена
+                  <Info className="h-3 w-3" strokeWidth={1.75} aria-hidden />
+                </p>
+                <div className="mt-1 flex flex-wrap items-end gap-2">
+                  <span className="text-[28px] font-semibold leading-none tracking-tight text-primary tabular-nums">
+                    {formatPrice(displayPrice)}
+                  </span>
+                  {product.oldPrice && product.oldPrice > displayPrice && (
+                    <>
+                      <span className="pg-body text-muted-foreground line-through">
+                        {formatPrice(product.oldPrice)}
+                      </span>
+                      {discount && (
+                        <span className="inline-flex items-center gap-0.5 rounded-sm bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                          <TrendingDown className="h-3 w-3" strokeWidth={1.75} />−{discount}%
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-end gap-2">
-            <span className="text-[28px] font-semibold leading-none tracking-tight text-foreground tabular-nums">
-              {formatPrice(product.basePrice ?? product.price)}
-            </span>
-            {product.oldPrice && product.oldPrice > (product.basePrice ?? product.price) && (
-              <>
-                <span className="pg-body text-muted-foreground line-through">
-                  {formatPrice(product.oldPrice)}
-                </span>
-                {discount && (
-                  <span className="inline-flex items-center gap-0.5 rounded-sm bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
-                    <TrendingDown className="h-3 w-3" strokeWidth={1.75} />−{discount}%
-                  </span>
-                )}
-              </>
-            )}
-          </div>
           {(product.marketplace === 'yandex_market' || product.marketplace === 'ozon') &&
             product.payPrice != null &&
             product.basePrice != null &&
@@ -153,50 +167,79 @@ export function CurrentPriceTab({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-2">
-            {isTracked ? (
-              <Button variant="secondary" onClick={onUntrack} disabled={isLoading}>
-                <BellOff className="h-4 w-4" strokeWidth={1.75} />
-                Убрать
-              </Button>
-            ) : (
-              <Button onClick={onTrack} disabled={isLoading}>
-                <Bell className="h-4 w-4" strokeWidth={1.75} />
-                Отслеживать
-              </Button>
-            )}
+          <Surface
+            variant="subtle"
+            padding="sm"
+            className="flex items-center gap-3 bg-primary/5 ring-1 ring-primary/15"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-primary/10">
+              <Shield className="h-4 w-4 text-primary" strokeWidth={1.75} aria-hidden />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="pg-subtitle">Следить за ценой</p>
+              <p className="pg-hint mt-0.5">
+                Уведомим, если товар подешевеет
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isTracked}
+              aria-label={isTracked ? 'Отключить отслеживание' : 'Включить отслеживание'}
+              disabled={isLoading}
+              onClick={() => (isTracked ? onUntrack() : onTrack())}
+              className={`relative h-6 w-11 shrink-0 rounded-full pg-transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${
+                isTracked ? 'bg-primary' : 'bg-muted-foreground/30'
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-soft pg-transition ${
+                  isTracked ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </Surface>
+
+          <div className="flex flex-col gap-2">
             <Button
-              variant="outline"
-              onClick={onCompare}
+              className="w-full"
+              onClick={onAddToMyProducts}
               disabled={isLoading || isComparePending || fullAnalysisBusy}
             >
-              <Scale
-                className={`h-4 w-4 ${isComparePending ? 'animate-pulse' : ''}`}
-                strokeWidth={1.75}
-              />
-              {isComparePending ? 'Сравниваем…' : 'Сравнить'}
+              {isComparePending ? (
+                <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+              ) : isTracked ? (
+                <Search className="h-4 w-4" strokeWidth={1.75} />
+              ) : (
+                <PackagePlus className="h-4 w-4" strokeWidth={1.75} />
+              )}
+              {isComparePending
+                ? 'Добавляем и ищем…'
+                : isTracked
+                  ? 'Обновить поиск'
+                  : 'В «Мои товары»'}
             </Button>
+            {isTracked && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={onUntrack}
+                disabled={isLoading || isComparePending}
+              >
+                <BellOff className="h-4 w-4" strokeWidth={1.75} />
+                Убрать из «Мои»
+              </Button>
+            )}
           </div>
 
-          {!isTracked && (
-            <p className="pg-caption">
-              При отслеживании вы получите уведомление, если цена упадёт на 1% или более 100 ₽
-            </p>
-          )}
-
-          <div className="flex gap-1">
-            <Button variant="ghost" size="icon-sm" onClick={onRefresh} title="Обновить">
-              <RefreshCw
-                className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`}
-                strokeWidth={1.75}
-              />
-            </Button>
-            <Button variant="ghost" size="icon-sm" asChild>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="icon" asChild className="h-9 w-9">
               <ProductLink
                 url={product.url}
                 marketplace={product.marketplace}
-                className="inline-flex h-8 w-8 items-center justify-center"
-                title="Открыть на маркетплейсе"
+                className="inline-flex h-9 w-9 items-center justify-center"
+                title="Открыть на площадке"
+                aria-label="Открыть на площадке"
               >
                 <ExternalLink className="h-4 w-4" strokeWidth={1.75} />
               </ProductLink>
