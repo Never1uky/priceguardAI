@@ -1,5 +1,6 @@
-# Backup trigger for server-side Telegram price checks (every 6h UTC).
-# Primary schedule: pg_cron via supabase/scripts/setup-update-prices-cron.sql
+# Backup trigger for server-side Telegram price checks.
+# Primary schedule: pg_cron '0 */6 * * *' via supabase/scripts/setup-update-prices-cron.sql
+# This workflow is intentionally staggered (+20m) so GH is a real backup, not a duplicate.
 #
 # Repo secrets:
 #   SUPABASE_URL              e.g. https://ihlfvpocwobvcpxbypsd.supabase.co
@@ -9,7 +10,7 @@ name: update-prices
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '20 */6 * * *'
   workflow_dispatch:
 
 jobs:

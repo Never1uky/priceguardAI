@@ -35,11 +35,17 @@ import { invalidateProductCacheAnalysis } from '../_shared/product-cache-store.t
 import { toPrefixedProductId } from '../_shared/product-id.ts';
 import { authorizeCronOrServiceRoleDetailed } from '../_shared/cron-auth.ts';
 import {
+  DEFAULT_SKU_FETCH_TIMEOUT_MS,
   DEFAULT_UPDATE_PRICES_MAX_GROUPS,
   DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
+  FETCH_TIMEOUT_REASON,
+  UPDATE_PRICES_ALREADY_RUNNING_NOTE,
+  isPriceRowStale,
+  isTimeoutError,
   isUnavailablePriceResult,
   OOS_REASON,
   parsePositiveIntEnv,
+  raceWithTimeout,
   shouldStopByRuntimeBudget,
 } from '../_shared/update-prices-policy.ts';
 
@@ -103,6 +109,9 @@ interface TrackedRow {
   last_target_notified_at?: string | null;
   last_drop_notified_at?: string | null;
   last_drop_notified_price?: number | null;
+  last_fetch_error?: string | null;
+  consecutive_unavailable_count?: number | null;
+  unavailable_since?: string | null;
 }
 
 interface Stats {
@@ -222,6 +231,10 @@ Deno.serve(async (req) => {
     Deno.env.get('UPDATE_PRICES_MAX_GROUPS_PER_RUN'),
     DEFAULT_UPDATE_PRICES_MAX_GROUPS,
   );
+  const skuFetchTimeoutMs = parsePositiveIntEnv(
+    Deno.env.get('UPDATE_PRICES_SKU_FETCH_TIMEOUT_MS'),
+    DEFAULT_SKU_FETCH_TIMEOUT_MS,
+  );
 
   const stats: Stats = {
     users: 0,
@@ -237,8 +250,23 @@ Deno.serve(async (req) => {
     bySource: { cache: 0, scrappey: 0, legacy: 0 },
   };
 
+  const supabase = serviceClient();
+  let lockHeld = false;
+
   try {
-    const supabase = serviceClient();
+    const lockTtlSeconds = Math.max(180, Math.ceil(runtimeBudgetMs / 1000) + 60);
+    const { data: lockAcquired, error: lockError } = await supabase.rpc(
+      'try_acquire_update_prices_lock',
+      { ttl_seconds: lockTtlSeconds, p_locked_by: 'update-prices' },
+    );
+    if (lockError) {
+      console.warn('[update-prices] lock acquire error; continuing without exclusive lease', lockError);
+    } else if (lockAcquired === false) {
+      return jsonResponse({ ok: true, note: UPDATE_PRICES_ALREADY_RUNNING_NOTE });
+    } else if (lockAcquired === true) {
+      lockHeld = true;
+    }
+
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
 
@@ -296,7 +324,7 @@ Deno.serve(async (req) => {
     const { data: products, error: productsError } = await supabase
       .from('tracked_products')
       .select(
-        'id, user_id, marketplace, product_id, product_title, product_url, target_price, last_price, updated_at, created_at, last_checked, last_target_notified_at, last_drop_notified_at, last_drop_notified_price',
+        'id, user_id, marketplace, product_id, product_title, product_url, target_price, last_price, updated_at, created_at, last_checked, last_target_notified_at, last_drop_notified_at, last_drop_notified_price, last_fetch_error, consecutive_unavailable_count, unavailable_since',
       )
       .in('user_id', [...settingsByUser.keys()])
       .eq('deleted', false)
@@ -376,41 +404,78 @@ Deno.serve(async (req) => {
       }
       const nowMsInner = Date.now();
       const staleRows = group.rows.filter(({ row, priority }) => {
-        if (!row.last_checked) return true;
-        const t = Date.parse(row.last_checked);
-        const freshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
-        return !Number.isFinite(t) || nowMsInner - t >= freshMs;
+        const baseFreshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
+        return isPriceRowStale({
+          lastChecked: row.last_checked,
+          nowMs: nowMsInner,
+          baseFreshMs,
+          consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+        });
       });
 
       let fetched: Awaited<ReturnType<typeof fetchMarketplacePriceDetailed>> = null;
+      let fetchTimedOut = false;
 
-      // E5: scrape only if at least one subscriber is stale (tier-aware)
+      // E5: scrape only if at least one subscriber is stale (tier-aware + OOS backoff)
       if (staleRows.length > 0) {
         try {
-          fetched = await fetchMarketplacePriceDetailed(
-            group.marketplace,
-            group.productId,
-            group.productUrl,
-            { scraper: projectScraper, supabase },
+          fetched = await raceWithTimeout(
+            fetchMarketplacePriceDetailed(
+              group.marketplace,
+              group.productId,
+              group.productUrl,
+              { scraper: projectScraper, supabase },
+            ),
+            skuFetchTimeoutMs,
           );
           stats.checked += 1;
           if (fetched?.source) {
             stats.bySource[fetched.source] = (stats.bySource[fetched.source] ?? 0) + 1;
           }
         } catch (error) {
-          console.warn('[update-prices] sku fetch error', group.key, error);
+          if (isTimeoutError(error)) {
+            fetchTimedOut = true;
+            console.warn('[update-prices] sku fetch timeout', group.key);
+          } else {
+            console.warn('[update-prices] sku fetch error', group.key, error);
+          }
         }
+      }
+
+      if (fetchTimedOut) {
+        for (const { row } of staleRows) {
+          const mp = group.marketplace;
+          stats.errors += 1;
+          stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
+          try {
+            await supabase
+              .from('tracked_products')
+              .update({
+                last_fetch_ok: false,
+                last_fetch_error: FETCH_TIMEOUT_REASON,
+                updated_at: nowIso,
+              })
+              .eq('id', row.id);
+          } catch {
+            // ignore secondary write failure
+          }
+        }
+        processedGroups += 1;
+        await delay(group.priority ? 20 : 40);
+        continue;
       }
 
       for (const { row, priority } of group.rows) {
         const settingsRow = settingsByUser.get(row.user_id);
         if (!settingsRow) continue;
         const mp = group.marketplace;
-        const freshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
-        const rowFresh =
-          row.last_checked &&
-          Number.isFinite(Date.parse(row.last_checked)) &&
-          nowMsInner - Date.parse(row.last_checked) < freshMs;
+        const baseFreshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
+        const rowFresh = !isPriceRowStale({
+          lastChecked: row.last_checked,
+          nowMs: nowMsInner,
+          baseFreshMs,
+          consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+        });
 
         // Fresh row + no new scrape → skip (keep last_price)
         if (rowFresh && !fetched) {
@@ -421,11 +486,15 @@ Deno.serve(async (req) => {
           if (isUnavailablePriceResult(fetched)) {
             if (!rowFresh) {
               stats.unavailable += 1;
+              const nextCount = (row.consecutive_unavailable_count ?? 0) + 1;
               await supabase
                 .from('tracked_products')
                 .update({
                   last_fetch_ok: false,
                   last_fetch_error: OOS_REASON,
+                  consecutive_unavailable_count: nextCount,
+                  unavailable_since: row.unavailable_since ?? nowIso,
+                  last_checked: nowIso,
                   updated_at: nowIso,
                 })
                 .eq('id', row.id);
@@ -482,6 +551,8 @@ Deno.serve(async (req) => {
             updated_at: nowIso,
             last_fetch_ok: true,
             last_fetch_error: null,
+            consecutive_unavailable_count: 0,
+            unavailable_since: null,
           };
 
           void appendPriceHistory(supabase, {
@@ -611,5 +682,13 @@ Deno.serve(async (req) => {
       error: error instanceof Error ? error.message : 'Server error',
       stats,
     }, 500);
+  } finally {
+    if (lockHeld) {
+      try {
+        await supabase.rpc('release_update_prices_lock');
+      } catch (releaseError) {
+        console.warn('[update-prices] lock release error', releaseError);
+      }
+    }
   }
 });
