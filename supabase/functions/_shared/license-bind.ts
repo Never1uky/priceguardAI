@@ -3,8 +3,6 @@
  * Один ключ — один владелец; чужой ключ не перехватывается.
  */
 
-import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-
 export type BindLicenseResult =
   | { ok: true; bound: boolean }
   | { ok: false; error: string; code: 'LICENSE_OWNED_BY_OTHER' | 'BIND_FAILED' };
@@ -14,7 +12,9 @@ export type BindLicenseResult =
  * Returns LICENSE_OWNED_BY_OTHER if another account already owns this key.
  */
 export async function bindLicenseToUser(
-  supabase: SupabaseClient,
+  // Loose client — avoids npm/esm SupabaseClient generic skew across entrypoints.
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
   userId: string,
   license: {
     id: string;

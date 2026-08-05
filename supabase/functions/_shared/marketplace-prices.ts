@@ -674,7 +674,7 @@ export async function fetchMarketplacePriceDetailed(
         fetchedUrl: cached.url || url,
         fetchedTitle: cached.title,
       });
-      if (!identity.ok) {
+      if (identity.ok === false) {
         logPriceIdentityReject({
           reason: identity.reason,
           marketplace,
@@ -729,7 +729,7 @@ export async function fetchMarketplacePriceDetailed(
     fetchedUrl: fetched.url,
     fetchedTitle: fetched.title,
   });
-  if (!identity.ok) {
+  if (identity.ok === false) {
     logPriceIdentityReject({
       reason: identity.reason,
       marketplace,

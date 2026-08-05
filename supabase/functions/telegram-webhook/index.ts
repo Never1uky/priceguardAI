@@ -485,7 +485,7 @@ async function addProductFromLink(
     updatedAt: nowIso,
   });
 
-  if (!saved.ok) {
+  if (saved.ok === false) {
     console.error('[telegram-webhook] upsert tracked', saved);
     return {
       ok: false,
@@ -559,7 +559,7 @@ async function removeProductFromLink(
     updatedAt: nowIso,
   });
 
-  if (!saved.ok) {
+  if (saved.ok === false) {
     return {
       ok: false,
       reply: '⚠️ Не удалось убрать товар из отслеживания.',

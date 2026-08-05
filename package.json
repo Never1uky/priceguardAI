@@ -16,7 +16,9 @@
     "icons": "node scripts/generate-icons.mjs",
     "postinstall": "node scripts/generate-icons.mjs",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:edge-imports": "node scripts/check-edge-imports.mjs",
+    "check:edge": "node scripts/deno-check-functions.mjs"
   },
   "dependencies": {
     "@radix-ui/react-scroll-area": "^1.2.3",

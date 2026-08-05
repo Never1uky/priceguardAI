@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
             : nowIso,
         });
 
-        if (!saved.ok) {
+        if (saved.ok === false) {
           console.error('tracked_products upsert', saved);
           return jsonResponse({
             ok: false,

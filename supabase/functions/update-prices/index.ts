@@ -453,7 +453,7 @@ Deno.serve(async (req) => {
             fetchedUrl: fetched.url || url,
             fetchedTitle: fetched.title,
           });
-          if (!identity.ok) {
+          if (identity.ok === false) {
             logPriceIdentityReject({
               reason: identity.reason,
               rowId: row.id,

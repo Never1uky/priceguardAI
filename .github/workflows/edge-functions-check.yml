@@ -1,0 +1,42 @@
+# Verify Edge Function imports resolve (before deploy).
+# - Node relative-import scan (fast, no network) — catches missing _shared files
+# - deno check on every functions/*/index.ts (full module graph)
+
+name: edge-functions-check
+
+on:
+  push:
+    paths:
+      - 'supabase/functions/**'
+      - 'scripts/check-edge-imports.mjs'
+      - 'scripts/deno-check-functions.mjs'
+      - 'scripts/deno-check-functions.sh'
+      - '.github/workflows/edge-functions-check.yml'
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+      - 'scripts/check-edge-imports.mjs'
+      - 'scripts/deno-check-functions.mjs'
+      - 'scripts/deno-check-functions.sh'
+      - '.github/workflows/edge-functions-check.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check all functions/*/index.ts
+        run: npm run check:edge

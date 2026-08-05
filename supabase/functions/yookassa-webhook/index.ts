@@ -4,7 +4,8 @@ import { generateLicenseKey, handleCors, jsonResponse, PLAN_PRICES } from '../_s
 import { fetchYookassaPayment } from '../_shared/yookassa-verify.ts';
 
 async function bindPaymentUserPremium(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
   paymentRow: { user_id?: string | null },
   license: { id: string; plan: string; expires_at: string | null },
 ) {
@@ -14,7 +15,7 @@ async function bindPaymentUserPremium(
     plan: license.plan,
     expires_at: license.expires_at,
   });
-  if (!result.ok) {
+  if (result.ok === false) {
     console.warn('[yookassa-webhook] bind skipped:', result.error);
   }
 }

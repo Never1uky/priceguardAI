@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
       plan: license.plan,
       expires_at: license.expires_at,
     });
-    if (!bind.ok && bind.code === 'LICENSE_OWNED_BY_OTHER') {
+    if (bind.ok === false && bind.code === 'LICENSE_OWNED_BY_OTHER') {
       return jsonResponse({ ok: false, error: bind.error, code: bind.code }, 403);
     }
 
