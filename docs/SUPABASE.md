@@ -1,5 +1,7 @@
 # Подключение Supabase — PriceGuard AI (v2.20.8)
 
+SEO product pages (durable snapshots, variant B): [SEO_PRODUCT_PAGES.md](./SEO_PRODUCT_PAGES.md) · migration `20260807220000_seo_product_pages.sql`.
+
 ## Серверный мониторинг цен (Free + Premium + Telegram)
 
 План уведомлений:
