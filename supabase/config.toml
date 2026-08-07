@@ -142,3 +142,12 @@ verify_jwt = false
 
 [functions.restore-license]
 verify_jwt = false
+
+[functions.seo-publish]
+verify_jwt = false
+
+[functions.seo-pages]
+verify_jwt = false
+
+[functions.seo-refresh-offers]
+verify_jwt = false

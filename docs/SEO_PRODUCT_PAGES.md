@@ -226,13 +226,43 @@ On publish upsert: `POST {SEO_SITE_ORIGIN}/api/revalidate` with `SEO_REVALIDATE_
 
 ## 5. Implementation order (after this spec)
 
-1. Migration `seo_product_pages` + RLS  
-2. Pure helpers: slugify, hash, gates + unit tests  
-3. Edge `seo-publish` + hook from product-intel / cache put  
-4. Edge `seo-pages` read API  
-5. Scaffold `priceguard-seo` Next app with routes above  
-6. Wire revalidate + robots/sitemap/rss  
-7. Landing link to SEO hub  
+1. Migration `seo_product_pages` + RLS — **done** (`20260807220000`)
+2. Pure helpers: slugify, hash, gates + unit tests — **done** (`src/lib/seo`, `_shared/seo-*`)
+3. Edge `seo-publish` + hook from product-intel / cache put — **done** (`upsertProductCacheVersioned` → `scheduleSeoPublishAfterV2Upsert` fire-and-forget)
+4. Edge `seo-pages` read API — **done** (public + IP rate limit; published only)
+5. Scaffold `priceguard-seo` Next app with routes above — **done** (`../priceguard-seo`, sibling of landing)  
+6. Wire revalidate + robots/sitemap/rss — **done** (in `priceguard-seo`)  
+7. Landing link to SEO hub — **done** (`SITE.seoSiteOrigin` in Header/Footer)  
+8. Cron `seo-refresh-offers` — **done** (offers/price only, no AI)
+
+### Manual smoke `seo-publish`
+
+```bash
+curl -sS -X POST "$SUPABASE_URL/functions/v1/seo-publish" \
+  -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"marketplace\":\"ozon\",\"productId\":\"YOUR_ID\"}"
+```
+
+### Manual smoke `seo-refresh-offers`
+
+```bash
+# batch (stale-first, default limit 40)
+curl -sS -X POST "$SUPABASE_URL/functions/v1/seo-refresh-offers" \
+  -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"limit\":10}"
+
+# single slug
+curl -sS -X POST "$SUPABASE_URL/functions/v1/seo-refresh-offers" \
+  -H "x-cron-secret: $UPDATE_PRICES_CRON_SECRET" \
+  -H "Content-Type: application/json" \
+  -d "{\"slug\":\"your-slug\"}"
+```
+
+Optional env on Edge: `SEO_SITE_ORIGIN`, `SEO_REVALIDATE_SECRET` (revalidate no-ops if unset).
+
+Suggested pg_cron / external cron: every 6h, same auth as `update-prices`.
 
 ---
 

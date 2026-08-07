@@ -90,6 +90,23 @@ export async function upsertProductCacheVersioned(
     console.error('[product-cache-store] upsert', error);
     return { ok: false, error: error.message };
   }
+
+  // Fire-and-forget SEO snapshot for full analysis only (v2). Never blocks / never AI.
+  if (row.cacheVersion === FULL_PRODUCT_CACHE_VERSION) {
+    void import('./seo-publish-run.ts')
+      .then(({ scheduleSeoPublishAfterV2Upsert }) => {
+        scheduleSeoPublishAfterV2Upsert(
+          supabase,
+          row.marketplace,
+          row.productId,
+          row.cacheVersion,
+        );
+      })
+      .catch((e) => {
+        console.warn('[seo-publish] schedule failed', e);
+      });
+  }
+
   return { ok: true };
 }
 
