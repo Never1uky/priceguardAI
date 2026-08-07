@@ -44,6 +44,29 @@ describe('cron auth', () => {
     expect(result.reason).toBe('ok_service_role');
   });
 
+  it('authorizes legacy service_role JWT when Edge has sb_secret', () => {
+    stubDenoEnv({
+      UPDATE_PRICES_CRON_SECRET: 'cron-secret',
+      SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_abc',
+      SUPABASE_URL: 'https://ihlfvpocwobvcpxbypsd.supabase.co',
+    });
+    // header.payload.sig — payload role=service_role, ref=ihlfvpocwobvcpxbypsd
+    const payload = btoa(
+      JSON.stringify({ role: 'service_role', ref: 'ihlfvpocwobvcpxbypsd' }),
+    )
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+    const token = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
+    const req = new Request('https://example.test', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = authorizeCronOrServiceRoleDetailed(req);
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('ok_service_role_jwt');
+  });
+
   it('returns invalid cron secret reason', () => {
     stubDenoEnv({
       UPDATE_PRICES_CRON_SECRET: 'cron-secret',
