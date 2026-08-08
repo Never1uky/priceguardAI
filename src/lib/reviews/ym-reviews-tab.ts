@@ -77,6 +77,6 @@ export async function scrapeYandexReviewsViaHiddenTab(
     console.warn('[PriceGuard] scrapeYandexReviewsViaHiddenTab:', error);
     return { reviews: [], totalFound: 0 };
   } finally {
-    void releaseHiddenBrowser();
+    void releaseHiddenBrowser(browser);
   }
 }

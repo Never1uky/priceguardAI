@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_SKU_FETCH_TIMEOUT_MS,
+  DEFAULT_UPDATE_PRICES_CONCURRENCY,
   DEFAULT_UPDATE_PRICES_MAX_GROUPS,
   DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
   UPDATE_PRICES_ALREADY_RUNNING_NOTE,
@@ -53,6 +54,10 @@ describe('update-prices policy', () => {
 
   it('keeps sane default max groups', () => {
     expect(DEFAULT_UPDATE_PRICES_MAX_GROUPS).toBeGreaterThan(0);
+  });
+
+  it('processes more than one SKU group at a time (perf: was strictly sequential before)', () => {
+    expect(DEFAULT_UPDATE_PRICES_CONCURRENCY).toBeGreaterThan(1);
   });
 
   it('scales OOS fresh interval by consecutive failures', () => {

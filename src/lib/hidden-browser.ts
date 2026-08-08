@@ -112,10 +112,21 @@ export class HiddenBrowser {
   }
 }
 
-let sharedSession: HiddenBrowser | null = null;
-/** Сколько параллельных searchViaBrowserTab держат сессию открытой */
-let hiddenBrowserUsers = 0;
+let poolSlots: Array<{ browser: HiddenBrowser; users: number }> = [];
 let idleCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Max concurrent hidden-browser windows. marketplace-search.ts already
+ * dispatches target-marketplace searches via Promise.all (V4 "parallel
+ * search"), but every one of them used to funnel through a single shared
+ * HiddenBrowser instance, re-serializing what looked parallel at the call
+ * site. With the current 3-marketplace universe, at most 2 target
+ * marketplaces are ever searched at once (source marketplace is excluded),
+ * so a pool of 2 gives real parallelism without opening more background
+ * windows than could ever usefully run concurrently today. Free to raise if
+ * the marketplace count grows (see docs on marketplace architecture).
+ */
+export const HIDDEN_BROWSER_POOL_SIZE = 2;
 
 /** Close unused hidden window after this idle (users === 0). */
 export const HIDDEN_BROWSER_IDLE_CLOSE_MS = 45_000;
@@ -127,24 +138,54 @@ function clearIdleCloseTimer(): void {
   }
 }
 
-export function getHiddenBrowser(): HiddenBrowser {
-  if (!sharedSession) {
-    sharedSession = new HiddenBrowser();
-  }
-  return sharedSession;
+function totalUsers(): number {
+  return poolSlots.reduce((sum, slot) => sum + slot.users, 0);
 }
 
-/** Взять shared-сессию (refcount). Пара с releaseHiddenBrowser. */
+/** Primary/first pool session — back-compat for callers that only need "a" hidden browser. */
+export function getHiddenBrowser(): HiddenBrowser {
+  if (poolSlots.length === 0) {
+    poolSlots.push({ browser: new HiddenBrowser(), users: 0 });
+  }
+  return poolSlots[0].browser;
+}
+
+/**
+ * Take a session from the pool (refcounted per-slot, not globally): reuses
+ * a fully-idle slot if one exists, otherwise grows the pool up to
+ * HIDDEN_BROWSER_POOL_SIZE, otherwise shares the least-busy existing slot.
+ * Pair with releaseHiddenBrowser(browser) — pass back the exact instance
+ * returned here so the right slot's refcount is decremented.
+ */
 export function acquireHiddenBrowser(): HiddenBrowser {
   clearIdleCloseTimer();
-  hiddenBrowserUsers += 1;
-  return getHiddenBrowser();
+
+  const idle = poolSlots.find((slot) => slot.users === 0);
+  if (idle) {
+    idle.users += 1;
+    return idle.browser;
+  }
+
+  if (poolSlots.length < HIDDEN_BROWSER_POOL_SIZE) {
+    const slot = { browser: new HiddenBrowser(), users: 1 };
+    poolSlots.push(slot);
+    return slot.browser;
+  }
+
+  const leastBusy = poolSlots.reduce((min, slot) => (slot.users < min.users ? slot : min));
+  leastBusy.users += 1;
+  return leastBusy.browser;
 }
 
-/** Отпустить сессию; закрыть окно только когда никто больше не использует. */
-export async function releaseHiddenBrowser(): Promise<void> {
-  hiddenBrowserUsers = Math.max(0, hiddenBrowserUsers - 1);
-  if (hiddenBrowserUsers === 0) {
+/** Release a session acquired via acquireHiddenBrowser(browser-instance-aware). */
+export async function releaseHiddenBrowser(browser?: HiddenBrowser): Promise<void> {
+  const slot = browser
+    ? poolSlots.find((s) => s.browser === browser)
+    : poolSlots[0];
+  if (slot) {
+    slot.users = Math.max(0, slot.users - 1);
+  }
+  if (totalUsers() === 0) {
     scheduleHiddenBrowserIdleClose();
   }
 }
@@ -152,54 +193,53 @@ export async function releaseHiddenBrowser(): Promise<void> {
 /** Schedule close when refcount is 0 (debounce parallel releases). */
 export function scheduleHiddenBrowserIdleClose(delayMs = HIDDEN_BROWSER_IDLE_CLOSE_MS): void {
   clearIdleCloseTimer();
-  if (hiddenBrowserUsers > 0) return;
+  if (totalUsers() > 0) return;
   idleCloseTimer = setTimeout(() => {
     idleCloseTimer = null;
-    if (hiddenBrowserUsers > 0) return;
+    if (totalUsers() > 0) return;
     void closeHiddenBrowser();
   }, delayMs);
 }
 
 /** Force close now if idle (used after compare job). */
 export async function closeHiddenBrowserIfIdle(): Promise<void> {
-  if (hiddenBrowserUsers > 0) return;
+  if (totalUsers() > 0) return;
   clearIdleCloseTimer();
   await closeHiddenBrowser();
 }
 
+/** Primary session's window id — sufficient for the pre-filter callers do before isHiddenBrowserTab(). */
 export function getHiddenBrowserWindowId(): number | undefined {
-  return sharedSession?.getWindowId();
+  return poolSlots[0]?.browser.getWindowId();
 }
 
 export function getHiddenBrowserTabId(): number | undefined {
-  return sharedSession?.getTabId();
+  return poolSlots[0]?.browser.getTabId();
 }
 
 export function getHiddenBrowserUserCount(): number {
-  return hiddenBrowserUsers;
+  return totalUsers();
 }
 
-/** True if tab/window belongs to the shared hidden scrape session. */
+/** True if tab/window belongs to ANY pool session — this is the authoritative check. */
 export function isHiddenBrowserTab(tabId?: number | null, windowId?: number | null): boolean {
-  const hiddenTab = getHiddenBrowserTabId();
-  const hiddenWin = getHiddenBrowserWindowId();
-  if (tabId != null && hiddenTab != null && tabId === hiddenTab) return true;
-  if (windowId != null && hiddenWin != null && windowId === hiddenWin) return true;
-  return false;
+  return poolSlots.some((slot) => {
+    const hiddenTab = slot.browser.getTabId();
+    const hiddenWin = slot.browser.getWindowId();
+    if (tabId != null && hiddenTab != null && tabId === hiddenTab) return true;
+    if (windowId != null && hiddenWin != null && windowId === hiddenWin) return true;
+    return false;
+  });
 }
 
 export async function closeHiddenBrowser(): Promise<void> {
   clearIdleCloseTimer();
-  if (sharedSession) {
-    await sharedSession.close();
-    sharedSession = null;
-  }
-  hiddenBrowserUsers = 0;
+  await Promise.all(poolSlots.map((slot) => slot.browser.close()));
+  poolSlots = [];
 }
 
 /** @internal test helper */
 export function __resetHiddenBrowserForTests(): void {
   clearIdleCloseTimer();
-  sharedSession = null;
-  hiddenBrowserUsers = 0;
+  poolSlots = [];
 }

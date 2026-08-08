@@ -1,5 +1,15 @@
 export const DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS = 115_000;
 export const DEFAULT_UPDATE_PRICES_MAX_GROUPS = 160;
+/**
+ * Groups processed per concurrent batch (was strictly sequential — one group
+ * at a time with a 20-40ms artificial delay between each — which meant only
+ * a fraction of DEFAULT_UPDATE_PRICES_MAX_GROUPS fit inside the runtime
+ * budget per run. Groups are independent (unique marketplace+product_id,
+ * disjoint tracked_products rows), so batching them concurrently is safe
+ * and does not increase Scrappey call volume — same total requests, just
+ * overlapped instead of serialized.
+ */
+export const DEFAULT_UPDATE_PRICES_CONCURRENCY = 6;
 export const OOS_REASON = 'out_of_stock_or_unavailable';
 export const FETCH_TIMEOUT_REASON = 'timeout';
 export const UPDATE_PRICES_ALREADY_RUNNING_NOTE = 'already running';

@@ -170,8 +170,8 @@ export async function searchViaBrowserTab(
     }
   }
 
+  const browser = acquireHiddenBrowser();
   try {
-    const browser = acquireHiddenBrowser();
     const extVersion =
       typeof chrome !== 'undefined' && chrome.runtime?.getManifest
         ? chrome.runtime.getManifest().version
@@ -324,6 +324,6 @@ export async function searchViaBrowserTab(
   } catch (error) {
     return buildSearchNotFoundOffer(marketplace, query, userFacingError(error));
   } finally {
-    void releaseHiddenBrowser();
+    void releaseHiddenBrowser(browser);
   }
 }

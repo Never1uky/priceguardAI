@@ -106,7 +106,7 @@ export async function resolveProductPageUrl(url: string): Promise<string> {
       return normalizeCompareUrl(finalUrl);
     });
   } finally {
-    void releaseHiddenBrowser();
+    void releaseHiddenBrowser(browser);
   }
 }
 
@@ -192,7 +192,7 @@ export async function scrapeOfferViaHiddenTab(
       return null;
     });
   } finally {
-    void releaseHiddenBrowser();
+    void releaseHiddenBrowser(browser);
   }
 }
 

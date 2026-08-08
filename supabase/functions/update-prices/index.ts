@@ -36,6 +36,7 @@ import { toPrefixedProductId } from '../_shared/product-id.ts';
 import { authorizeCronOrServiceRoleDetailed } from '../_shared/cron-auth.ts';
 import {
   DEFAULT_SKU_FETCH_TIMEOUT_MS,
+  DEFAULT_UPDATE_PRICES_CONCURRENCY,
   DEFAULT_UPDATE_PRICES_MAX_GROUPS,
   DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
   decideUpdatePricesLock,
@@ -176,10 +177,6 @@ async function sendTargetAlert(
     buttonText: '🛒 Открыть товар',
   });
   return result.sent;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function shouldSendTargetAlert(row: TrackedRow, nowMs: number): boolean {
@@ -399,12 +396,16 @@ Deno.serve(async (req) => {
       stopReason = 'max_groups';
     }
 
-    for (const group of groupsForRun) {
-      if (shouldStopByRuntimeBudget(startedAtMs, runtimeBudgetMs)) {
-        earlyStopped = true;
-        stopReason = 'time_budget';
-        break;
-      }
+    const CONCURRENCY = parsePositiveIntEnv(
+      Deno.env.get('UPDATE_PRICES_CONCURRENCY'),
+      DEFAULT_UPDATE_PRICES_CONCURRENCY,
+    );
+
+    // Extracted so groups within a batch can run concurrently via Promise.all —
+    // groups are independent (unique marketplace+product_id, disjoint tracked_products
+    // rows), so there is no shared mutable state at risk here besides `stats`, whose
+    // increments are synchronous (no await mid-increment) and therefore race-free.
+    const processGroup = async (group: SkuGroup): Promise<void> => {
       const nowMsInner = Date.now();
       const staleRows = group.rows.filter(({ row, priority }) => {
         const baseFreshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
@@ -464,8 +465,7 @@ Deno.serve(async (req) => {
           }
         }
         processedGroups += 1;
-        await delay(group.priority ? 20 : 40);
-        continue;
+        return;
       }
 
       for (const { row, priority } of group.rows) {
@@ -656,8 +656,16 @@ Deno.serve(async (req) => {
       }
 
       processedGroups += 1;
-      // Keep a small jitter to avoid burst spikes, but not enough to hit 150s runtime limits.
-      await delay(group.priority ? 20 : 40);
+    };
+
+    for (let batchStart = 0; batchStart < groupsForRun.length; batchStart += CONCURRENCY) {
+      if (shouldStopByRuntimeBudget(startedAtMs, runtimeBudgetMs)) {
+        earlyStopped = true;
+        stopReason = 'time_budget';
+        break;
+      }
+      const batch = groupsForRun.slice(batchStart, batchStart + CONCURRENCY);
+      await Promise.all(batch.map((group) => processGroup(group)));
     }
 
     const elapsedMs = Date.now() - startedAtMs;

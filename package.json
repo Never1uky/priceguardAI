@@ -1,6 +1,6 @@
 {
   "name": "priceguard-ai",
-  "version": "0.9.96",
+  "version": "0.9.97",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "check:edge-imports": "node scripts/check-edge-imports.mjs",
-    "check:edge": "node scripts/deno-check-functions.mjs"
+    "check:edge": "node scripts/deno-check-functions.mjs",
+    "validate:seo-seed": "node scripts/validate-seo-seed-articles.mjs"
   },
   "dependencies": {
     "@radix-ui/react-scroll-area": "^1.2.3",
