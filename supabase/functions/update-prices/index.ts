@@ -38,6 +38,7 @@ import {
   DEFAULT_SKU_FETCH_TIMEOUT_MS,
   DEFAULT_UPDATE_PRICES_MAX_GROUPS,
   DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
+  decideUpdatePricesLock,
   FETCH_TIMEOUT_REASON,
   UPDATE_PRICES_ALREADY_RUNNING_NOTE,
   isPriceRowStale,
@@ -259,12 +260,14 @@ Deno.serve(async (req) => {
       'try_acquire_update_prices_lock',
       { ttl_seconds: lockTtlSeconds, p_locked_by: 'update-prices' },
     );
-    if (lockError) {
-      console.warn('[update-prices] lock acquire error; continuing without exclusive lease', lockError);
-    } else if (lockAcquired === false) {
-      return jsonResponse({ ok: true, note: UPDATE_PRICES_ALREADY_RUNNING_NOTE });
-    } else if (lockAcquired === true) {
+    const lockDecision = decideUpdatePricesLock(lockAcquired, lockError);
+    if (lockDecision.action === 'skip') {
+      return jsonResponse({ ok: true, note: lockDecision.note });
+    }
+    if (lockDecision.action === 'proceed_with_lock') {
       lockHeld = true;
+    } else if (lockError) {
+      console.warn('[update-prices] lock acquire error; continuing without exclusive lease', lockError);
     }
 
     const nowIso = new Date().toISOString();

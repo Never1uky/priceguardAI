@@ -4,6 +4,36 @@ export const OOS_REASON = 'out_of_stock_or_unavailable';
 export const FETCH_TIMEOUT_REASON = 'timeout';
 export const UPDATE_PRICES_ALREADY_RUNNING_NOTE = 'already running';
 
+export type UpdatePricesLockDecision =
+  | { action: 'proceed_with_lock' }
+  | { action: 'proceed_without_lock' }
+  | { action: 'skip'; note: string };
+
+/**
+ * Pure decision logic for the try_acquire_update_prices_lock RPC result.
+ * Extracted so it's unit-testable without a live Supabase client (index.ts
+ * imports createClient from esm.sh at module scope, which vitest/Node can't
+ * resolve — see docs/audits/YOOKASSA_REMEDIATION_PLAN.md for the same pattern).
+ *
+ * - lockError present            → proceed WITHOUT the lease (fail open on lock
+ *                                   infra trouble; better to risk an overlapping
+ *                                   run than to silently stop checking prices).
+ * - lockAcquired === false       → another run already holds the lease → skip.
+ * - lockAcquired === true        → this run holds the lease.
+ * - lockAcquired is null/undefined and no error (unexpected RPC shape) →
+ *                                   treated the same as an error: proceed
+ *                                   without the lease rather than blocking.
+ */
+export function decideUpdatePricesLock(
+  lockAcquired: boolean | null | undefined,
+  lockError: unknown,
+): UpdatePricesLockDecision {
+  if (lockError) return { action: 'proceed_without_lock' };
+  if (lockAcquired === false) return { action: 'skip', note: UPDATE_PRICES_ALREADY_RUNNING_NOTE };
+  if (lockAcquired === true) return { action: 'proceed_with_lock' };
+  return { action: 'proceed_without_lock' };
+}
+
 /** Cap OOS scrape backoff at once per 3 days */
 export const UNAVAILABLE_BACKOFF_MAX_MS = 3 * 24 * 60 * 60 * 1000;
 

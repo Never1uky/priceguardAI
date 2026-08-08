@@ -47,17 +47,7 @@ export async function requireAuthUser(req: Request, required = true): Promise<Au
 }
 
 /** Проверить доступ к дашборду метрик. Пустой METRICS_ADMIN_EMAILS → deny-all. */
-export function canAccessMetrics(email: string | undefined): boolean {
-  const list = (Deno.env.get('METRICS_ADMIN_EMAILS') ?? '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  if (list.length === 0) return false;
-  if (!email) return false;
-  return list.includes(email.toLowerCase());
-}
+export { canAccessMetrics } from './metrics-access.ts';
 
 /** @deprecated используйте canAccessMetrics */
-export function isMetricsAdmin(email: string | undefined): boolean {
-  return canAccessMetrics(email);
-}
+export { canAccessMetrics as isMetricsAdmin } from './metrics-access.ts';

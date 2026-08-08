@@ -5,6 +5,7 @@ import {
   DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
   UPDATE_PRICES_ALREADY_RUNNING_NOTE,
   UNAVAILABLE_BACKOFF_MAX_MS,
+  decideUpdatePricesLock,
   effectivePriceFreshMs,
   isPriceRowStale,
   isTimeoutError,
@@ -115,6 +116,38 @@ describe('update-prices policy', () => {
 
   it('exports already-running note for lock skip', () => {
     expect(UPDATE_PRICES_ALREADY_RUNNING_NOTE).toBe('already running');
+  });
+
+  describe('decideUpdatePricesLock (duplicate pg_cron / GitHub Actions run protection)', () => {
+    it('lock acquired → proceed_with_lock (this run does the work)', () => {
+      expect(decideUpdatePricesLock(true, null)).toEqual({ action: 'proceed_with_lock' });
+    });
+
+    it('lock NOT acquired (another run holds it) → skip with the already-running note', () => {
+      expect(decideUpdatePricesLock(false, null)).toEqual({
+        action: 'skip',
+        note: UPDATE_PRICES_ALREADY_RUNNING_NOTE,
+      });
+    });
+
+    it('RPC error → proceed_without_lock (fail open, never silently stop checking prices)', () => {
+      expect(decideUpdatePricesLock(null, new Error('rpc down'))).toEqual({
+        action: 'proceed_without_lock',
+      });
+    });
+
+    it('error takes precedence even if lockAcquired happens to be true', () => {
+      // Defensive: an inconsistent RPC response (data + error both set) must not
+      // be trusted as "lock held" — treat as unlocked/best-effort instead.
+      expect(decideUpdatePricesLock(true, new Error('rpc down'))).toEqual({
+        action: 'proceed_without_lock',
+      });
+    });
+
+    it('unexpected shape (no data, no error) → proceed_without_lock, never blocks the run', () => {
+      expect(decideUpdatePricesLock(undefined, null)).toEqual({ action: 'proceed_without_lock' });
+      expect(decideUpdatePricesLock(null, null)).toEqual({ action: 'proceed_without_lock' });
+    });
   });
 
   it('raceWithTimeout resolves before deadline', async () => {
