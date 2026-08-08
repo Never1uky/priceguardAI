@@ -13,6 +13,7 @@ import { shouldRunCompare } from '@/lib/compare-cache';
 import { resolveAndAddCompareProduct, linkMarketplaceOffer, ManualLinkNeedsConfirmError } from '@/lib/compare-resolve';
 import { refreshCompareProduct } from '@/lib/compare-service';
 import { runCompareJob, isCompareRunning, clearCompareRunning } from '@/lib/compare-jobs';
+import { handleSeoOpenCompare } from '@/lib/seo-open-compare';
 import { withSendResponse, withSendResponseOk } from '@/lib/with-send-response';
 import {
   researchClearAutoOnly,
@@ -429,6 +430,11 @@ void getAuthSession().then((session) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'SEO_OPEN_COMPARE') {
+    void handleSeoOpenCompare(message.payload).then(sendResponse);
+    return true;
+  }
+
   if (message.type === 'GET_ACTIVE_TAB_PRODUCT') {
     return withSendResponse(sendResponse, async (respond) => {
       const tab = await findActiveProductTab();
@@ -1461,6 +1467,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  return false;
+});
+
+chrome.runtime.onMessageExternal.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'SEO_OPEN_COMPARE') {
+    void handleSeoOpenCompare(message.payload).then(sendResponse);
+    return true;
+  }
+  sendResponse({ ok: false, error: 'Unknown message' });
   return false;
 });
 

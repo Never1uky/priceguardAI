@@ -28,7 +28,31 @@ export function seoRevalidatePaths(
 
 export function countRawReviews(raw: unknown): number {
   if (!Array.isArray(raw)) return 0;
-  return raw.filter((r) => typeof r === 'string' && r.trim().length > 0).length;
+  return raw.filter((r) => {
+    if (typeof r === 'string') return r.trim().length > 0;
+    if (r && typeof r === 'object') {
+      const text = (r as { text?: unknown }).text;
+      return typeof text === 'string' && text.trim().length > 0;
+    }
+    return false;
+  }).length;
+}
+
+/**
+ * Honest marketplace rating from review objects (1–5). Returns null if insufficient data.
+ * Never invents AggregateRating from qualityScore.
+ */
+export function averageMarketplaceRating(raw: unknown): number | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const ratings: number[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const n = Number((r as { rating?: unknown }).rating);
+    if (Number.isFinite(n) && n >= 1 && n <= 5) ratings.push(n);
+  }
+  if (ratings.length < 3) return null;
+  const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+  return Math.round(avg * 10) / 10;
 }
 
 export function asAnalysisRecord(raw: unknown): Record<string, unknown> | null {
@@ -92,4 +116,34 @@ export interface SeoOfferSnapshot {
   title?: string;
   price: number | null;
   rating?: number | null;
+}
+
+export const SEO_MAX_OFFERS = 6;
+
+function offerKey(o: SeoOfferSnapshot): string {
+  return `${o.marketplace}:${o.productId}`;
+}
+
+/** Merge offers by marketplace:productId; prefer entries with price. */
+export function mergeSeoOffers(
+  ...lists: SeoOfferSnapshot[][]
+): SeoOfferSnapshot[] {
+  const map = new Map<string, SeoOfferSnapshot>();
+  for (const list of lists) {
+    for (const o of list) {
+      if (!o?.marketplace || !o.productId) continue;
+      const k = offerKey(o);
+      const prev = map.get(k);
+      if (!prev) {
+        map.set(k, o);
+        continue;
+      }
+      if ((prev.price == null || prev.price <= 0) && o.price != null && o.price > 0) {
+        map.set(k, o);
+      } else if (!prev.url && o.url) {
+        map.set(k, { ...prev, url: o.url });
+      }
+    }
+  }
+  return [...map.values()].slice(0, SEO_MAX_OFFERS);
 }

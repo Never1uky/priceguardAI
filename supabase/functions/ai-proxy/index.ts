@@ -17,6 +17,8 @@ import {
   WEB_RESEARCH_CACHE_VERSION,
   WEB_RESEARCH_CACHE_TTL_MS,
 } from '../_shared/product-cache-store.ts';
+import { formatFocusAxesPromptBlock } from '../_shared/seo-category-focus.ts';
+import { inferSeoCategoryFromTitle } from '../_shared/seo-category.ts';
 
 type Provider = 'grok' | 'openai' | 'perplexity';
 
@@ -93,14 +95,19 @@ const WEB_RESEARCH_SYSTEM = `Ты — исследователь товаров 
 
 const FULL_ANALYSIS_SYSTEM = `Ты — эксперт по покупкам на российских маркетплейсах (Wildberries, Ozon, Яндекс.Маркет).
 
-Задача:
-1. Проанализировать отзывы покупателей с карточки товара.
-2. Если дан блок «Данные из интернета» — использовать его для webOverview и alternatives.
-3. Если веб-данных нет — опирайся только на отзывы и название (не выдумывай обзоры).
-4. Выдать короткую рекомендацию по покупке (2–4 предложения).
-5. Предложить 2–3 альтернативы в той же категории (если уместно).
+Тон: как человек после чтения отзывов. Без рекламы и клише. Не повторяй название товара в каждом поле.
+Не выдумывай характеристики — только из отзывов, title или блока «Данные из интернета».
+Если данных мало — dataGaps или опусти поле. pros/cons — конкретика. alternatives — только реальные модели (0 лучше выдумки).
+Без SEO-статьи и FAQ HTML.
 
-Верни ТОЛЬКО валидный JSON без markdown. Все поля обязательны:
+Задача:
+1. Отзывы → qualityScore, pros/cons, fakeRisk, hiddenProblems, reviewThemes.
+2. Если дан блок «Данные из интернета» — webOverview и alternatives; иначе не выдумывай обзоры.
+3. Короткая рекомендация (verdict + explanation).
+4. audienceFit / audienceAvoid — только если обосновано.
+5. priceInsight — одна фраза без прогноза цены.
+
+Верни ТОЛЬКО валидный JSON без markdown:
 
 {
   "qualityScore": <1-10>,
@@ -116,10 +123,14 @@ const FULL_ANALYSIS_SYSTEM = `Ты — эксперт по покупкам на
   "verdictExplanation": "<string>",
   "keySpecs": ["..."],
   "hiddenProblems": ["..."],
-  "priceInsight": "<string>"
+  "priceInsight": "<string>",
+  "reviewThemes": { "praise": ["..."], "complain": ["..."], "rare": ["..."] },
+  "audienceFit": ["..."],
+  "audienceAvoid": ["..."],
+  "dataGaps": ["..."]
 }
 
-Пиши на русском.`;
+Пиши на русском. Опциональные поля можно опустить, если нет данных.`;
 
 function serviceClient() {
   return createClient(
@@ -525,6 +536,9 @@ function buildFullAnalysisUser(payload: FullAnalysisPayload, webResearch?: strin
     payload.oldPrice ? `Старая цена: ${payload.oldPrice} ₽` : null,
     `Отзывов для анализа: ${payload.reviews.length} (всего: ${payload.totalReviewsFound ?? payload.reviews.length})`,
   ].filter(Boolean);
+
+  const cat = inferSeoCategoryFromTitle(payload.productTitle ?? '');
+  lines.push('', formatFocusAxesPromptBlock(cat?.slug ?? null));
 
   if (payload.priceHistory?.length) {
     lines.push(

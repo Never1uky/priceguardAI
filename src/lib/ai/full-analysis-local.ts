@@ -51,6 +51,11 @@ export function normalizeFullAnalysisResponse(raw: RawFullAnalysisResponse): Ful
     providerLabel: 'Локальный анализ',
     analyzedAt: Date.now(),
     schemaVersion: FULL_ANALYSIS_SCHEMA_VERSION,
+    reviewThemes: raw.reviewThemes,
+    audienceFit: raw.audienceFit?.length ? raw.audienceFit.slice(0, 4) : undefined,
+    audienceAvoid: raw.audienceAvoid?.length ? raw.audienceAvoid.slice(0, 4) : undefined,
+    dataGaps: raw.dataGaps?.length ? raw.dataGaps.slice(0, 4) : undefined,
+    focusNotes: raw.focusNotes,
   };
 }
 

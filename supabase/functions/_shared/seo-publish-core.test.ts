@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allocateUniqueSlug,
   asAnalysisRecord,
+  averageMarketplaceRating,
   countRawReviews,
   seoRevalidatePaths,
 } from './seo-publish-core.ts';
@@ -12,6 +13,15 @@ describe('seo-publish-core', () => {
   it('counts reviews', () => {
     expect(countRawReviews(['a', '', 'b'])).toBe(2);
     expect(countRawReviews(null)).toBe(0);
+    expect(countRawReviews([{ text: 'ok', rating: 5 }, { text: '' }])).toBe(1);
+  });
+
+  it('averages marketplace ratings honestly', () => {
+    expect(averageMarketplaceRating([{ rating: 5 }, { rating: 4 }, { rating: 5 }])).toBe(
+      4.7,
+    );
+    expect(averageMarketplaceRating([{ rating: 5 }, { rating: 4 }])).toBeNull();
+    expect(averageMarketplaceRating(['text only'])).toBeNull();
   });
 
   it('parses analysis record', () => {

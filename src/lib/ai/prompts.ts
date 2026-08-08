@@ -3,6 +3,8 @@ import {
   REVIEW_ANALYSIS_JSON_SCHEMA,
   schemaToPromptBlock,
 } from '@/lib/ai/schemas';
+import { inferProductCategory } from '@/lib/match-category';
+import { formatFocusAxesPromptBlock } from '@/lib/seo/category-focus';
 
 export const REVIEW_ANALYSIS_SYSTEM_PROMPT = `Ты — эксперт по анализу отзывов на маркетплейсах Wildberries, Ozon и Яндекс.Маркет.
 
@@ -76,18 +78,26 @@ export function buildWebResearchUserPrompt(input: {
 
 export const FULL_ANALYSIS_SYSTEM_PROMPT = `Ты — эксперт по покупкам на WB / Ozon / Яндекс.Маркет.
 
-Верни ТОЛЬКО валидный JSON (schema v2). Без markdown, SEO-текста, описаний фото.
+Верни ТОЛЬКО валидный JSON (schema v3). Без markdown, SEO-статьи, описаний фото.
+
+Тон: как человек, который быстро прочитал отзывы и характеристики. Без рекламы и клише («идеальный выбор», «must have»).
+Не повторяй название товара в каждом поле. Не выдумывай характеристики (ANC, материалы и т.п.) — только из отзывов, title или блока «Данные из интернета».
+Если данных мало — укажи в dataGaps или опусти поле; не выдавай предположение за факт.
+pros/cons — конкретика («микрофон в ветре»), не «хорошее качество».
+alternatives — только реальные модели; 0 лучше, чем выдумка.
+Не пиши длинный SEO-текст и не генерируй FAQ HTML.
 
 Задача:
-1. Отзывы → qualityScore, pros/cons, fakeRisk, hiddenProblems.
+1. Отзывы → qualityScore, pros/cons, fakeRisk, hiddenProblems, reviewThemes.
 2. Блок «Данные из интернета» (если есть) → webOverview + alternatives; иначе не выдумывай обзоры.
-3. Короткая рекомендация (verdict + explanation).
-4. priceInsight — одна фраза; детали цены UI пересчитает сам.
+3. Короткая рекомендация (verdict + explanation) — вывод отдельно от фактов отзывов.
+4. audienceFit / audienceAvoid — только если обосновано данными.
+5. priceInsight — одна фраза без прогноза будущей цены.
 
 Схема:
 ${schemaToPromptBlock(FULL_ANALYSIS_JSON_SCHEMA)}
 
-Правила: alternatives 0–3 реальных моделей; конкретика из отзывов/веба; русский; короткие поля.`;
+Правила: русский; короткие поля; опирайся на оси категории из user prompt, если переданы.`;
 
 export function buildFullAnalysisUserPrompt(input: {
   productTitle: string;
@@ -106,6 +116,8 @@ export function buildFullAnalysisUserPrompt(input: {
   }>;
   /** Результат Perplexity Sonar (Premium) */
   webResearch?: string;
+  /** ProductCategory id / SEO category_slug for focus axes */
+  categorySlug?: string | null;
 }): string {
   const lines = [
     `Товар: ${input.productTitle}`,
@@ -115,6 +127,18 @@ export function buildFullAnalysisUserPrompt(input: {
     input.oldPrice ? `Старая цена: ${input.oldPrice} ₽` : null,
     `Отзывов для анализа: ${input.reviews.length} (всего на странице: ${input.totalReviewsFound ?? input.reviews.length})`,
   ].filter(Boolean);
+
+  lines.push(
+    '',
+    formatFocusAxesPromptBlock(
+      input.categorySlug && input.categorySlug !== 'generic'
+        ? input.categorySlug
+        : (() => {
+            const inferred = inferProductCategory(input.productTitle);
+            return inferred === 'generic' ? null : inferred;
+          })(),
+    ),
+  );
 
   if (input.priceHistory?.length) {
     lines.push(

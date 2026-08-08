@@ -11,7 +11,7 @@ import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { authorizeCronOrServiceRole } from '../_shared/cron-auth.ts';
 import { parseProductKey } from '../_shared/product-id.ts';
 import type { Marketplace } from '../_shared/product-url.ts';
-import { runSeoPublish } from '../_shared/seo-publish-run.ts';
+import { backfillSeoCategories, batchPublishFromCacheV2, collectSeoPublishMetrics, runSeoPublish } from '../_shared/seo-publish-run.ts';
 
 const MARKETPLACES = new Set(['wildberries', 'ozon', 'yandex_market']);
 
@@ -43,6 +43,35 @@ Deno.serve(async (req) => {
       body = await req.json();
     } catch {
       body = {};
+    }
+
+    if (body.action === 'backfill-categories') {
+      const limit = Number(body.limit ?? 100);
+      const supabase = serviceClient();
+      const result = await backfillSeoCategories(
+        supabase,
+        Number.isFinite(limit) ? limit : 100,
+      );
+      console.info('[seo-publish] backfill-categories', result);
+      return jsonResponse(result);
+    }
+
+    if (body.action === 'batch-publish') {
+      const supabase = serviceClient();
+      const result = await batchPublishFromCacheV2(supabase, {
+        limit: Number(body.limit ?? 25),
+        offset: Number(body.offset ?? 0),
+        featuredOnly: Boolean(body.featuredOnly),
+      });
+      console.info('[seo-publish] batch-publish', result);
+      return jsonResponse(result);
+    }
+
+    if (body.action === 'metrics') {
+      const supabase = serviceClient();
+      const result = await collectSeoPublishMetrics(supabase);
+      console.info('[seo-publish] metrics', result);
+      return jsonResponse(result);
     }
 
     let marketplace: Marketplace | null = null;

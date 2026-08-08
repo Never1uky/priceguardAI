@@ -13,7 +13,13 @@ export interface WebResearchSource {
 }
 
 /** Версия контракта structured analysis (инвалидация при breaking change) */
-export const FULL_ANALYSIS_SCHEMA_VERSION = 2;
+export const FULL_ANALYSIS_SCHEMA_VERSION = 3;
+
+export interface ReviewThemes {
+  praise: string[];
+  complain: string[];
+  rare: string[];
+}
 
 /** Результат полного AI-анализа товара */
 export interface FullProductAnalysis {
@@ -39,6 +45,12 @@ export interface FullProductAnalysis {
   providerLabel: string;
   analyzedAt: number;
   schemaVersion?: number;
+  /** P2.2+ optional */
+  reviewThemes?: ReviewThemes;
+  audienceFit?: string[];
+  audienceAvoid?: string[];
+  dataGaps?: string[];
+  focusNotes?: Record<string, string>;
 }
 
 export interface FullAnalysisInput {
@@ -60,6 +72,8 @@ export interface FullAnalysisInput {
     rating: number | null;
     title: string;
   }>;
+  /** ProductCategory id for focus axes (optional) */
+  categorySlug?: string | null;
 }
 
 export interface RawFullAnalysisResponse {
@@ -77,4 +91,9 @@ export interface RawFullAnalysisResponse {
   keySpecs: string[];
   hiddenProblems: string[];
   priceInsight: string;
+  reviewThemes?: ReviewThemes;
+  audienceFit?: string[];
+  audienceAvoid?: string[];
+  dataGaps?: string[];
+  focusNotes?: Record<string, string>;
 }

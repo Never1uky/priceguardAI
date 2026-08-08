@@ -7,22 +7,27 @@ export const AI_REQUEST_DEFAULTS = {
   temperature: 0.2,
 } as const;
 
-/** schema_version=2: structured only, без SEO/photo; priceInsight — короткий, UI может overlay */
+/** schema_version=3: structured only; optional reviewThemes/audience*; priceInsight короткий */
 export const FULL_ANALYSIS_JSON_SCHEMA = {
   qualityScore: 'number 1–10',
   qualitySummary: 'string ≤2 предложения',
   webOverview: 'string ≤3 предложения',
-  pros: 'string[] (≤4, коротко)',
-  cons: 'string[] (≤4, коротко)',
+  pros: 'string[] (≤4, коротко, конкретика из отзывов)',
+  cons: 'string[] (≤4, коротко, конкретика из отзывов)',
   fakeRisk: '"low" | "medium" | "high"',
   fakeRiskExplanation: 'string ≤1 предложение',
   analogComparison: 'string ≤2 предложения',
-  alternatives: '{ name: string, reason: string }[] (0–3)',
+  alternatives: '{ name: string, reason: string }[] (0–3, только реальные модели)',
   verdict: '"buy_now" | "wait_discount" | "not_recommended"',
   verdictExplanation: 'string ≤2 предложения',
   keySpecs: 'string[] (≤5)',
   hiddenProblems: 'string[] (≤4)',
-  priceInsight: 'string ≤1 предложение (цена/скидка; детали UI дорисует)',
+  priceInsight: 'string ≤1 предложение (цена/скидка; без прогноза)',
+  reviewThemes:
+    '{ praise: string[], complain: string[], rare: string[] } (опционально, ≤4 каждый)',
+  audienceFit: 'string[] (опционально, ≤4 — кому подойдёт)',
+  audienceAvoid: 'string[] (опционально, ≤4 — кому не подойдёт)',
+  dataGaps: 'string[] (опционально — чего не хватило в данных)',
 } as const;
 
 export const REVIEW_ANALYSIS_JSON_SCHEMA = {
@@ -66,6 +71,27 @@ function asVerdict(value: unknown): PurchaseVerdict | null {
     : null;
 }
 
+function asReviewThemes(value: unknown): RawFullAnalysisResponse['reviewThemes'] | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const o = value as Record<string, unknown>;
+  const praise = asStringArray(o.praise, 4);
+  const complain = asStringArray(o.complain, 4);
+  const rare = asStringArray(o.rare, 4);
+  if (!praise.length && !complain.length && !rare.length) return undefined;
+  return { praise, complain, rare };
+}
+
+function asFocusNotes(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof k === 'string' && typeof v === 'string' && v.trim()) {
+      out[k.trim()] = v.trim().slice(0, 200);
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Валидация и нормализация JSON полного анализа */
 export function validateFullAnalysisJson(raw: unknown): RawFullAnalysisResponse {
   if (!raw || typeof raw !== 'object') {
@@ -106,6 +132,11 @@ export function validateFullAnalysisJson(raw: unknown): RawFullAnalysisResponse 
     keySpecs: asStringArray(obj.keySpecs, 8),
     hiddenProblems: asStringArray(obj.hiddenProblems, 8),
     priceInsight: typeof obj.priceInsight === 'string' ? obj.priceInsight.trim() : '',
+    reviewThemes: asReviewThemes(obj.reviewThemes),
+    audienceFit: asStringArray(obj.audienceFit, 4),
+    audienceAvoid: asStringArray(obj.audienceAvoid, 4),
+    dataGaps: asStringArray(obj.dataGaps, 4),
+    focusNotes: asFocusNotes(obj.focusNotes),
   };
 }
 

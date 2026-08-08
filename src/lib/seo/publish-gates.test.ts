@@ -3,6 +3,9 @@ import {
   SEO_MIN_QUALITY_SCORE,
   SEO_MIN_REVIEWS,
   evaluateSeoPublishGates,
+  normalizeQualityScoreForSeo,
+  normalizeSeoImageUrl,
+  sanitizeSeoProductTitle,
 } from './publish-gates.ts';
 import {
   buildSeoProductSlug,
@@ -22,6 +25,8 @@ const goodAnalysis = {
   fakeRisk: 'low',
   webOverview: '',
   source: 'openai',
+  pros: ['Звук', 'Автономность'],
+  cons: ['Микрофон'],
 };
 
 describe('seo publish gates', () => {
@@ -38,6 +43,24 @@ describe('seo publish gates', () => {
         reviewCount: 10,
       }).reason,
     ).toBe('empty_analysis');
+  });
+
+  it('rejects missing score', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: { ...goodAnalysis, qualityScore: null },
+        reviewCount: 10,
+      }).reason,
+    ).toBe('empty_analysis');
+  });
+
+  it('accepts legacy 80 as score 8 after normalize', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: { ...goodAnalysis, qualityScore: 80 },
+        reviewCount: 10,
+      }),
+    ).toEqual({ ok: true });
   });
 
   it('rejects local source', () => {
@@ -75,6 +98,77 @@ describe('seo publish gates', () => {
         reviewCount: 0,
       }),
     ).toEqual({ ok: true });
+  });
+
+  it('rejects thin pros/cons', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: { ...goodAnalysis, pros: ['one'], cons: [] },
+        reviewCount: 10,
+      }).reason,
+    ).toBe('thin_content');
+  });
+
+  it('rejects weak titles', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: goodAnalysis,
+        reviewCount: 10,
+        title: '12345',
+      }).reason,
+    ).toBe('weak_title');
+  });
+
+  it('allows title with SEO Smoke after sanitize (clean product name remains)', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: goodAnalysis,
+        reviewCount: 10,
+        title: 'Xiaomi Redmi Buds 6 Active SEO Smoke',
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects title that is only SEO Smoke', () => {
+    expect(
+      evaluateSeoPublishGates({
+        analysis: goodAnalysis,
+        reviewCount: 10,
+        title: 'SEO Smoke',
+      }).reason,
+    ).toBe('weak_title');
+  });
+});
+
+describe('sanitizeSeoProductTitle', () => {
+  it('strips fixture markers and marketplace labels', () => {
+    expect(sanitizeSeoProductTitle('Xiaomi Redmi Buds 6 Active SEO Smoke')).toBe(
+      'Xiaomi Redmi Buds 6 Active',
+    );
+    expect(sanitizeSeoProductTitle('Redmi Buds — Wildberries')).toBe('Redmi Buds');
+    expect(sanitizeSeoProductTitle('Ozon: Redmi Buds')).toBe('Redmi Buds');
+  });
+});
+
+describe('normalizeQualityScoreForSeo', () => {
+  it('keeps 1–10 and maps legacy 11–100', () => {
+    expect(normalizeQualityScoreForSeo(8)).toBe(8);
+    expect(normalizeQualityScoreForSeo(80)).toBe(8);
+    expect(normalizeQualityScoreForSeo(null)).toBeNull();
+    expect(normalizeQualityScoreForSeo(0)).toBeNull();
+  });
+});
+
+describe('normalizeSeoImageUrl', () => {
+  it('treats null/empty/invalid the same', () => {
+    expect(normalizeSeoImageUrl(null)).toBeNull();
+    expect(normalizeSeoImageUrl(undefined)).toBeNull();
+    expect(normalizeSeoImageUrl('')).toBeNull();
+    expect(normalizeSeoImageUrl('  ')).toBeNull();
+    expect(normalizeSeoImageUrl('not-a-url')).toBeNull();
+    expect(normalizeSeoImageUrl('https://cdn.example/a.webp')).toBe(
+      'https://cdn.example/a.webp',
+    );
   });
 });
 

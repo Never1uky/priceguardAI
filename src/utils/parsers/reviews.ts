@@ -143,30 +143,47 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function openOzonReviewsSection(allowNavigation: boolean): Promise<void> {
-  if (allowNavigation) {
-    const tabButtons = document.querySelectorAll<HTMLElement>(
-      '[data-widget="webReviewTabs"] button, [data-widget="webReviewTabs"] a, button[class*="tab"]',
-    );
+/** Narrow anchors for one intentional scroll (allowNavigation=true only). */
+const REVIEW_SECTION_ANCHORS = [
+  '#comments',
+  '[data-link="feedbacks"]',
+  '[data-widget="webListReviews"]',
+  '[data-widget="paginatedReviews"]',
+  '[data-widget="webReview"]',
+  '[data-zone-name="reviews"]',
+  '[data-auto="reviews"]',
+  '[data-auto="review-list"]',
+  'a[href*="/feedbacks"]',
+  'a[href*="/reviews"]',
+  'a[href*="comments"]',
+] as const;
 
-    for (const button of tabButtons) {
-      const text = button.textContent?.toLowerCase() ?? '';
-      if (text.includes('отзыв') || text.includes('review')) {
-        button.click();
-        await delay(1500);
-        break;
-      }
+async function openOzonReviewsSection(allowNavigation: boolean): Promise<void> {
+  if (!allowNavigation) return;
+
+  const tabButtons = document.querySelectorAll<HTMLElement>(
+    '[data-widget="webReviewTabs"] button, [data-widget="webReviewTabs"] a, button[class*="tab"]',
+  );
+
+  for (const button of tabButtons) {
+    const text = button.textContent?.toLowerCase() ?? '';
+    if (text.includes('отзыв') || text.includes('review')) {
+      button.click();
+      await delay(1500);
+      break;
     }
   }
 
   scrollToReviewsSection();
-  if (allowNavigation) await delay(2500);
+  await delay(2500);
 }
 
 async function openYandexReviewsSection(allowNavigation: boolean): Promise<void> {
+  if (!allowNavigation) return;
+
   const onReviewsPage = /\/reviews(?:\/|$|\?)/i.test(window.location.pathname);
 
-  if (allowNavigation && !onReviewsPage) {
+  if (!onReviewsPage) {
     const tabSelectors = [
       '[data-auto="product-tabs"] button',
       '[data-auto="product-tabs"] a',
@@ -190,8 +207,6 @@ async function openYandexReviewsSection(allowNavigation: boolean): Promise<void>
   }
 
   scrollToReviewsSection();
-  if (!allowNavigation) return;
-
   await delay(onReviewsPage ? 800 : 2_500);
 
   const showMore = document.querySelector<HTMLElement>(
@@ -267,9 +282,11 @@ function scrapeYandexReviewsFromJson(): ScrapedReview[] {
 }
 
 async function openWildberriesReviewsSection(allowNavigation: boolean): Promise<void> {
+  if (!allowNavigation) return;
+
   const onFeedbacksPage = /\/feedbacks/i.test(window.location.pathname);
 
-  if (allowNavigation && !onFeedbacksPage) {
+  if (!onFeedbacksPage) {
     const feedbackLink = document.querySelector<HTMLElement>(
       'a[href*="/feedbacks"], a[href*="feedbacks"], [data-link="feedbacks"], [data-link="comments"], button[data-link="feedbacks"]',
     );
@@ -279,6 +296,7 @@ async function openWildberriesReviewsSection(allowNavigation: boolean): Promise<
     } else {
       const article = window.location.href.match(/\/catalog\/(\d+)/i)?.[1];
       if (article) {
+        // Canonical path form for feedbacks listing (navigation only when allowed).
         window.location.href = `https://www.wildberries.ru/catalog/${article}/feedbacks`;
         await delay(2500);
       }
@@ -286,12 +304,29 @@ async function openWildberriesReviewsSection(allowNavigation: boolean): Promise<
   }
 
   scrollToReviewsSection();
-  if (allowNavigation) await delay(2000);
+  await delay(2000);
 }
 
 export interface ScrapeReviewsOptions {
-  /** false = только DOM/JSON на текущей странице, без кликов и переходов */
+  /** false = только DOM/JSON на текущей странице, без кликов, scroll и переходов */
   allowNavigation?: boolean;
+}
+
+async function waitForMoreReviews(
+  allowNavigation: boolean,
+  scrape: () => ScrapedReview[],
+  maxAttempts: number,
+): Promise<ScrapedReview[]> {
+  let allReviews: ScrapedReview[] = [];
+  for (let attempt = 0; attempt < maxAttempts && allReviews.length < 5; attempt++) {
+    allReviews = scrape();
+    if (allReviews.length >= 5) break;
+    // Passive mode: no scroll/wait loops — one read pass only.
+    if (!allowNavigation) break;
+    // Navigating mode: wait for lazy content; do NOT re-scroll (one scroll already in open*).
+    await delay(2000);
+  }
+  return allReviews;
 }
 
 export async function scrapeReviews(
@@ -306,42 +341,37 @@ export async function scrapeReviews(
     // DOM only — WB feedbacks API только из SW (collect-reviews / scrape-via-tab).
     // fetch с карточки wildberries.ru → CORS noise (credentials + ACAO *).
     await openWildberriesReviewsSection(allowNavigation);
-
-    for (let attempt = 0; attempt < 3 && allReviews.length < 5; attempt++) {
-      allReviews = scrapeReviewsFromDom(WB_REVIEW_SELECTORS);
-      if (allReviews.length >= 5) break;
-      scrollToReviewsSection();
-      await delay(2000);
-    }
+    allReviews = await waitForMoreReviews(
+      allowNavigation,
+      () => scrapeReviewsFromDom(WB_REVIEW_SELECTORS),
+      3,
+    );
   } else if (marketplace === 'ozon') {
     await openOzonReviewsSection(allowNavigation);
-
-    for (let attempt = 0; attempt < 3 && allReviews.length < 5; attempt++) {
-      allReviews = scrapeReviewsFromDom(OZON_REVIEW_SELECTORS);
-      if (allReviews.length >= 5) break;
-      scrollToReviewsSection();
-      await delay(2000);
-    }
+    allReviews = await waitForMoreReviews(
+      allowNavigation,
+      () => scrapeReviewsFromDom(OZON_REVIEW_SELECTORS),
+      3,
+    );
   } else if (marketplace === 'yandex_market') {
     await openYandexReviewsSection(allowNavigation);
-
-    for (let attempt = 0; attempt < 4 && allReviews.length < 5; attempt++) {
-      const fromDom = scrapeReviewsFromDom(YANDEX_REVIEW_SELECTORS);
-      const fromJson = scrapeYandexReviewsFromJson();
-
-      const seen = new Set<string>();
-      allReviews = [];
-      for (const r of [...fromDom, ...fromJson]) {
-        if (!seen.has(r.text)) {
-          seen.add(r.text);
-          allReviews.push(r);
+    allReviews = await waitForMoreReviews(
+      allowNavigation,
+      () => {
+        const fromDom = scrapeReviewsFromDom(YANDEX_REVIEW_SELECTORS);
+        const fromJson = scrapeYandexReviewsFromJson();
+        const seen = new Set<string>();
+        const merged: ScrapedReview[] = [];
+        for (const r of [...fromDom, ...fromJson]) {
+          if (!seen.has(r.text)) {
+            seen.add(r.text);
+            merged.push(r);
+          }
         }
-      }
-
-      if (allReviews.length >= 5) break;
-      scrollToReviewsSection();
-      await delay(2_000);
-    }
+        return merged;
+      },
+      4,
+    );
   }
 
   const totalFound = allReviews.length;
@@ -350,21 +380,13 @@ export async function scrapeReviews(
   return { reviews: filtered, totalFound };
 }
 
+/** One intentional scroll to reviews block. Callers must gate with allowNavigation. */
 export function scrollToReviewsSection(): void {
-  const anchor = queryFirst([
-    '#comments',
-    '[data-link="feedbacks"]',
-    '[class*="feedback"]',
-    '[data-widget="webReview"]',
-    '[data-widget="webListReviews"]',
-    '[data-widget="paginatedReviews"]',
-    'a[href*="comments"]',
-    'a[href*="review"]',
-    '[data-zone-name="reviews"]',
-    '[data-auto="reviews"]',
-    '[data-auto="product-tabs"]',
-    'a[href*="reviews"]',
-  ]);
-
+  const anchor = queryFirst([...REVIEW_SECTION_ANCHORS]);
   anchor?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** Exported for tests — anchors must stay narrow (no [class*="feedback"] / product-tabs root). */
+export function reviewSectionAnchorSelectors(): readonly string[] {
+  return REVIEW_SECTION_ANCHORS;
 }

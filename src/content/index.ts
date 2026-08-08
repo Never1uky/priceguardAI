@@ -5,7 +5,7 @@ import {
   recordVisitPrice,
   updateTrackedProductPrice,
 } from '@/lib/storage-local';
-import { scrapeReviews, scrollToReviewsSection } from '@/utils/parsers/reviews';
+import { scrapeReviews } from '@/utils/parsers/reviews';
 import { scrapeMarketplaceSearch } from '@/utils/parsers/search-results';
 import { detectMarketplace } from '@/utils/marketplace';
 import type { ComparisonMarketplace } from '@/types/comparison';
@@ -263,11 +263,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       const filter = (message.filter as import('@/types/review-analysis').ReviewFilter) ?? 'all';
       const allowNavigation = message.allowNavigation === true;
-
-      if (marketplace === 'ozon' && allowNavigation) {
-        scrollToReviewsSection();
-        await new Promise((r) => setTimeout(r, 500));
-      }
 
       const result = await scrapeReviews(marketplace, filter, { allowNavigation });
       sendResponse({

@@ -56,7 +56,9 @@ Body of truth for HTML: `analysis_snapshot` (jsonb), **not** live `product_cache
 | `image_url` | text null | |
 | `product_url` | text null | canonical MP card URL |
 | `rating` | numeric null | if known |
-| `quality_score` | numeric | denormalized |
+| `quality_score` | numeric | scale **0–10** (typically 1–10); UI via `formatQualityScore` |
+| `view_count` | int default 0 | honest counter; UI only if ≥10 |
+| `view_count_updated_at` | timestamptz null | |
 | `review_count` | int default 0 | from `raw_reviews` length at publish |
 | `publish_status` | text | `draft` \| `published` \| `rejected` \| `archived` |
 | `reject_reason` | text null | |
@@ -64,10 +66,21 @@ Body of truth for HTML: `analysis_snapshot` (jsonb), **not** live `product_cache
 | `published_at` | timestamptz null | first time → published |
 | `updated_at` | timestamptz | |
 | `created_at` | timestamptz | |
+| `canon_id` | text null | Optional group `canon:brand\|model\|storage\|category` |
+| `is_primary` | boolean default true | Main page of a canon group |
+| `primary_slug` | text null | Alias → primary slug (redirect/canonical) |
+
+### 2.1a Product vs Offer
+
+- **Product (page):** brand/model/title, `analysis_snapshot` (AI), pros/cons, verdict, characteristics. One primary SEO page per `canon_id` when known.
+- **Offer:** marketplace + product id + url + price (+ optional rating) in `offers_snapshot`. Multiple MP / sellers = multiple offers on **one** page — not new SEO rows for the same canon.
+- **SKU rows** still use `product_key = {marketplace}:{id}`; aliases keep old URLs and redirect to primary.
+- **Images:** optional; do **not** publish marketplace CDN guesses (`wbbasket`, etc.).
+- **CTA:** «Открыть в PriceGuard AI» via `externally_connectable` + `SEO_OPEN_COMPARE`; fallback Chrome Web Store. Primary CTA never goes to marketplace card URL.
 
 RLS: enable; **no anon policies on table**. Public reads via Edge `seo-pages` (service role) or Next server with service role. Optional later: `published`-only view + `security_invoker` for anon.
 
-Indexes: `slug`, `product_key`, `brand_slug`, `category_slug`, `publish_status`, GIN(`search_vector`).
+Indexes: `slug`, `product_key`, `brand_slug`, `category_slug`, `publish_status`, `canon_id`, GIN(`search_vector`).
 
 ### 2.2 Quality gates (baseline constants)
 
@@ -79,7 +92,12 @@ Module: `seoPublishGates` (pure). Fail → `publish_status = rejected` (or skip 
 | `insufficient_reviews` | `reviewCount < 5` AND `webOverview.trim().length < 80` | `SEO_MIN_REVIEWS = 5`, `SEO_MIN_WEB_OVERVIEW_LEN = 80` |
 | `low_quality` | `qualityScore < 6` | `SEO_MIN_QUALITY_SCORE = 6` |
 | `local_source` | `source === 'local'` | reject (weak fallback) |
+| `thin_content` | `pros.length < 2` OR `cons.length < 1` | P2 |
+| `weak_title` | junk / too-short product title | P2 |
 | `already_same_hash` | existing row + same `analysis_hash` | no-op success (no write) |
+
+**P2 page UX:** H1/title `{Name} — стоит ли покупать?`; render `webOverview` + `priceInsight`; optional schema v3 `reviewThemes` / `audienceFit` / `audienceAvoid` / `dataGaps`. Cron: `seo-publish` actions `batch-publish`, `metrics`, `backfill-categories`. Sitemap index when URL count > 10k.
+
 
 Pass → upsert `published` (or keep `draft` if global flag `SEO_AUTO_PUBLISH=false` for moderation — default **true** for auto-publish when gates pass).
 
@@ -195,7 +213,7 @@ App: `priceguard-seo` (Next 15 App Router, Vercel).
 9. Альтернативы (AI text alternatives)  
 10. Похожие анализы (same category/brand, limit 6)  
 11. JSON-LD Product + BreadcrumbList + FAQPage  
-12. CTA install extension (`SITE.chromeStoreUrl` / shared constant — CWS id `lpmioobgnleffjlafpfbaccaangiccli`)
+12. CTA install extension (`SITE.chromeStoreUrl` / shared constant — CWS id `ipaichogganccpnapdgkjldplllnjlpf`)
 
 ### 4.3 Metadata (server `generateMetadata`)
 
