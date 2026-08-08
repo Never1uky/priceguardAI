@@ -4,6 +4,10 @@
 
 ---
 
+## 0.9.97 — 2026-08-08
+
+- **License activate race:** `validate-license` больше не делает check-then-increment в JS; атомарный RPC `activate_license_device` (row lock на `license_keys`) — лимит устройств нельзя обойти параллельными активациями.
+
 ## 0.9.96 — 2026-08-04
 
 ### Stability

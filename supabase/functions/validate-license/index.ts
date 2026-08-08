@@ -9,6 +9,13 @@ interface ValidateBody {
   extensionVersion?: string;
 }
 
+type ActivateRpcResult = {
+  ok?: boolean;
+  code?: string;
+  message?: string;
+  max_activations?: number;
+};
+
 Deno.serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -45,7 +52,7 @@ Deno.serve(async (req) => {
 
     const { data: license, error: fetchError } = await supabase
       .from('license_keys')
-      .select('id, key_code, plan, expires_at, max_activations, activations_count, is_active, is_demo')
+      .select('id, key_code, plan, expires_at, max_activations, is_active, is_demo')
       .eq('key_code', keyCode)
       .maybeSingle();
 
@@ -72,46 +79,41 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: bind.error, code: bind.code }, 403);
     }
 
-    const { data: existingActivation } = await supabase
-      .from('license_activations')
-      .select('id')
-      .eq('license_key_id', license.id)
-      .eq('device_id', deviceId)
-      .maybeSingle();
+    const { data: rpcRaw, error: rpcError } = await supabase.rpc('activate_license_device', {
+      p_license_key_id: license.id,
+      p_device_id: deviceId,
+      p_user_id: authUser.id,
+      p_extension_version: body.extensionVersion ?? null,
+    });
 
-    if (!existingActivation) {
-      if (license.activations_count >= license.max_activations) {
+    if (rpcError) {
+      console.error('activate_license_device:', rpcError);
+      return jsonResponse({ ok: false, error: 'Не удалось активировать' }, 500);
+    }
+
+    const rpc = (rpcRaw ?? {}) as ActivateRpcResult;
+    if (!rpc.ok) {
+      if (rpc.code === 'limit_reached') {
+        const max = rpc.max_activations ?? license.max_activations;
         return jsonResponse({
           ok: false,
-          error: `Лимит устройств (${license.max_activations}). Деактивируйте на другом устройстве.`,
+          error:
+            rpc.message ??
+            `Лимит устройств (${max}). Деактивируйте на другом устройстве.`,
+          code: 'limit_reached',
         }, 403);
       }
-
-      const { error: insertError } = await supabase.from('license_activations').insert({
-        license_key_id: license.id,
-        device_id: deviceId,
-        extension_version: body.extensionVersion ?? null,
-        user_id: authUser.id,
-      });
-
-      if (insertError) {
-        console.error('activation insert:', insertError);
-        return jsonResponse({ ok: false, error: 'Не удалось активировать' }, 500);
-      }
-
-      await supabase
-        .from('license_keys')
-        .update({ activations_count: license.activations_count + 1 })
-        .eq('id', license.id);
-    } else {
-      await supabase
-        .from('license_activations')
-        .update({
-          last_seen_at: new Date().toISOString(),
-          user_id: authUser.id,
-        })
-        .eq('license_key_id', license.id)
-        .eq('device_id', deviceId);
+      const status =
+        rpc.code === 'not_found' || rpc.code === 'inactive'
+          ? 404
+          : rpc.code === 'bad_request'
+            ? 400
+            : 500;
+      return jsonResponse({
+        ok: false,
+        error: rpc.message ?? 'Не удалось активировать',
+        code: rpc.code,
+      }, status);
     }
 
     const expiresAtMs = license.expires_at
