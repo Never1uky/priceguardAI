@@ -1,10 +1,15 @@
 /**
- * Append price points to product_price_history (dedupe ~30 min same price).
+ * Append / load price points for product_price_history.
+ *
+ * Server retention: public.compact_price_history() keeps full resolution for
+ * 30 days, then weekly min+max (30d–1y), then monthly min+max (1y+). See
+ * supabase/migrations/20260808170000_compact_price_history.sql.
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
-const DEDUPE_MS = 30 * 60 * 1000;
+/** Skip insert when the same price was recorded within this window. */
+export const PRICE_HISTORY_DEDUPE_MS = 30 * 60 * 1000;
 
 export async function appendPriceHistory(
   supabase: SupabaseClient,
@@ -33,7 +38,7 @@ export async function appendPriceHistory(
     if (
       prevPrice === params.price &&
       Number.isFinite(prevAt) &&
-      Date.now() - prevAt < DEDUPE_MS
+      Date.now() - prevAt < PRICE_HISTORY_DEDUPE_MS
     ) {
       return;
     }

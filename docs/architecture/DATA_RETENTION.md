@@ -52,7 +52,7 @@ where jobname = 'priceguard-privacy-ttl-purge';
 | `mapping_moderation_events` | user_id, dispute/reportFail action, source/target IDs | 24h dispute-cooldown lookup (`cross-market-map/index.ts:355`: `since = now() - 24h`) | **None** | No | **GAP** — cooldown logic itself only looks back 24h, so retention beyond ~48h serves no function |
 | `mapping_promotion_audit` | Promotion decision + reason, no user_id | "Optional diagnostics" per its own comment | **None** | No | Low sensitivity (no user_id), but unbounded growth — candidate for same 90-day policy as `ai_request_log`/`search_metrics` |
 | `telemetry_events` | level, stage, error_message, session_id, trace_id, optional user_id | Opt-in client WARN/ERROR telemetry | **None** | No | **GAP** — contains session_id/trace_id, no retention at all |
-| `product_price_history` | user_id, marketplace, product_id, price, timestamp | Price history charts (Telegram "История цены") | **DECISION REQUIRED** — how far back should charts go? | No | Depends on product decision |
+| `product_price_history` | user_id, marketplace, product_id, price, timestamp | Price history charts (Telegram "История цены") | **Compaction** — full resolution 30d; weekly min+max for 30d–1y; monthly min+max beyond 1y (`compact_price_history`) | No hard TTL delete of all history | Schedule via `supabase/scripts/setup-price-history-compaction-cron.sql` |
 | `seo_product_pages` | Public product snapshot for SEO pages | Public marketing content | **DECISION REQUIRED** — content-freshness policy, not privacy | No | Not a privacy concern (public data by design), but stale/unpublished pages could accumulate |
 | `tracked_products` | user_id/device_id, marketplace, product_id, OOS backoff state | Core watchlist feature | Lives with the account | Cascade via `on delete cascade` from `auth.users` (assumed — see Open Question below) | User-initiated delete; OOS backoff already added (unrelated to this doc) |
 | `compare_products` | user_id, product_id, comparison payload, soft `deleted` flag | Comparison list feature | Lives with the account | `on delete cascade` from `auth.users` | Soft-delete flag exists but no hard-delete/vacuum of soft-deleted rows found |
@@ -108,10 +108,13 @@ exact values next stage if you want them acted on):**
   `search_metrics` — already covered by `purge_privacy_ttl_data()`
 
 **DECISION REQUIRED (business/legal, not mine to set):**
-- `product_price_history` — how far back should price charts go?
 - `payments`/`license_keys`/`license_activations`/`user_premium` — accounting/legal
   retention minimums (RU law) likely apply; don't want to arbitrarily shorten these.
 - `seo_product_pages` — content freshness, not privacy.
+
+**Decided / implemented:**
+- `product_price_history` — compact via `compact_price_history()` (30d full → weekly
+  min+max → monthly min+max); no hard delete of all history.
 
 ---
 
