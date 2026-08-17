@@ -94,6 +94,53 @@ export function extractComparisonArticle(
   }
 }
 
+/** True if `url` is a search listing (SERP) for this marketplace — not a product card. */
+export function isMarketplaceSerpUrl(
+  url: string,
+  marketplace: ComparisonMarketplace,
+): boolean {
+  if (detectComparisonMarketplace(url) !== marketplace) return false;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    switch (marketplace) {
+      case 'wildberries':
+        return /search\.aspx/i.test(path) || /\/catalog\/0\/search/i.test(path);
+      case 'ozon':
+        return /\/search\/?/i.test(path);
+      case 'yandex_market':
+        return /\/search\/?/i.test(path);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an open SERP tab is related enough to reuse (same marketplace search query).
+ * Empty/unknown query param → try the tab anyway.
+ */
+export function serpSearchQueryRelated(tabUrl: string, searchQuery: string): boolean {
+  try {
+    const parsed = new URL(tabUrl);
+    const q = (
+      parsed.searchParams.get('search') ||
+      parsed.searchParams.get('text') ||
+      ''
+    ).toLowerCase();
+    if (!q) return true;
+    const tokens = searchQuery
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((t) => t.length > 1);
+    if (!tokens.length) return true;
+    const hits = tokens.filter((t) => q.includes(t)).length;
+    return hits >= Math.min(2, tokens.length);
+  } catch {
+    return true;
+  }
+}
+
 export function buildMarketplaceSearchUrl(
   marketplace: ComparisonMarketplace,
   query: string,

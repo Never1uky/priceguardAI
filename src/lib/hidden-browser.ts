@@ -2,11 +2,48 @@
  * Фоновый парсинг без мелькания вкладок: одно свёрнутое окно, одна вкладка.
  * Полный цикл navigate → wait → scrape сериализован через runExclusive —
  * параллельные jobs не подменяют вкладку mid-flight.
+ *
+ * Закрываем только свою вкладку. chrome.windows.remove — лишь cleanup пустого
+ * окна: при restore session / tab groups в том же окне могут оказаться чужие
+ * вкладки, и windows.remove закрыл бы всю группу.
  */
+
+const TAB_GROUP_NONE = -1;
+
+function tabGroupId(tab: { groupId?: number } | undefined): number {
+  return tab?.groupId ?? TAB_GROUP_NONE;
+}
+
+function isGrouped(tab: { groupId?: number } | undefined): boolean {
+  const id = tabGroupId(tab);
+  return id !== TAB_GROUP_NONE && id !== chrome.tabGroups?.TAB_GROUP_ID_NONE;
+}
+
+async function ungroupTabSafe(tab: { id?: number; groupId?: number } | undefined): Promise<void> {
+  if (tab?.id == null || !isGrouped(tab)) return;
+  try {
+    await chrome.tabs.ungroup(tab.id);
+  } catch {
+    // группа уже снята / вкладка закрыта
+  }
+}
+
+function findInjectedTab(
+  tabs: Array<chrome.tabs.Tab | undefined>,
+  url: string,
+): chrome.tabs.Tab | undefined {
+  const known = tabs.filter((tab): tab is chrome.tabs.Tab => tab != null && tab.id != null);
+  return [...known].reverse().find((tab) => {
+    const href = tab.pendingUrl ?? tab.url ?? '';
+    return href === url || (url.length > 0 && href.startsWith(url));
+  });
+}
 
 export class HiddenBrowser {
   private windowId?: number;
   private tabId?: number;
+  /** True only while the hidden window still has exactly our tab. */
+  private windowExclusive = false;
   private queue: Promise<unknown> = Promise.resolve();
 
   /** Id окна фонового браузера — чтобы не выбирать его как «активный товар». */
@@ -16,6 +53,11 @@ export class HiddenBrowser {
 
   getTabId(): number | undefined {
     return this.tabId;
+  }
+
+  /** Window is still dedicated (no user tabs merged in). */
+  isExclusiveWindow(): boolean {
+    return this.windowExclusive && this.windowId != null;
   }
 
   /**
@@ -44,14 +86,53 @@ export class HiddenBrowser {
 
   private async navigateInternal(url: string): Promise<number> {
     if (this.tabId != null && this.windowId != null) {
-      try {
-        await chrome.tabs.update(this.tabId, { url, active: false });
-        return this.tabId;
-      } catch {
+      const reusable = await this.canReuseOwnTab();
+      if (reusable) {
+        try {
+          await chrome.tabs.update(this.tabId, { url, active: false });
+          return this.tabId;
+        } catch {
+          await this.closeInternal();
+        }
+      } else {
         await this.closeInternal();
       }
     }
 
+    return this.openDedicatedWindow(url);
+  }
+
+  private async canReuseOwnTab(): Promise<boolean> {
+    if (this.tabId == null) return false;
+    let tab: chrome.tabs.Tab;
+    try {
+      tab = await chrome.tabs.get(this.tabId);
+    } catch {
+      return false;
+    }
+    if (tab?.id == null) return false;
+
+    const windowId = tab.windowId;
+    let tabsInWindow: chrome.tabs.Tab[] = [];
+    try {
+      tabsInWindow = await chrome.tabs.query({ windowId });
+    } catch {
+      return false;
+    }
+
+    const others = tabsInWindow.filter((t) => t.id !== tab.id);
+    if (others.length > 0) {
+      this.windowExclusive = false;
+      this.windowId = windowId;
+      return false;
+    }
+
+    this.windowId = windowId;
+    this.windowExclusive = true;
+    return true;
+  }
+
+  private async openDedicatedWindow(url: string, attempt = 0): Promise<number> {
     // Свёрнутое обычное окно: Chrome загружает страницу до сворачивания.
     const win = await chrome.windows.create({
       url,
@@ -60,43 +141,92 @@ export class HiddenBrowser {
       type: 'normal',
     });
 
-    this.windowId = win.id;
-    this.tabId = win.tabs?.[0]?.id ?? (await this.resolveTabId(win.id));
+    const windowId = win.id;
+    const tabs: chrome.tabs.Tab[] =
+      win.tabs && win.tabs.length > 0
+        ? (win.tabs.filter((tab): tab is chrome.tabs.Tab => tab != null) as chrome.tabs.Tab[])
+        : windowId != null
+          ? await this.queryTabs(windowId)
+          : [];
 
-    if (!this.tabId) {
-      throw new Error('Не удалось открыть фоновую вкладку');
+    if (windowId != null && tabs.length === 1 && tabs[0]?.id != null) {
+      await ungroupTabSafe(tabs[0]);
+      this.windowId = windowId;
+      this.tabId = tabs[0].id;
+      this.windowExclusive = true;
+      return this.tabId;
     }
 
-    return this.tabId;
+    // Restore/merge: в окне уже есть чужие вкладки — не забирать его.
+    const injected = findInjectedTab(tabs, url);
+    if (injected?.id != null) {
+      await ungroupTabSafe(injected);
+      try {
+        await chrome.tabs.remove(injected.id);
+      } catch {
+        // вкладка уже закрыта пользователем
+      }
+    }
+
+    if (attempt < 1) {
+      return this.openDedicatedWindow(url, attempt + 1);
+    }
+
+    throw new Error('Не удалось открыть фоновую вкладку');
   }
 
-  private async resolveTabId(windowId?: number): Promise<number | undefined> {
-    if (windowId == null) return undefined;
+  private async queryTabs(windowId: number): Promise<chrome.tabs.Tab[]> {
     try {
-      const tabs = await chrome.tabs.query({ windowId });
-      return tabs[0]?.id;
+      return await chrome.tabs.query({ windowId });
     } catch {
-      return undefined;
+      return [];
     }
   }
 
   private async closeInternal(): Promise<void> {
-    if (this.windowId != null) {
-      try {
-        await chrome.windows.remove(this.windowId);
-      } catch {
-        if (this.tabId != null) {
-          try {
-            await chrome.tabs.remove(this.tabId);
-          } catch {
-            // окно уже закрыто
-          }
+    const tabId = this.tabId;
+    const windowId = this.windowId;
+
+    try {
+      if (tabId == null && windowId == null) return;
+
+      let tab: chrome.tabs.Tab | undefined;
+      if (tabId != null) {
+        try {
+          tab = await chrome.tabs.get(tabId);
+        } catch {
+          tab = undefined;
         }
       }
-    }
 
-    this.windowId = undefined;
-    this.tabId = undefined;
+      const winId = tab?.windowId ?? windowId;
+      const tabsInWindow = winId != null ? await this.queryTabs(winId) : [];
+      const others = tabsInWindow.filter((t) => t.id !== tabId);
+      const hasOthers = others.length > 0;
+
+      if (tabId != null) {
+        if (hasOthers) {
+          await ungroupTabSafe(tab ?? { id: tabId });
+        }
+        try {
+          await chrome.tabs.remove(tabId);
+        } catch {
+          // вкладка уже закрыта
+        }
+      }
+
+      if (!hasOthers && winId != null) {
+        try {
+          await chrome.windows.remove(winId);
+        } catch {
+          // tabs.remove уже закрыл пустое окно
+        }
+      }
+    } finally {
+      this.windowId = undefined;
+      this.tabId = undefined;
+      this.windowExclusive = false;
+    }
   }
 
   async close(): Promise<void> {
@@ -116,17 +246,12 @@ let poolSlots: Array<{ browser: HiddenBrowser; users: number }> = [];
 let idleCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Max concurrent hidden-browser windows. marketplace-search.ts already
- * dispatches target-marketplace searches via Promise.all (V4 "parallel
- * search"), but every one of them used to funnel through a single shared
- * HiddenBrowser instance, re-serializing what looked parallel at the call
- * site. With the current 3-marketplace universe, at most 2 target
- * marketplaces are ever searched at once (source marketplace is excluded),
- * so a pool of 2 gives real parallelism without opening more background
- * windows than could ever usefully run concurrently today. Free to raise if
- * the marketplace count grows (see docs on marketplace architecture).
+ * Max concurrent hidden-browser windows. Target-marketplace searches still
+ * dispatch via Promise.all, but they share one HiddenBrowser (runExclusive
+ * serializes navigate→scrape). A pool of 2 opened two minimized windows at
+ * once and made SERP + card cascade land in different tabs — 0.9.93 regression.
  */
-export const HIDDEN_BROWSER_POOL_SIZE = 2;
+export const HIDDEN_BROWSER_POOL_SIZE = 1;
 
 /** Close unused hidden window after this idle (users === 0). */
 export const HIDDEN_BROWSER_IDLE_CLOSE_MS = 45_000;
@@ -221,13 +346,21 @@ export function getHiddenBrowserUserCount(): number {
   return totalUsers();
 }
 
-/** True if tab/window belongs to ANY pool session — this is the authoritative check. */
+/**
+ * True if this tab is the hidden scrape tab.
+ * Window-only match is a hint for a still-exclusive hidden window (1 tab = ours).
+ * A user tab in the same window is never hidden.
+ */
 export function isHiddenBrowserTab(tabId?: number | null, windowId?: number | null): boolean {
   return poolSlots.some((slot) => {
     const hiddenTab = slot.browser.getTabId();
     const hiddenWin = slot.browser.getWindowId();
-    if (tabId != null && hiddenTab != null && tabId === hiddenTab) return true;
-    if (windowId != null && hiddenWin != null && windowId === hiddenWin) return true;
+    if (tabId != null) {
+      return hiddenTab != null && tabId === hiddenTab;
+    }
+    if (windowId != null) {
+      return hiddenWin != null && windowId === hiddenWin && slot.browser.isExclusiveWindow();
+    }
     return false;
   });
 }

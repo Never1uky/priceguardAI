@@ -18,11 +18,12 @@ import { parseAllOzonSearchOffers } from '@/lib/ozon-offer';
 import { pickBestMatchWithFallbackScored, pickTopMatchesWithScore, isProductPageUrl, isUrlExcluded, computeMatchConfidence, isAcceptableProductMatch, MIN_COMPARE_MATCH_CONFIDENCE, AUTO_PICK_CONFIDENCE_THRESHOLD, diagnoseMatchFactors } from '@/lib/product-match';
 import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
 import { buildOfferFromRankedCandidates } from '@/lib/search-offer-from-candidates';
+import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
 import { verifySerpOfferWithCardCascade } from '@/lib/card-cascade-verify';
 import { offerMatchStatus, resolveMatchStatus } from '@/lib/match-status';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { getEffectiveSearchQuery, buildCrossMarketplaceQueries } from '@/lib/compare-search-query';
-import { searchViaBrowserTab } from '@/lib/compare-tab-search';
+import { searchViaBrowserTab, searchViaOpenSerpTab } from '@/lib/compare-tab-search';
 import { SEARCHING_MP_KEY, SEARCHING_MP_CROSS } from '@/lib/compare-jobs';
 import { getSerpCachedOffer, setSerpCachedOffer, clearSerpNotFoundAndExpired } from '@/lib/serp-cache';
 import {
@@ -30,6 +31,7 @@ import {
   rememberCrossMarketMapping,
   reportCrossMarketMappingFail,
   resolveSourceProductId,
+  type CrossMarketMapping,
 } from '@/lib/cross-market-map';
 import { attachPickHistoryBoosts } from '@/lib/pick-history';
 import { pipelineMetrics } from '@/lib/pipeline-metrics';
@@ -40,14 +42,15 @@ import {
   filterPoolExcluding,
   getCandidatePool,
   getRejectedUrls,
+  getRejectedFingerprints,
 } from '@/lib/candidate-pool';
+import { isIdentityExcluded } from '@/lib/offer-identity';
 import { isOutOfStockError } from '@/lib/out-of-stock';
 import { matchConfidencePercent } from '@/lib/fuzzy-match';
 import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
 import { buildMarketplaceSearchUrl } from '@/utils/comparison-url';
-import { fetchWithRetry, apiErrorMessage } from '@/lib/fetch-retry';
+import { fetchWithRetry, apiErrorMessage, MARKETPLACE_SEARCH_RETRY } from '@/lib/fetch-retry';
 import {
-  shouldSkipTabScrape,
   resetEmptyScrape,
   resetAllEmptyScrapes,
 } from '@/lib/empty-scrape-guard';
@@ -219,14 +222,15 @@ function normalizeKopecks(value: number | undefined): number {
 /** Параметры поиска с учётом отклонённых карточек */
 export interface MarketplaceSearchOptions {
   excludedUrls?: string[];
+  excludedFingerprints?: string[];
 }
 
 export interface ResolveOfferOptions {
   /** false = только refresh card/pool/mapping, без SERP */
   allowSearch?: boolean;
   /**
-   * Research / «Найти заново»: не короткое замыкание на stale pool / mapping —
-   * сразу searchMarketplaceWithFallback (HiddenBrowser SERP).
+   * Research / «Найти заново»: не доверять stale local candidate pool —
+   * но cross_market_mapping + price-cache всё равно пробуем до SERP.
    */
   freshSearch?: boolean;
   /** Skip Premium Scrappey unlocker (periodic client backup) */
@@ -838,7 +842,7 @@ async function searchWildberries(
       `?appType=1&curr=rub&dest=${WB_DEST}&query=${encodeURIComponent(query)}` +
       `&resultset=catalog&sort=popular&spp=30&page=1`;
 
-    const response = await fetchWithRetry(apiUrl);
+    const response = await fetchWithRetry(apiUrl, undefined, MARKETPLACE_SEARCH_RETRY);
     if (!response.ok) {
       return notFoundOffer(
         'wildberries',
@@ -921,7 +925,7 @@ async function searchOzon(
 
     const response = await fetchWithRetry(apiUrl, {
       headers: { Accept: 'application/json' },
-    });
+    }, MARKETPLACE_SEARCH_RETRY);
     if (!response.ok) {
       return notFoundOffer('ozon', query, searchUrl, apiErrorMessage('Ozon', response.status));
     }
@@ -996,10 +1000,7 @@ async function searchYandexMarket(
     try {
       const response = await fetchWithRetry(endpoint, {
         headers: { Accept: 'application/json' },
-      }, {
-        retries: 1,
-        delayMs: 400,
-      });
+      }, MARKETPLACE_SEARCH_RETRY);
       if (!response.ok) continue;
       const data = await response.json();
       const products = collectYandexProducts(data);
@@ -1091,8 +1092,33 @@ async function finalizeSearchOffer(
   },
 ): Promise<MarketplaceOffer> {
   let result: MarketplaceOffer;
-  if (offer.needsManualPick && offer.searchCandidates?.length) {
-    result = await verifySerpOfferWithCardCascade(offer, context);
+  const alreadyVerified =
+    offer.found &&
+    !offer.needsManualPick &&
+    Boolean(offer.url && isProductPageUrl(offer.url)) &&
+    isOfferWithPrice(offer) &&
+    (offer.matchConfidence ?? 0) >= AUTO_PICK_CONFIDENCE_THRESHOLD;
+  if (alreadyVerified) {
+    result = offer;
+  } else if (offer.needsManualPick && offer.searchCandidates?.length) {
+    // Unambiguous SERP pool → bind without opening cards (OOS edge cases still go through cascade
+    // when the offer arrived as a single ambiguous / low-confidence shell).
+    const fromSerp = tryUnambiguousSerpVerified(
+      offer.marketplace,
+      offer.searchCandidates.map((c) => ({
+        title: c.title,
+        url: c.url,
+        price: c.price,
+        confidence: c.matchConfidence ?? 0,
+        imageUrl: c.imageUrl,
+        rating: c.rating,
+      })),
+    );
+    if (fromSerp) {
+      result = fromSerp;
+    } else {
+      result = await verifySerpOfferWithCardCascade(offer, context);
+    }
   } else if (offer.found && offer.url && isProductPageUrl(offer.url)) {
     result = await verifySerpOfferWithCardCascade(offer, context);
   } else if (offer.searchCandidates?.some((c) => c.url && isProductPageUrl(c.url))) {
@@ -1232,9 +1258,45 @@ export async function searchMarketplaceWithFallback(
     return emitFinal(finish(cached), 'serp_cache');
   }
 
-  const pending = { choice: null as MarketplaceOffer | null };
+  // Each search gets a SERP chance — do not inherit empty-scrape skip from a prior job.
+  resetEmptyScrape(marketplace, 'serp');
 
-  const runApiSearch = async (): Promise<MarketplaceOffer | null> => {
+  const pending = { choice: null as MarketplaceOffer | null };
+  let tabAttempted = false;
+
+  const isUsableTabOffer = (offer: MarketplaceOffer): boolean =>
+    Boolean(
+      (offer.found &&
+        isOfferWithPrice(offer) &&
+        offer.url &&
+        isProductPageUrl(offer.url)) ||
+        (offer.needsManualPick && offer.searchCandidates?.length),
+    );
+
+  const isTransientApiSearchError = (message: string): boolean =>
+    /\b429\b|лимит запросов|ошибка API \(\d+\)|не удалось подключиться к API/i.test(
+      message,
+    );
+
+  const consumeTabOffer = async (
+    tabResult: MarketplaceOffer,
+  ): Promise<MarketplaceOffer | null> => {
+    if (isUsableTabOffer(tabResult)) {
+      void pipelineMetrics.hiddenBrowserSuccess();
+      resetEmptyScrape(marketplace, 'serp');
+      const finalized = await persistCache(await finalizeSearchOffer(tabResult, cascadeContext));
+      if (isTerminalVerified(finalized)) return finalized;
+      if (finalized.needsManualPick && finalized.searchCandidates?.length) {
+        return finalized;
+      }
+      if (finalized.error) errors.push(finalized.error);
+    } else if (tabResult.error) {
+      errors.push(tabResult.error);
+    }
+    return null;
+  };
+
+  const runApiSearch = async (opts: { stashErrors: boolean }): Promise<MarketplaceOffer | null> => {
     const apiStarted = Date.now();
     try {
       const apiResult = await searchMarketplace(
@@ -1257,34 +1319,35 @@ export async function searchMarketplaceWithFallback(
           error: apiResult.error ? String(apiResult.error).slice(0, 120) : undefined,
         },
       });
-      if (
-        (apiResult.found &&
-          isOfferWithPrice(apiResult) &&
-          apiResult.url &&
-          isProductPageUrl(apiResult.url)) ||
-        (apiResult.needsManualPick && apiResult.searchCandidates?.length)
-      ) {
+      if (isUsableTabOffer(apiResult)) {
         void pipelineMetrics.apiSearchSuccess();
         const finalized = await persistCache(await finalizeSearchOffer(apiResult, cascadeContext));
         if (isTerminalVerified(finalized)) return finalized;
         if (finalized.needsManualPick && finalized.searchCandidates?.length) {
           pending.choice = finalized;
-        } else if (finalized.error) {
+        } else if (finalized.error && opts.stashErrors) {
           errors.push(finalized.error);
         }
-      } else if (apiResult.error && !apiResult.error.includes('ограничен')) {
+      } else if (
+        opts.stashErrors &&
+        apiResult.error &&
+        !apiResult.error.includes('ограничен') &&
+        !isTransientApiSearchError(apiResult.error)
+      ) {
         errors.push(apiResult.error);
       }
     } catch {
-      errors.push(
-        apiErrorMessage(
-          marketplace === 'wildberries'
-            ? 'Wildberries'
-            : marketplace === 'ozon'
-              ? 'Ozon'
-              : 'Яндекс.Маркет',
-        ),
-      );
+      if (opts.stashErrors) {
+        errors.push(
+          apiErrorMessage(
+            marketplace === 'wildberries'
+              ? 'Wildberries'
+              : marketplace === 'ozon'
+                ? 'Ozon'
+                : 'Яндекс.Маркет',
+          ),
+        );
+      }
       telemetry.warn({
         stage: 'search',
         name: 'SEARCH_API_RESPONSE',
@@ -1298,22 +1361,53 @@ export async function searchMarketplaceWithFallback(
     return null;
   };
 
-  const runSerpTabSearch = async (): Promise<MarketplaceOffer | null> => {
+  const runVisibleSerpSearch = async (): Promise<MarketplaceOffer | null> => {
     const serpStarted = Date.now();
     try {
-      // Card failures must not block SERP; only skip after real SERP empties
-      if (shouldSkipTabScrape(marketplace, 'serp')) {
-        telemetry.warn({
-          stage: 'serp',
-          name: 'SEARCH_SERP_SKIPPED',
-          marketplace,
-          queryHash: qHash,
-          errorCode: 'empty_scrape_guard',
-        });
-        errors.push(errors[0] ?? 'Площадка временно недоступна — укажите ссылку вручную');
-        return null;
-      }
+      const tabResult = await searchViaOpenSerpTab(
+        marketplace,
+        query,
+        ref,
+        referencePrice,
+        referenceSpecs,
+        searchOptions.excludedUrls,
+        searchOptions.excludedFingerprints,
+      );
+      if (!tabResult) return null;
+      tabAttempted = true;
+      telemetry.info({
+        stage: 'serp',
+        name: 'SEARCH_CANDIDATES_FOUND',
+        marketplace,
+        queryHash: qHash,
+        elapsedMs: Date.now() - serpStarted,
+        success: Boolean(tabResult.found || tabResult.needsManualPick),
+        data: {
+          path: 'visible_tab',
+          found: Boolean(tabResult.found),
+          candidates: tabResult.searchCandidates?.length ?? 0,
+        },
+      });
+      return consumeTabOffer(tabResult);
+    } catch {
+      telemetry.warn({
+        stage: 'serp',
+        name: 'SEARCH_SERP_FAILED',
+        marketplace,
+        queryHash: qHash,
+        success: false,
+        elapsedMs: Date.now() - serpStarted,
+        errorCode: 'visible_tab_exception',
+      });
+      return null;
+    }
+  };
+
+  const runHiddenSerpSearch = async (): Promise<MarketplaceOffer | null> => {
+    const serpStarted = Date.now();
+    try {
       void pipelineMetrics.hiddenBrowserAttempt();
+      tabAttempted = true;
       const tabResult = await searchViaBrowserTab(
         marketplace,
         query,
@@ -1321,6 +1415,7 @@ export async function searchMarketplaceWithFallback(
         referencePrice,
         referenceSpecs,
         searchOptions.excludedUrls,
+        searchOptions.excludedFingerprints,
       );
       telemetry.info({
         stage: 'serp',
@@ -1335,25 +1430,7 @@ export async function searchMarketplaceWithFallback(
           candidates: tabResult.searchCandidates?.length ?? 0,
         },
       });
-      if (
-        (tabResult.found &&
-          isOfferWithPrice(tabResult) &&
-          tabResult.url &&
-          isProductPageUrl(tabResult.url)) ||
-        (tabResult.needsManualPick && tabResult.searchCandidates?.length)
-      ) {
-        void pipelineMetrics.hiddenBrowserSuccess();
-        resetEmptyScrape(marketplace, 'serp');
-        const finalized = await persistCache(await finalizeSearchOffer(tabResult, cascadeContext));
-        if (isTerminalVerified(finalized)) return finalized;
-        // After SERP tab was opened, needs_choice is an acceptable final outcome
-        if (finalized.needsManualPick && finalized.searchCandidates?.length) {
-          return finalized;
-        }
-        if (finalized.error) errors.push(finalized.error);
-      } else if (tabResult.error) {
-        errors.push(tabResult.error);
-      }
+      return consumeTabOffer(tabResult);
     } catch {
       errors.push('Поиск через браузер не удался');
       telemetry.warn({
@@ -1369,20 +1446,21 @@ export async function searchMarketplaceWithFallback(
     return null;
   };
 
-  // Ozon / Я.Маркет: HiddenBrowser SERP first (API alone often yields empty cascade).
-  // WB: API first, then SERP if no verified card.
-  const serpFirst = marketplace === 'ozon' || marketplace === 'yandex_market';
+  // Tab-only search: already-open SERP of this MP, then HiddenBrowser.
+  // search.wb.ru / YM /api/v1/search are not called from SW (429 burns quota).
+  // Ozon composer API is last resort after empty tabs; 429 is not stashed into offer.error.
+  const fromVisible = await runVisibleSerpSearch();
+  if (fromVisible) return emitFinal(finish(fromVisible), 'visible_tab');
 
-  if (serpFirst) {
-    const fromSerp = await runSerpTabSearch();
-    if (fromSerp) return emitFinal(finish(fromSerp), 'serp_first');
-    const fromApi = await runApiSearch();
+  const fromHidden = await runHiddenSerpSearch();
+  if (fromHidden) return emitFinal(finish(fromHidden), 'hidden_browser');
+
+  if (marketplace === 'ozon') {
+    const fromApi = await runApiSearch({ stashErrors: !tabAttempted });
+    if (fromApi && isTerminalVerified(fromApi)) {
+      return emitFinal(finish(fromApi), 'api_fallback');
+    }
     if (fromApi) return emitFinal(finish(fromApi), 'api_fallback');
-  } else {
-    const fromApi = await runApiSearch();
-    if (fromApi) return emitFinal(finish(fromApi), 'api_first');
-    const fromSerp = await runSerpTabSearch();
-    if (fromSerp) return emitFinal(finish(fromSerp), 'serp_fallback');
   }
 
   if (pending.choice?.needsManualPick && pending.choice.searchCandidates?.length) {
@@ -1404,6 +1482,166 @@ export async function searchMarketplaceWithFallback(
   );
 }
 
+/**
+ * Prefer known cross-MP binding + shared price cache over SERP.
+ * Returns a priced offer when mapping validates; null → caller may search.
+ */
+export async function tryResolveFromCrossMarketMapping(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+  options: {
+    referenceTitle?: string;
+    referenceSpecs?: string;
+    excludedUrls?: string[];
+    excludedFingerprints?: string[];
+    skipUnlocker?: boolean;
+  } = {},
+): Promise<MarketplaceOffer | null> {
+  if (marketplace === product.sourceMarketplace) return null;
+
+  const referenceTitle = options.referenceTitle ?? getBestTitle(product);
+  const referenceSpecs = options.referenceSpecs ?? getReferenceSpecs(product);
+  const excludedUrls = options.excludedUrls ?? getRejectedUrls(product, marketplace);
+  const excludedFingerprints =
+    options.excludedFingerprints ?? getRejectedFingerprints(product, marketplace);
+
+  const sourceId = resolveSourceProductId({
+    sourceMarketplace: product.sourceMarketplace,
+    sourceUrl: product.sourceUrl,
+    article: product.article,
+    articlesByMarketplace: product.articlesByMarketplace,
+  });
+  if (!sourceId) return null;
+
+  let mappedList: CrossMarketMapping[] = [];
+  try {
+    mappedList = await lookupCrossMarketMappings(
+      product.sourceMarketplace,
+      sourceId,
+      marketplace,
+    );
+  } catch {
+    return null;
+  }
+
+  for (const mapped of mappedList.slice(0, MAX_CANDIDATE_POOL)) {
+    if (!mapped.targetUrl || !isProductPageUrl(mapped.targetUrl)) continue;
+    if (isUrlExcluded(mapped.targetUrl, excludedUrls)) continue;
+    if (
+      isIdentityExcluded(
+        referenceTitle,
+        mapped.targetUrl,
+        marketplace,
+        excludedFingerprints,
+      )
+    ) {
+      continue;
+    }
+
+    const keepCandidates = mappedList
+      .filter((m) => m.targetUrl !== mapped.targetUrl && !isUrlExcluded(m.targetUrl, excludedUrls))
+      .slice(0, MAX_CANDIDATE_POOL - 1)
+      .map((m) => ({
+        title: referenceTitle,
+        url: m.targetUrl,
+        price: null as number | null,
+        matchConfidence: m.confidence ?? 80,
+        priority: 100 - (m.rank ?? 0) * 5,
+      }));
+
+    const acceptMapped = (
+      offer: MarketplaceOffer,
+      evidence: CrossMarketMapping['evidence'],
+    ): MarketplaceOffer | null => {
+      const mapTitle = offer.title || referenceTitle;
+      if (
+        !isAcceptableProductMatch(
+          referenceTitle,
+          mapTitle,
+          MIN_COMPARE_MATCH_CONFIDENCE,
+          referenceSpecs,
+        ) ||
+        !areLineageGenerationsCompatible(referenceTitle, mapTitle)
+      ) {
+        return null;
+      }
+      void pipelineMetrics.mappingHit();
+      return ensureOfferWithPrice({
+        ...offer,
+        matchConfidence:
+          offer.matchConfidence ??
+          computeMatchConfidence(referenceTitle, mapTitle, referenceSpecs),
+        matchStatus:
+          evidence === 'manual' || evidence === 'multi_user'
+            ? 'verified'
+            : offer.matchStatus ?? 'probable',
+        searchCandidates: keepCandidates.length ? keepCandidates : offer.searchCandidates,
+      });
+    };
+
+    // Shared price cache before opening a card tab
+    try {
+      const pid =
+        mapped.targetProductId || extractArticle(mapped.targetUrl, marketplace);
+      if (pid) {
+        const hit = await getSharedPriceCache(marketplace, pid);
+        if (hit?.price && hit.price > 0) {
+          const fromCache = acceptMapped(
+            {
+              marketplace,
+              title: hit.title || referenceTitle,
+              price: hit.price,
+              delivery: null,
+              rating: hit.rating ?? null,
+              url: hit.url || mapped.targetUrl,
+              found: true,
+              matchStatus: 'verified',
+            },
+            mapped.evidence,
+          );
+          if (fromCache) {
+            telemetry.info({
+              stage: 'cache',
+              name: 'MAPPING_PRICE_CACHE_HIT',
+              marketplace,
+              productId: product.id,
+              data: { sourceId, targetUrl: mapped.targetUrl.slice(0, 80) },
+            });
+            return fromCache;
+          }
+        }
+      }
+    } catch {
+      // cache optional
+    }
+
+    const fromMap = await refreshKnownProductPage(product, marketplace, mapped.targetUrl, {
+      allowStaleCache: false,
+      keepCandidates,
+      skipUnlocker: options.skipUnlocker,
+    });
+    if (isOfferWithPrice(fromMap)) {
+      const accepted = acceptMapped(fromMap, mapped.evidence);
+      if (accepted) return accepted;
+      void reportCrossMarketMappingFail({
+        sourceMarketplace: product.sourceMarketplace,
+        sourceProductId: sourceId,
+        targetMarketplace: marketplace,
+        targetUrl: mapped.targetUrl,
+      });
+      continue;
+    }
+    void reportCrossMarketMappingFail({
+      sourceMarketplace: product.sourceMarketplace,
+      sourceProductId: sourceId,
+      targetMarketplace: marketplace,
+      targetUrl: mapped.targetUrl,
+    });
+  }
+
+  return null;
+}
+
 async function resolveOfferForMarketplace(
   product: CompareProduct,
   marketplace: ComparisonMarketplace,
@@ -1419,6 +1657,7 @@ async function resolveOfferForMarketplace(
   const isManualLink = Boolean(product.manualMarketplaces?.[marketplace]);
   const productPageUrl = getStoredProductPageUrl(product, marketplace);
   const excludedUrls = getRejectedUrls(product, marketplace);
+  const excludedFingerprints = getRejectedFingerprints(product, marketplace);
 
   // Ручная ссылка: только обновление карточки, поиск не запускаем
   if (isManualLink) {
@@ -1526,79 +1765,16 @@ async function resolveOfferForMarketplace(
     if (fromSource) return fromSource;
   }
 
-  // Глобальный кэш соответствий: primary + alternates (skip rejected)
-  if (!freshSearch && marketplace !== product.sourceMarketplace) {
-    const sourceId = resolveSourceProductId({
-      sourceMarketplace: product.sourceMarketplace,
-      sourceUrl: product.sourceUrl,
-      article: product.article,
-      articlesByMarketplace: product.articlesByMarketplace,
+  // Глобальный кэш соответствий + price-cache — до SERP (в т.ч. при research / freshSearch)
+  if (marketplace !== product.sourceMarketplace) {
+    const fromMapping = await tryResolveFromCrossMarketMapping(product, marketplace, {
+      referenceTitle,
+      referenceSpecs,
+      excludedUrls,
+      excludedFingerprints,
+      skipUnlocker: resolveOptions.skipUnlocker,
     });
-    if (sourceId) {
-      try {
-        const mappedList = await lookupCrossMarketMappings(
-          product.sourceMarketplace,
-          sourceId,
-          marketplace,
-        );
-        for (const mapped of mappedList.slice(0, MAX_CANDIDATE_POOL)) {
-          if (!mapped.targetUrl || !isProductPageUrl(mapped.targetUrl)) continue;
-          if (isUrlExcluded(mapped.targetUrl, excludedUrls)) continue;
-          const fromMap = await refreshKnownProductPage(product, marketplace, mapped.targetUrl, {
-            allowStaleCache: false,
-            keepCandidates: mappedList
-              .filter((m) => m.targetUrl !== mapped.targetUrl && !isUrlExcluded(m.targetUrl, excludedUrls))
-              .slice(0, MAX_CANDIDATE_POOL - 1)
-              .map((m) => ({
-                title: getBestTitle(product),
-                url: m.targetUrl,
-                price: null,
-                matchConfidence: m.confidence ?? 80,
-                priority: 100 - (m.rank ?? 0) * 5,
-              })),
-          });
-          if (isOfferWithPrice(fromMap)) {
-            const mapTitle = fromMap.title || referenceTitle;
-            if (
-              !isAcceptableProductMatch(
-                referenceTitle,
-                mapTitle,
-                MIN_COMPARE_MATCH_CONFIDENCE,
-                referenceSpecs,
-              ) ||
-              !areLineageGenerationsCompatible(referenceTitle, mapTitle)
-            ) {
-              void reportCrossMarketMappingFail({
-                sourceMarketplace: product.sourceMarketplace,
-                sourceProductId: sourceId,
-                targetMarketplace: marketplace,
-                targetUrl: mapped.targetUrl,
-              });
-              continue;
-            }
-            void pipelineMetrics.mappingHit();
-            return ensureOfferWithPrice({
-              ...fromMap,
-              matchConfidence:
-                fromMap.matchConfidence ??
-                computeMatchConfidence(referenceTitle, mapTitle, referenceSpecs),
-              matchStatus:
-                mapped.evidence === 'manual' || mapped.evidence === 'multi_user'
-                  ? 'verified'
-                  : fromMap.matchStatus ?? 'probable',
-            });
-          }
-          void reportCrossMarketMappingFail({
-            sourceMarketplace: product.sourceMarketplace,
-            sourceProductId: sourceId,
-            targetMarketplace: marketplace,
-            targetUrl: mapped.targetUrl,
-          });
-        }
-      } catch {
-        // lookup не должен ломать поиск
-      }
-    }
+    if (fromMapping) return fromMapping;
   }
 
   if (!query || query === 'Товар') {
@@ -1624,7 +1800,7 @@ async function resolveOfferForMarketplace(
       searchQuery,
       referenceTitle,
       referencePrice,
-      { excludedUrls },
+      { excludedUrls, excludedFingerprints },
       referenceSpecs,
     );
     if (searchResult.needsManualPick && searchResult.searchCandidates?.length) {
@@ -1739,13 +1915,14 @@ export async function resolveOfferForMarketplaceAfterReject(
   const referenceTitle = getBestTitle(product);
   const referencePrice = getReferencePrice(product);
   const referenceSpecs = getReferenceSpecs(product);
+  const excludedFingerprints = getRejectedFingerprints(product, marketplace);
 
   const searchResult = await searchMarketplaceWithFallback(
     marketplace,
     query,
     referenceTitle,
     referencePrice,
-    { excludedUrls },
+    { excludedUrls, excludedFingerprints },
     referenceSpecs,
   );
 
@@ -1815,6 +1992,36 @@ export async function compareProductAcrossMarketplaces(
   };
   await setSearchingStatus();
 
+  // D: mapping + price-cache before Edge / SERP for unbound targets
+  if (allowSearch) {
+    for (const mp of [...pending]) {
+      if (mp === sourceMarketplace) continue;
+      const boundUrl = getStoredProductPageUrl(currentProduct, mp);
+      if (boundUrl && isProductPageUrl(boundUrl) && !isUrlExcluded(boundUrl, getRejectedUrls(currentProduct, mp))) {
+        continue;
+      }
+      try {
+        const fromMapping = await tryResolveFromCrossMarketMapping(currentProduct, mp, {
+          skipUnlocker,
+        });
+        if (fromMapping && isOfferWithPrice(fromMapping)) {
+          const finalized = finalizeResearchOffer(ensureOfferWithPrice(fromMapping));
+          offers.push(finalized);
+          currentProduct = applyOffersToCompareProduct(currentProduct, [finalized]);
+          await onProgress?.(currentProduct, offers);
+          pending.delete(mp);
+        }
+      } catch {
+        // mapping optional — fall through to Edge / SERP
+      }
+    }
+    await setSearchingStatus();
+    if (pending.size === 0) {
+      await chrome.storage.local.remove(SEARCHING_MP_KEY);
+      return offers;
+    }
+  }
+
   // X2: logged-in server research — only verified cards; needs_choice → local SERP
   if (allowSearch) {
     try {
@@ -1828,6 +2035,7 @@ export async function compareProductAcrossMarketplaces(
         const edgeTitle = getBestTitle(currentProduct);
         const edgeSpecs = getReferenceSpecs(currentProduct);
         for (const mp of targetMarketplaces) {
+          if (!pending.has(mp)) continue;
           const edgeOffer = edgeOffers[mp];
           if (!edgeOffer) continue;
           const hasPoolOrPrice =

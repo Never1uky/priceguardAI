@@ -109,21 +109,26 @@ export function computeCandidatePriority(params: {
   if (params.hasProductUrl) priority += 5;
   if (params.historyBoost) priority += Math.min(5, Math.max(0, params.historyBoost));
 
-  const rating = params.rating;
-  if (rating != null && rating >= 4.7) priority += 4;
-  else if (rating != null && rating >= 4.3) priority += 2;
-  else if (rating != null && rating >= 4) priority += 1;
-
   const price = params.price;
   const ref = params.referencePrice;
   if (price && price > 0 && ref && ref > 0) {
     const ratio = price / ref;
-    if (ratio >= 0.75 && ratio <= 1.25) priority += 4;
-    else if (ratio >= 0.6 && ratio <= 1.4) priority += 2;
-    // Prefer cheaper among similar matches (stronger than before)
-    if (price < ref) priority += 6;
-    else if (price > ref * 1.15) priority -= 4;
+    // Near reference (±25%) — strong boost; expensive outliers lose to SERP "from" prices
+    if (ratio >= 0.7 && ratio <= 1.2) priority += 8;
+    else if (ratio >= 0.55 && ratio <= 1.4) priority += 3;
+    if (price <= ref) priority += 8;
+    else if (price <= ref * 1.1) priority += 4;
+    else if (price > ref * 1.35) priority -= 12;
+    else if (price > ref * 1.2) priority -= 6;
+  } else if (price && price > 0 && !ref) {
+    // No reference — still prefer lower absolute prices among peers (tie-break later)
+    priority += 1;
   }
+
+  // Rating must not outweigh a large price gap (official 34k vs grey 24k)
+  const rating = params.rating;
+  if (rating != null && rating >= 4.7) priority += 2;
+  else if (rating != null && rating >= 4.3) priority += 1;
 
   return Math.max(0, Math.min(120, Math.round(priority)));
 }

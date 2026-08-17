@@ -69,6 +69,10 @@ const COLOR_ALIASES: Record<string, ColorFamily> = {
   yellow: 'yellow',
   жёлтый: 'yellow',
   желтый: 'yellow',
+  lemongrass: 'yellow',
+  'lemon grass': 'yellow',
+  'светло-желтый': 'yellow',
+  'светло-жёлтый': 'yellow',
 };
 
 /**
@@ -152,7 +156,7 @@ export function extractNormalizedColor(title: string, specs?: string): string | 
   const combined = `${title} ${specs ?? ''}`.toLowerCase();
 
   const pattern =
-    /\b(space\s*black|jet\s*black|midnight|graphite|starlight|ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|бежев(?:ый|ая|ое)?|коричнев(?:ый|ая|ое)?|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|beige|brown)\b/i;
+    /\b(space\s*black|jet\s*black|midnight|graphite|starlight|lemongrass|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|бежев(?:ый|ая|ое)?|коричнев(?:ый|ая|ое)?|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|beige|brown|yellow)\b/i;
 
   const match = combined.match(pattern);
   if (match?.[1]) return normalizeColor(match[1]) ?? undefined;

@@ -2,10 +2,19 @@
  * Поиск товара через фоновую вкладку: открывает выдачу, парсит карточки, выбирает лучший match.
  */
 import type { ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
-import { buildMarketplaceSearchUrl } from '@/utils/comparison-url';
+import {
+  buildMarketplaceSearchUrl,
+  isMarketplaceSerpUrl,
+  serpSearchQueryRelated,
+} from '@/utils/comparison-url';
 import { buildSearchNotFoundOffer } from '@/utils/parsers/search-results';
 import { userFacingError } from '@/lib/fetch-retry';
-import { acquireHiddenBrowser, releaseHiddenBrowser } from '@/lib/hidden-browser';
+import {
+  acquireHiddenBrowser,
+  isHiddenBrowserTab,
+  releaseHiddenBrowser,
+} from '@/lib/hidden-browser';
+import { waitForTabComplete } from '@/lib/tab-complete';
 import { searchOzonInTab } from '@/lib/ozon-tab-search';
 import { isOfferWithPrice } from '@/lib/compare-offers';
 import { isProductPageUrl, isUrlExcluded } from '@/lib/product-match';
@@ -31,23 +40,8 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForTabComplete(tabId: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Страница поиска не загрузилась'));
-    }, TAB_LOAD_TIMEOUT_MS);
-
-    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (updatedTabId === tabId && info.status === 'complete') {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+async function waitSearchTab(tabId: number): Promise<void> {
+  await waitForTabComplete(tabId, TAB_LOAD_TIMEOUT_MS, 'Страница поиска не загрузилась');
 }
 
 async function scrollSearchPage(tabId: number): Promise<void> {
@@ -84,6 +78,7 @@ async function tryScrapeOnce(
   referencePrice?: number,
   referenceSpecs?: string,
   excludedUrls?: string[],
+  excludedFingerprints?: string[],
 ): Promise<MarketplaceOffer | null> {
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -94,6 +89,7 @@ async function tryScrapeOnce(
       referencePrice,
       referenceSpecs,
       excludedUrls,
+      excludedFingerprints,
     });
 
     if (response?.ok && response.offer && isUsableSearchOffer(response.offer)) {
@@ -114,6 +110,7 @@ async function pollSearchMessage(
   referencePrice?: number,
   referenceSpecs?: string,
   excludedUrls?: string[],
+  excludedFingerprints?: string[],
 ): Promise<MarketplaceOffer | null> {
   const maxMs = SERP_POLL_MAX_MS[marketplace];
   const started = Date.now();
@@ -135,10 +132,166 @@ async function pollSearchMessage(
       referencePrice,
       referenceSpecs,
       excludedUrls,
+      excludedFingerprints,
     );
     if (offer) return offer;
   }
 
+  return null;
+}
+
+/** Scrape an already-loaded SERP tab (visible or HiddenBrowser). */
+async function scrapeLoadedSerpTab(
+  tabId: number,
+  marketplace: ComparisonMarketplace,
+  query: string,
+  referenceTitle: string,
+  referencePrice?: number,
+  referenceSpecs?: string,
+  excludedUrls?: string[],
+  excludedFingerprints?: string[],
+): Promise<MarketplaceOffer | null> {
+  await scrollSearchPage(tabId);
+  await ensureContentScript(tabId);
+
+  if (marketplace === 'ozon') {
+    const ozonStarted = Date.now();
+    const ozonMaxMs = SERP_POLL_MAX_MS.ozon;
+    let ozonAttempt = 0;
+    while (Date.now() - ozonStarted < ozonMaxMs) {
+      if (ozonAttempt > 0) await delay(SERP_POLL_INTERVAL_MS);
+      ozonAttempt += 1;
+      if (ozonAttempt === 2 || ozonAttempt === 5) {
+        await scrollSearchPage(tabId);
+      }
+
+      const fromPageApi = await searchOzonInTab(tabId, query, referenceTitle, referencePrice, excludedUrls);
+      if (fromPageApi?.error === OZON_ANTIBOT_USER_MESSAGE) {
+        return fromPageApi;
+      }
+      if (
+        fromPageApi &&
+        (fromPageApi.needsManualPick ||
+          (isOfferWithPrice(fromPageApi) &&
+            fromPageApi.url &&
+            isProductPageUrl(fromPageApi.url)) ||
+          (fromPageApi.searchCandidates?.length ?? 0) > 0)
+      ) {
+        return fromPageApi;
+      }
+    }
+  }
+
+    const offer = await pollSearchMessage(
+      tabId,
+      marketplace,
+      query,
+      referenceTitle,
+      referencePrice,
+      referenceSpecs,
+      excludedUrls,
+      excludedFingerprints,
+    );
+  if (offer) return offer;
+
+  if (marketplace === 'ozon') {
+    const fromDom = await scrapeOzonSerpDomInTab(
+      tabId,
+      query,
+      referenceTitle,
+      referencePrice,
+      excludedUrls,
+    );
+    if (fromDom?.error === OZON_ANTIBOT_USER_MESSAGE) {
+      return fromDom;
+    }
+    if (
+      fromDom &&
+      (fromDom.needsManualPick ||
+        (isOfferWithPrice(fromDom) && fromDom.url && isProductPageUrl(fromDom.url)) ||
+        (fromDom.searchCandidates?.length ?? 0) > 0)
+    ) {
+      telemetry.info({
+        stage: 'parser',
+        name: 'PARSER_USED',
+        marketplace,
+        queryHash: hashQuery(query),
+        success: true,
+        data: { path: 'dom', candidates: fromDom.searchCandidates?.length ?? 0 },
+      });
+      return fromDom;
+    }
+  }
+
+  return null;
+}
+
+const SERP_TAB_URL_PATTERNS: Record<ComparisonMarketplace, string[]> = {
+  wildberries: ['*://*.wildberries.ru/*search*'],
+  ozon: ['*://*.ozon.ru/search*'],
+  yandex_market: ['*://market.yandex.ru/search*'],
+};
+
+export async function findOpenMarketplaceSerpTab(
+  marketplace: ComparisonMarketplace,
+  query: string,
+): Promise<number | null> {
+  if (typeof chrome === 'undefined' || !chrome.tabs?.query) return null;
+
+  let tabs: chrome.tabs.Tab[] = [];
+  try {
+    tabs = await chrome.tabs.query({ url: SERP_TAB_URL_PATTERNS[marketplace] });
+  } catch {
+    return null;
+  }
+
+  const candidates = tabs.filter((tab) => {
+    if (!tab.id || !tab.url) return false;
+    if (isHiddenBrowserTab(tab.id, tab.windowId)) return false;
+    if (!isMarketplaceSerpUrl(tab.url, marketplace)) return false;
+    return serpSearchQueryRelated(tab.url, query);
+  });
+
+  const active = candidates.find((tab) => tab.active);
+  return (active ?? candidates[0])?.id ?? null;
+}
+
+/**
+ * If the user is already on this marketplace's search page, scrape that tab
+ * instead of opening HiddenBrowser (and instead of unofficial search APIs).
+ * Returns null when there is no matching tab or scrape is empty — caller falls through.
+ */
+export async function searchViaOpenSerpTab(
+  marketplace: ComparisonMarketplace,
+  query: string,
+  referenceTitle?: string,
+  referencePrice?: number,
+  referenceSpecs?: string,
+  excludedUrls?: string[],
+  excludedFingerprints?: string[],
+): Promise<MarketplaceOffer | null> {
+  const ref = referenceTitle && referenceTitle !== 'Товар' ? referenceTitle : query;
+  const tabId = await findOpenMarketplaceSerpTab(marketplace, query);
+  if (tabId == null) return null;
+
+  try {
+    console.info('[PriceGuard] SERP scrape visible tab', { marketplace, tabId });
+    await waitSearchTab(tabId);
+    const offer = await scrapeLoadedSerpTab(
+      tabId,
+      marketplace,
+      query,
+      ref,
+      referencePrice,
+      referenceSpecs,
+      excludedUrls,
+      excludedFingerprints,
+    );
+    if (offer && isUsableSearchOffer(offer)) return offer;
+    if (offer && (offer.searchCandidates?.length ?? 0) > 0) return offer;
+  } catch {
+    // fall through to HiddenBrowser
+  }
   return null;
 }
 
@@ -149,6 +302,7 @@ export async function searchViaBrowserTab(
   referencePrice?: number,
   referenceSpecs?: string,
   excludedUrls?: string[],
+  excludedFingerprints?: string[],
 ): Promise<MarketplaceOffer> {
   const ref = referenceTitle && referenceTitle !== 'Товар' ? referenceTitle : query;
   const searchUrl = buildMarketplaceSearchUrl(marketplace, query);
@@ -185,7 +339,7 @@ export async function searchViaBrowserTab(
     return await browser.runExclusive(async (nav) => {
       let tabId = await nav(searchUrl);
 
-      await waitForTabComplete(tabId);
+      await waitSearchTab(tabId);
       await delay(400);
 
       // Ozon often redirects /search → /category/…prediction — force global SERP (up to 2 retries)
@@ -200,7 +354,7 @@ export async function searchViaBrowserTab(
               finalUrl: finalUrl.slice(0, 120),
             });
             tabId = await nav(searchUrl);
-            await waitForTabComplete(tabId);
+            await waitSearchTab(tabId);
             await delay(600);
           } catch {
             break;
@@ -208,49 +362,7 @@ export async function searchViaBrowserTab(
         }
       }
 
-      await scrollSearchPage(tabId);
-      await ensureContentScript(tabId);
-
-      if (marketplace === 'ozon') {
-        // Poll DOM/widgets while tiles hydrate (category pages often lazy-load /product/ links)
-        const ozonStarted = Date.now();
-        const ozonMaxMs = SERP_POLL_MAX_MS.ozon;
-        let ozonAttempt = 0;
-        while (Date.now() - ozonStarted < ozonMaxMs) {
-          if (ozonAttempt > 0) await delay(SERP_POLL_INTERVAL_MS);
-          ozonAttempt += 1;
-          if (ozonAttempt === 2 || ozonAttempt === 5) {
-            await scrollSearchPage(tabId);
-          }
-
-          const fromPageApi = await searchOzonInTab(tabId, query, ref, referencePrice, excludedUrls);
-          if (fromPageApi?.error === OZON_ANTIBOT_USER_MESSAGE) {
-            noteEmptyScrape(marketplace, 'serp');
-            telemetry.warn({
-              stage: 'parser',
-              name: 'PARSER_ANTIBOT',
-              marketplace,
-              queryHash: hashQuery(query),
-              success: false,
-              errorCode: 'ozon_antibot',
-              data: { path: 'widgetStates' },
-            });
-            return fromPageApi;
-          }
-          if (
-            fromPageApi &&
-            (fromPageApi.needsManualPick ||
-              (isOfferWithPrice(fromPageApi) &&
-                fromPageApi.url &&
-                isProductPageUrl(fromPageApi.url)) ||
-              (fromPageApi.searchCandidates?.length ?? 0) > 0)
-          ) {
-            return fromPageApi;
-          }
-        }
-      }
-
-      const offer = await pollSearchMessage(
+      const scraped = await scrapeLoadedSerpTab(
         tabId,
         marketplace,
         query,
@@ -258,51 +370,27 @@ export async function searchViaBrowserTab(
         referencePrice,
         referenceSpecs,
         excludedUrls,
+        excludedFingerprints,
       );
-      if (offer) {
-        resetEmptyScrape(marketplace, 'serp');
-        // Do not cache pre-cascade SERP
-        return offer;
+      if (scraped?.error === OZON_ANTIBOT_USER_MESSAGE) {
+        noteEmptyScrape(marketplace, 'serp');
+        telemetry.warn({
+          stage: 'parser',
+          name: 'PARSER_ANTIBOT',
+          marketplace,
+          queryHash: hashQuery(query),
+          success: false,
+          errorCode: 'ozon_antibot',
+        });
+        return scraped;
       }
-
-      // Content-script scrape empty — last DOM pass for Ozon (widgets already tried)
-      if (marketplace === 'ozon') {
-        const fromDom = await scrapeOzonSerpDomInTab(
-          tabId,
-          query,
-          ref,
-          referencePrice,
-          excludedUrls,
-        );
-        if (fromDom?.error === OZON_ANTIBOT_USER_MESSAGE) {
-          noteEmptyScrape(marketplace, 'serp');
-          telemetry.warn({
-            stage: 'parser',
-            name: 'PARSER_ANTIBOT',
-            marketplace,
-            queryHash: hashQuery(query),
-            success: false,
-            errorCode: 'ozon_antibot',
-            data: { path: 'dom' },
-          });
-          return fromDom;
-        }
-        if (
-          fromDom &&
-          (fromDom.needsManualPick ||
-            (isOfferWithPrice(fromDom) && fromDom.url && isProductPageUrl(fromDom.url)) ||
-            (fromDom.searchCandidates?.length ?? 0) > 0)
-        ) {
-          telemetry.info({
-            stage: 'parser',
-            name: 'PARSER_USED',
-            marketplace,
-            queryHash: hashQuery(query),
-            success: true,
-            data: { path: 'dom', candidates: fromDom.searchCandidates?.length ?? 0 },
-          });
-          return fromDom;
-        }
+      if (scraped && isUsableSearchOffer(scraped)) {
+        resetEmptyScrape(marketplace, 'serp');
+        return scraped;
+      }
+      if (scraped && (scraped.searchCandidates?.length ?? 0) > 0) {
+        resetEmptyScrape(marketplace, 'serp');
+        return scraped;
       }
 
       noteEmptyScrape(marketplace, 'serp');

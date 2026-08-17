@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const searchViaBrowserTab = vi.fn();
+const searchViaOpenSerpTab = vi.fn();
 const researchCompareViaEdge = vi.fn();
 const verifySerpOfferWithCardCascade = vi.fn();
 
@@ -19,10 +20,23 @@ vi.stubGlobal('chrome', {
 
 vi.mock('@/lib/compare-tab-search', () => ({
   searchViaBrowserTab: (...args: unknown[]) => searchViaBrowserTab(...args),
+  searchViaOpenSerpTab: (...args: unknown[]) => searchViaOpenSerpTab(...args),
 }));
 
 vi.mock('@/lib/supabase/compare-research', () => ({
   researchCompareViaEdge: (...args: unknown[]) => researchCompareViaEdge(...args),
+}));
+
+vi.mock('@/lib/cross-market-map', () => ({
+  lookupCrossMarketMappings: vi.fn().mockResolvedValue([]),
+  rememberCrossMarketMapping: vi.fn(),
+  reportCrossMarketMappingFail: vi.fn(),
+  resolveSourceProductId: () => null,
+}));
+
+vi.mock('@/lib/supabase/price-cache', () => ({
+  getSharedPriceCache: vi.fn().mockResolvedValue(null),
+  putSharedPriceCache: vi.fn(),
 }));
 
 vi.mock('@/lib/card-cascade-verify', () => ({
@@ -47,6 +61,10 @@ vi.mock('@/lib/pipeline-metrics', () => ({
 
 vi.mock('@/lib/fetch-retry', () => ({
   fetchWithRetry: vi.fn().mockRejectedValue(new Error('no network in unit test')),
+  safeFetch: vi.fn().mockRejectedValue(new Error('no network in unit test')),
+  apiErrorMessage: (mp: string) => `${mp}: api fail`,
+  MARKETPLACE_SEARCH_RETRY: { retries: 0, retryOn: [500] },
+  isMarketplaceSearchApiUrl: () => false,
 }));
 
 vi.mock('@/lib/offer-fetch', () => ({
@@ -84,6 +102,7 @@ describe('compareProductAcrossMarketplaces — Edge needs_choice → local SERP'
   beforeEach(() => {
     vi.clearAllMocks();
     resetAllEmptyScrapes();
+    searchViaOpenSerpTab.mockResolvedValue(null);
     researchCompareViaEdge.mockResolvedValue({
       ozon: {
         marketplace: 'ozon',

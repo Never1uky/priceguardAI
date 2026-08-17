@@ -178,6 +178,32 @@ export const GENERIC_MATCH_PROFILE: CategoryMatchProfile = ELECTRONICS_LITE;
  */
 export const CATEGORY_PLUGINS: CategoryPlugin[] = [
   {
+    id: 'memory_cards',
+    roleDefault: 'primary',
+    inferPatterns: [
+      /micro\s*sd(?:xc|hc)?/i,
+      /\bsd\s*xc\b/i,
+      /\bsd\s*card\b/i,
+      /карта\s+памяти/i,
+      /флеш[-\s]?карт/i,
+      /memory\s+card/i,
+      /\bcanvas\s+go\b/i,
+      /\bcanvas\s+select\b/i,
+    ],
+    profile: {
+      weights: {
+        brand: 25,
+        model: 45,
+        storage: 25,
+        price: 5,
+        title: 20,
+      },
+      required: ['brand', 'model'],
+      soft: [],
+      ignore: ['color', 'size', 'volume', 'weight', 'packageCount', 'gender'],
+    },
+  },
+  {
     id: 'accessories',
     roleDefault: 'accessory',
     queryPolicy: { forbidHostAsLead: true, preferPrimaryEntity: true },
@@ -291,14 +317,15 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
     profile: {
       weights: {
         brand: 30,
-        model: 35,
+        model: 40,
         storage: 20,
-        color: 10,
+        // Soft preference only — must not outweigh model/lineage or cheap-rank
+        color: 3,
         price: 5,
         title: 20,
       },
       required: ['brand', 'model'],
-      soft: [],
+      soft: ['color'],
       ignore: ['size', 'volume', 'weight', 'packageCount'],
     },
     mismatchPenalty: accessoryCrossCategoryPenalty,
@@ -852,15 +879,15 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
     profile: {
       weights: {
         brand: 30,
-        model: 30,
-        color: 20,
+        model: 25,
+        color: 25,
         material: 10,
         gender: 10,
         title: 25,
         price: 5,
         size: 0,
       },
-      required: ['brand'],
+      required: ['brand', 'color'],
       soft: ['size', 'gender'],
       ignore: ['storage', 'volume', 'packageCount'],
     },

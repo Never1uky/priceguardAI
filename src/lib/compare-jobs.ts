@@ -12,6 +12,7 @@ import {
   removeRunningId,
   type RunningAtMap,
 } from '@/lib/compare-running-state';
+import { resetAllEmptyScrapes } from '@/lib/empty-scrape-guard';
 import { closeHiddenBrowserIfIdle } from '@/lib/hidden-browser';
 import {
   clearTelemetryContext,
@@ -231,6 +232,7 @@ export async function runCompareJob(
 
   await addCompareRunning(product.id);
   startKeepAlive(jobId);
+  resetAllEmptyScrapes();
 
   // Winning generation: settle leftover loading_card from a superseded job
   try {

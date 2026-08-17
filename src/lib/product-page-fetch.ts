@@ -3,6 +3,7 @@
  * Используется, когда HTTP API Ozon/Я.Маркет недоступен или ссылка вида /t/…, /cc/….
  */
 import { acquireHiddenBrowser, releaseHiddenBrowser } from '@/lib/hidden-browser';
+import { waitForTabComplete } from '@/lib/tab-complete';
 import type { ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 import type { Product } from '@/types/product';
 import { detectComparisonMarketplace, normalizeCompareUrl } from '@/utils/comparison-url';
@@ -25,29 +26,15 @@ import { normalizeMarketplaceRating } from '@/lib/compare-offers';
 import { ensureContentScriptReady, safeSendMessage } from '@/lib/safe-messaging';
 
 const TAB_LOAD_TIMEOUT_MS = 45_000;
-const PRODUCT_PAGE_DELAY_MS = 6_500;
+/** Short settle after complete — API already ran first; keep tab scrape snappy. */
+const PRODUCT_PAGE_DELAY_MS = 2_500;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForTabComplete(tabId: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Страница не загрузилась'));
-    }, TAB_LOAD_TIMEOUT_MS);
-
-    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (updatedTabId === tabId && info.status === 'complete') {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+async function waitTab(tabId: number): Promise<void> {
+  await waitForTabComplete(tabId, TAB_LOAD_TIMEOUT_MS, 'Страница не загрузилась');
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
@@ -98,7 +85,7 @@ export async function resolveProductPageUrl(url: string): Promise<string> {
   try {
     return await browser.runExclusive(async (nav) => {
       const tabId = await nav(trimmed);
-      await waitForTabComplete(tabId);
+      await waitTab(tabId);
       await delay(2_000);
 
       const tab = await chrome.tabs.get(tabId);
@@ -162,11 +149,11 @@ export async function scrapeOfferViaHiddenTab(
   try {
     return await browser.runExclusive(async (nav) => {
       const tabId = await nav(url);
-      await waitForTabComplete(tabId);
+      await waitTab(tabId);
       await delay(PRODUCT_PAGE_DELAY_MS);
       await ensureContentScript(tabId);
 
-      for (const wait of [0, 1_500, 3_000, 5_000]) {
+      for (const wait of [0, 1_500]) {
         if (wait) await delay(wait);
         try {
           const response = (await safeSendMessage(

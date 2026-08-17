@@ -52,7 +52,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { CHROME_WEB_STORE_REVIEWS_URL } from '@/lib/chrome-store';
+import { CHROME_WEB_STORE_REVIEWS_URL, TELEGRAM_CHANNEL_URL, TELEGRAM_CHANNEL_LINK_LABEL } from '@/lib/chrome-store';
 import { isPremium } from '@/lib/subscription';
 import {
   isServerPriceMonitoringActive,
@@ -60,6 +60,7 @@ import {
   syncAlertSettingsToCloud,
 } from '@/lib/supabase/alert-settings-sync';
 import { sendTelegramPriceAlert } from '@/lib/telegram-price-alert';
+import { TelegramChannelLink } from '@/popup/components/TelegramChannelLink';
 import {
   CLOUD_NETWORK_WARN_MESSAGE,
   CLOUD_NETWORK_WARN_STORAGE_KEY,
@@ -300,6 +301,8 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
         '',
         '⭐ <i>@PriceGuardAlertsBot</i>',
       ].join('\n'),
+      url: TELEGRAM_CHANNEL_URL,
+      buttonText: TELEGRAM_CHANNEL_LINK_LABEL,
     });
 
     if (!sync?.ok || !sync.serverMonitoring) {
@@ -388,6 +391,8 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
         Поддержка в Telegram
         <span className="ml-auto pg-caption">@priceguard_supportbot</span>
       </Button>
+
+      <TelegramChannelLink variant="outline" className="w-full justify-start gap-2" />
 
       <Button
         variant="ghost"
@@ -585,7 +590,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
               <div className="min-w-0">
                 <p className="pg-title">Telegram</p>
                 <p className="pg-hint mt-0.5">
-                  Подключите Telegram для уведомлений о снижении цен
+                  Алерты о падении цены — через бота. Разборы карточек — в канале.
                 </p>
               </div>
             </div>
@@ -719,6 +724,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
               >
                 @PriceGuardAlertsBot
               </a>
+              <TelegramChannelLink variant="link" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button

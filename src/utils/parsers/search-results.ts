@@ -3,12 +3,13 @@ import type {
   MarketplaceOffer,
   SearchCandidateOffer,
 } from '@/types/comparison';
-import { buildMarketplaceSearchUrl } from '@/utils/comparison-url';
+import { buildMarketplaceSearchUrl, extractComparisonArticle } from '@/utils/comparison-url';
 import {
   MIN_COMPARE_MATCH_CONFIDENCE,
   isProductPageUrl,
   pickBestMatchWithFallbackScored,
   pickTopMatchesWithScore,
+  scoreProductMatch,
 } from '@/lib/product-match';
 import { matchConfidencePercent } from '@/lib/fuzzy-match';
 import {
@@ -16,12 +17,46 @@ import {
   hasLargePriceSpreadAmongClose,
   pickCheapestAmongCloseMatches,
 } from '@/lib/match-status';
+import { isTitleCategoryCompatible } from '@/lib/match-category';
+import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
+import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
 import { parsePrice } from '@/utils/dom';
 import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
 import { isSafeMarketplaceUrl } from '@/utils/safe-marketplace-url';
 import { pickSerpTitleFromTile } from '@/lib/serp-title';
 import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
 import type { Marketplace } from '@/types/product';
+import { isIdentityExcluded } from '@/lib/offer-identity';
+/** Dedupe by product article; keep the cheaper SERP price (YM "from" vs default offer). */
+function upsertSerpCandidate(
+  results: SearchCandidate[],
+  seenIndex: Map<string, number>,
+  candidate: SearchCandidate,
+  marketplace: ComparisonMarketplace,
+): void {
+  const article = extractComparisonArticle(candidate.url, marketplace);
+  const key = (article || candidate.url).toLowerCase();
+  const existingIdx = seenIndex.get(key);
+  if (existingIdx != null) {
+    const prev = results[existingIdx]!;
+    if (
+      candidate.price != null &&
+      candidate.price > 0 &&
+      (prev.price == null || candidate.price < prev.price)
+    ) {
+      results[existingIdx] = {
+        ...prev,
+        price: candidate.price,
+        title: candidate.title || prev.title,
+        rating: candidate.rating ?? prev.rating,
+        imageUrl: candidate.imageUrl ?? prev.imageUrl,
+      };
+    }
+    return;
+  }
+  seenIndex.set(key, results.length);
+  results.push(candidate);
+}
 
 function marketplaceOrigin(marketplace: ComparisonMarketplace): string {
   switch (marketplace) {
@@ -80,10 +115,17 @@ export interface SearchPickOptions {
   referencePrice?: number;
   referenceSpecs?: string;
   excludedUrls?: string[];
+  /** Rejected identity fingerprints (line+gen / article) — stronger than URL-only. */
+  excludedFingerprints?: string[];
+  marketplace?: ComparisonMarketplace;
+  /** Override rank floor. Visible tiles below default 0.38 still become needs_choice. */
+  minScore?: number;
 }
 
 function parseRubPrices(text: string): number[] {
-  return [...text.replace(/\u00a0/g, ' ').matchAll(/(\d[\d\s]*)\s*₽/g)]
+  const normalized = text.replace(/\u00a0/g, ' ');
+  // Thousands groups or ≥3 digits — avoid "Pixel 7 24 682 ₽" → 724682
+  return [...normalized.matchAll(/(?<!\d)(\d{1,3}(?:\s\d{3})+|\d{3,})\s*₽/g)]
     .map((m) => parsePrice(m[1]))
     .filter((n) => n >= 50);
 }
@@ -161,11 +203,24 @@ export function rankSearchCandidates(
 ): Array<{ candidate: SearchCandidate; confidence: number; score: number; priority: number }> {
   const ref = referenceTitle && referenceTitle !== 'Товар' ? referenceTitle : '';
 
-  const top = pickTopMatchesWithScore(ref, candidates, (c) => c.title, {
+  const filtered = candidates.filter((c) => {
+    if (ref && !areLineageGenerationsCompatible(ref, c.title)) {
+      return false;
+    }
+    if (
+      options.excludedFingerprints?.length &&
+      isIdentityExcluded(c.title, c.url, options.marketplace, options.excludedFingerprints)
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const top = pickTopMatchesWithScore(ref, filtered, (c) => c.title, {
     referencePrice: options.referencePrice,
     referenceSpecs: options.referenceSpecs,
     excludedUrls: options.excludedUrls,
-    minScore: 0.38,
+    minScore: options.minScore ?? 0.38,
     maxPriceRatio: 1.5,
     getPrice: (c) => (c as SearchCandidate).price,
     getUrl: (c) => (c as SearchCandidate).url,
@@ -193,7 +248,7 @@ export function rankSearchCandidates(
   });
 }
 
-/** Выбор из выдачи: только пул карточек для cascade — без SERP found:true */
+/** Выбор из выдачи: однозначный top-1 → verified; иначе пул для cascade / picker */
 export function pickSearchFromCandidates(
   marketplace: ComparisonMarketplace,
   query: string,
@@ -202,6 +257,7 @@ export function pickSearchFromCandidates(
   options: SearchPickOptions = {},
 ): SearchPickResult {
   const ref = referenceTitle && referenceTitle !== 'Товар' ? referenceTitle : query;
+  const pickOpts: SearchPickOptions = { ...options, marketplace };
 
   if (!candidates.length) {
     return {
@@ -213,9 +269,59 @@ export function pickSearchFromCandidates(
     };
   }
 
-  const rankedRaw = rankSearchCandidates(ref, candidates, options);
+  const hardOk = candidates.filter(
+    (c) =>
+      areLineageGenerationsCompatible(ref, c.title) &&
+      !isIdentityExcluded(c.title, c.url, marketplace, pickOpts.excludedFingerprints),
+  );
+
+  let rankedRaw = rankSearchCandidates(ref, hardOk, pickOpts);
+  if (!rankedRaw.length) {
+    rankedRaw = rankSearchCandidates(ref, hardOk, {
+      ...pickOpts,
+      minScore: 0,
+    });
+  }
+  if (!rankedRaw.length && hardOk.length) {
+    rankedRaw = hardOk
+      .filter((c) => c.url && isProductPageUrl(c.url))
+      .filter((c) => isTitleCategoryCompatible(ref, c.title, pickOpts.referenceSpecs))
+      .map((candidate) => {
+        const score = scoreProductMatch(ref, candidate.title, pickOpts.referenceSpecs);
+        const confidence = matchConfidencePercent(score);
+        const priority = computeCandidatePriority({
+          match: confidence,
+          price: candidate.price,
+          referencePrice: pickOpts.referencePrice,
+          rating: candidate.rating,
+          hasProductUrl: Boolean(candidate.url),
+        });
+        return { candidate, confidence, score, priority };
+      })
+      .sort((a, b) => b.priority - a.priority || b.confidence - a.confidence)
+      .slice(0, 3);
+  }
+  // No hard-compatible tiles → not_found (do not promote Gen3/Select via price)
+  if (!rankedRaw.length) {
+    return {
+      offer: {
+        ...buildSearchNotFoundOffer(
+          marketplace,
+          query,
+          'Подходящий товар в выдаче не найден. Укажите ссылку вручную.',
+        ),
+        matchStatus: 'not_found',
+      },
+      ranked: [],
+    };
+  }
+
   const ranked = pickCheapestAmongCloseMatches(
-    rankedRaw.map((r) => ({ ...r, price: r.candidate.price })),
+    rankedRaw.map((r) => ({
+      ...r,
+      price: r.candidate.price,
+    })),
+    12,
   );
   const forceChoice = hasLargePriceSpreadAmongClose(ranked);
   const top3 = ranked.slice(0, 3).filter((r) => {
@@ -238,6 +344,21 @@ export function pickSearchFromCandidates(
       },
       ranked: [],
     };
+  }
+
+  const unambiguous = tryUnambiguousSerpVerified(
+    marketplace,
+    top3.map((r) => ({
+      title: r.candidate.title,
+      url: r.candidate.url,
+      price: r.candidate.price,
+      confidence: r.confidence,
+      imageUrl: r.candidate.imageUrl,
+      rating: r.candidate.rating,
+    })),
+  );
+  if (unambiguous) {
+    return { offer: unambiguous, ranked: top3 };
   }
 
   const best = top3[0]!;
@@ -293,7 +414,11 @@ function wbCardFromElement(card: Element, query: string): SearchCandidate | null
   const oldPriceEl = card.querySelector('[class*="price__old"], del, s, [class*="old-price"]');
   const oldPrice = oldPriceEl?.textContent ? parseRubPrice(oldPriceEl.textContent) : null;
 
-  const prices = parseRubPrices(card.textContent ?? '');
+  const priceNodes = card.querySelectorAll(
+    '[class*="price__lower"], [class*="price__current"], ins[class*="price"], .price__wrap',
+  );
+  const fromNodes = [...priceNodes].flatMap((el) => parseRubPrices(el.textContent ?? ''));
+  const prices = fromNodes.length ? fromNodes : parseRubPrices(card.textContent ?? '');
   const price = pickWbDisplayPrice(prices, oldPrice);
   if (!price) return null;
 
@@ -349,13 +474,12 @@ export function parseWildberriesCandidatesFromRoot(root: ParentNode, query: stri
   }
 
   const results: SearchCandidate[] = [];
-  const seen = new Set<string>();
+  const seenIndex = new Map<string, number>();
 
   for (const card of cardSet) {
     const candidate = wbCardFromElement(card, query);
-    if (!candidate?.url || seen.has(candidate.url)) continue;
-    seen.add(candidate.url);
-    results.push(candidate);
+    if (!candidate?.url) continue;
+    upsertSerpCandidate(results, seenIndex, candidate, 'wildberries');
   }
 
   return results;
@@ -379,18 +503,18 @@ function scrapeOzonCandidates(query: string): SearchCandidate[] {
   }
 
   const results: SearchCandidate[] = [];
-  const seen = new Set<string>();
+  const seenIndex = new Map<string, number>();
+  const seenHrefs = new Set<string>();
 
   for (const link of linkSet) {
     const href = link.href;
-    if (!href.includes('/product/') || seen.has(href) || /\/category\//i.test(href)) continue;
+    if (!href.includes('/product/') || seenHrefs.has(href) || /\/category\//i.test(href)) continue;
     const safeUrl = sanitizeCandidateUrl(
       href.startsWith('http') ? href : `https://www.ozon.ru${href.startsWith('/') ? href : `/${href}`}`,
       'ozon',
     );
-    if (!safeUrl || seen.has(safeUrl)) continue;
-    seen.add(href);
-    seen.add(safeUrl);
+    if (!safeUrl) continue;
+    seenHrefs.add(href);
 
     const container =
       link.closest('[data-index]') ??
@@ -417,14 +541,19 @@ function scrapeOzonCandidates(query: string): SearchCandidate[] {
     const oldPrice = uniquePrices.length > 1 ? uniquePrices[uniquePrices.length - 1] : undefined;
     const { rating, reviewCount } = parseOzonRating(containerText);
 
-    results.push({
-      title: title.slice(0, 200),
-      url: safeUrl,
-      price,
-      oldPrice: oldPrice && oldPrice > price ? oldPrice : undefined,
-      rating,
-      reviewCount,
-    });
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title: title.slice(0, 200),
+        url: safeUrl,
+        price,
+        oldPrice: oldPrice && oldPrice > price ? oldPrice : undefined,
+        rating,
+        reviewCount,
+      },
+      'ozon',
+    );
   }
 
   return results;
@@ -439,26 +568,27 @@ function scrapeYandexMarketCandidates(query: string): SearchCandidate[] {
       '[data-autotest-id="product-snippet"]',
       '[data-baobab-name="product"]',
       'article[data-auto="searchOrganic"]',
+      // Top price-comparison / gallery tiles on YM SERP
+      '[data-zone-name="SearchPage"] [data-zone-name="productSnippet"]',
+      '[data-apiary-widget-name="@card"]',
     ].join(', '),
   );
 
   const items = snippets.length ? snippets : document.querySelectorAll('article');
 
   const results: SearchCandidate[] = [];
-  const seen = new Set<string>();
+  const seenIndex = new Map<string, number>();
 
   for (const item of items) {
     const link = item.querySelector<HTMLAnchorElement>(
       'a[href*="/card/"], a[href*="/product/"], a[href*="market.yandex"]',
     );
-    if (!link?.href || seen.has(link.href) || link.href.includes('/search')) continue;
+    if (!link?.href || link.href.includes('/search')) continue;
 
     let url = link.href;
     if (!url.startsWith('http')) url = `https://market.yandex.ru${url}`;
     const safeUrl = sanitizeCandidateUrl(url, 'yandex_market');
-    if (!safeUrl || seen.has(safeUrl)) continue;
-    seen.add(link.href);
-    seen.add(safeUrl);
+    if (!safeUrl) continue;
 
     const title =
       item.querySelector('[data-auto="snippet-title"], [data-zone-name="title"], h3')?.textContent?.trim() ||
@@ -470,19 +600,26 @@ function scrapeYandexMarketCandidates(query: string): SearchCandidate[] {
     const prices = parseRubPrices(text);
     if (!prices.length) continue;
 
-    const price = Math.min(...prices);
+    // Prefer the lowest visible price (SERP "from"); skip duty-only noise by taking min ≥ 500
+    const pricePool = prices.filter((p) => p >= 500);
+    const price = Math.min(...(pricePool.length ? pricePool : prices));
     const ratingMatch = text.match(/(\d[.,]\d)\s*(?:из\s*5|★|⭐)/i);
     const rating = normalizeMarketplaceRating(
       ratingMatch ? ratingMatch[1].replace(',', '.') : null,
     );
 
-    results.push({
-      title: title.slice(0, 200),
-      url: safeUrl,
-      price,
-      rating,
-      reviewCount: undefined,
-    });
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title: title.slice(0, 200),
+        url: safeUrl,
+        price,
+        rating,
+        reviewCount: undefined,
+      },
+      'yandex_market',
+    );
   }
 
   return results;
@@ -540,6 +677,7 @@ export function scrapeMarketplaceSearch(
   referencePrice?: number,
   referenceSpecs?: string,
   excludedUrls?: string[],
+  excludedFingerprints?: string[],
 ): MarketplaceOffer | null {
   const candidates = scrapeAllCandidates(marketplace, query);
   if (!candidates.length) return null;
@@ -549,7 +687,7 @@ export function scrapeMarketplaceSearch(
     query,
     referenceTitle ?? query,
     candidates,
-    { referencePrice, referenceSpecs, excludedUrls },
+    { referencePrice, referenceSpecs, excludedUrls, excludedFingerprints, marketplace },
   ).offer;
 }
 

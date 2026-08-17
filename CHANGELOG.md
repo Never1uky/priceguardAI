@@ -4,6 +4,36 @@
 
 ---
 
+## 0.9.98 — 2026-08-17
+
+### Shopping Agent
+
+- Подбор товара по текстовому запросу на вкладке «Текущая цена» (пустое состояние и «Подобрать другой»).
+- Edge Function `shopping-agent`: поиск WB/Ozon/YM, оценка и рейтинг; лимит 5 запросов/сутки.
+- Кэш выдачи `search_results_cache` — 6 часов; история `agent_searches` живёт с аккаунтом.
+
+### Telegram
+
+- Кнопка «Канал с разборами» (`t.me/priceguard_ai`) в расширении и в ботах алертов/поддержки.
+
+### Search reliability (0.9.93 regression)
+
+- **Mapping-first (D):** `cross_market_mapping` + shared price-cache до Edge/SERP; вкладка поиска только если нет валидного биндинга.
+- **Tab-only search:** уже открытый SERP этой площадки → HiddenBrowser. `search.wb.ru` / YM search API из SW не вызываются (429). Ozon composer — только если вкладки пустые.
+- **Честные ошибки:** 429 не ретраится на поисковых URL; UI не маскирует 5xx / «временно недоступна» как лимит запросов.
+- **empty-scrape SERP:** не skip на жизнь SW; сброс на каждый compare job. Плитки с низким score → `needs_choice`.
+- **Однозначный SERP:** top-1 с confidence ≥70, product URL и без ничьей → сразу `verified` в таблицу без cascade 90.
+- **Смесь моделей:** Pixel 7/9a/10a и похожие → `needs_choice`, не `not_found`.
+- **Query:** Pixel/iPhone/Redmi сохраняют номер модели и цифры памяти; без голого «ГБ» и `, ,`.
+- **Pixel generation:** lineage Pixel 7≠6; query без `Google Google` / голого Pixel; stale `productModel` не затирает цифру из title.
+- **Дешёвые SERP:** priority не хоронит «от»-цену рейтингом; picker держит min(SERP, card) на YM/WB/Ozon; dedupe по артикулу оставляет меньшую цену.
+- **Category hard/soft:** smartphones — color soft (не identity); apparel — color hard; memory_cards — Canvas Go≠Select, Gen4≠Gen3; cheap-rank только среди hard-ok; reject fingerprint (не только URL).
+- **Спиннер:** без полного cascade на однозначных; короче settle вкладки карточки; оверлей не перекрывает уже settled слот.
+- **HiddenBrowser pool = 1:** SERP и cascade в одном окне; `waitForTabComplete` учитывает уже `complete`.
+- **Ozon/YM:** после SERP `not_found` / picker всё равно пробуем API; verified API побеждает.
+
+---
+
 ## 0.9.97 — 2026-08-08
 
 - **License activate race:** `validate-license` больше не делает check-then-increment в JS; атомарный RPC `activate_license_device` (row lock на `license_keys`) — лимит устройств нельзя обойти параллельными активациями.

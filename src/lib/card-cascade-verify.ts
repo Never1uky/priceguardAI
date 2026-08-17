@@ -28,6 +28,16 @@ import { isTitleCategoryCompatible, inferProductCategory } from '@/lib/match-cat
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 import { resolveCandidateDisplayTitle, sanitizeCandidateTitle } from '@/lib/serp-title';
 
+/** Prefer SERP "from" when card opens a dearer default offer (YM/WB/Ozon). */
+export function pickSerpOrCardPrice(
+  serpPrice?: number | null,
+  cardPrice?: number | null,
+): number | null {
+  const prices = [serpPrice, cardPrice].filter((p): p is number => p != null && p > 0);
+  if (!prices.length) return null;
+  return Math.min(...prices);
+}
+
 export interface SerpCascadeCandidate {
   url: string;
   title: string;
@@ -327,18 +337,21 @@ export async function verifySerpOfferWithCardCascade(
     if (confidence < MIN_COMPARE_MATCH_CONFIDENCE) continue;
     if (!isTitleCategoryCompatible(referenceTitle, titleForScore, referenceSpecs)) continue;
 
+    const displayPrice = pickSerpOrCardPrice(candidate.price, card.price);
+
     verified.push({
       offer: {
         ...card,
         url: normalizeCandidateUrl(card.url),
         title: titleForScore,
+        price: displayPrice,
         found: true,
         matchConfidence: confidence,
         imageUrl: card.imageUrl ?? candidate.imageUrl,
         rating: pickRating(card.rating, candidate.rating, serpRating),
       },
       confidence,
-      price: card.price,
+      price: displayPrice,
     });
   }
 
@@ -352,7 +365,8 @@ export async function verifySerpOfferWithCardCascade(
       url: row.candidate.url,
     }),
     url: row.candidate.url,
-    price: row.card?.price ?? row.candidate.price,
+    // SERP often shows "from" price; card opens default (dearer) offer — keep cheaper for picker
+    price: pickSerpOrCardPrice(row.candidate.price, row.card?.price),
     matchConfidence: row.candidate.serpConfidence,
     priority: 100 - index,
     imageUrl: row.card?.imageUrl ?? row.candidate.imageUrl,
@@ -403,6 +417,7 @@ export async function verifySerpOfferWithCardCascade(
       ) {
         return false;
       }
+      if (!row.candidate.url || !isProductPageUrl(row.candidate.url)) return false;
       const title = resolveCandidateDisplayTitle({
         serpTitle: row.candidate.title,
         cardTitle: row.card?.title,
@@ -415,6 +430,9 @@ export async function verifySerpOfferWithCardCascade(
           inferProductCategory(title) === 'generic';
       }
       if (!isTitleCategoryCompatible(referenceTitle, title, referenceSpecs)) return false;
+      // Mixed models of the same category (Pixel 7 vs 9a) must stay in the picker
+      // even when SERP confidence is below MIN_COMPARE — not_found hides the tiles.
+      if (candidates.length >= 2) return true;
       return row.candidate.serpConfidence >= MIN_COMPARE_MATCH_CONFIDENCE;
     });
 

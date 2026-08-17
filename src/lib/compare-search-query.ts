@@ -94,7 +94,9 @@ export function getSearchQueryForVariant(
 
   switch (variant) {
     case 0: {
-      const modelQuery = product.productModel ?? info.searchQuery;
+      const fromTitle = info.searchQuery;
+      const stored = product.productModel;
+      const modelQuery = preferQueryWithGeneration(stored, fromTitle, title);
       if (modelQuery.length >= 4) return modelQuery;
       return buildModelSearchQuery(title, undefined, specs);
     }
@@ -140,15 +142,80 @@ export function sanitizeCrossMarketplaceQuery(query: string, titleHint?: string)
     .replace(/\brmx\d{4,7}\b/gi, ' ')
     .replace(/\b(смартфон|телефон|android|nano-?sim)\b/gi, ' ')
     .replace(/\b(gray|grey)\b/gi, ' ')
+    .replace(/(?<!\d)(?:\s|^)(?:гб|gb)\b/gi, ' ')
+    .replace(/[,\s]*,[,\s]*,+/g, ' ')
+    .replace(/\s*,\s*/g, ' ')
+    // "Google Google Pixel" → "Google Pixel"
+    .replace(/\b([A-Za-zА-Яа-яЁё]{2,})\s+\1\b/gi, '$1')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80);
+    .trim();
 
   if (titleHint) {
-    q = stripCategoryQueryNoise(inferProductCategory(titleHint), q).slice(0, 80);
-    q = enforcePrimaryLeadQuery(q, titleHint).slice(0, 80);
+    q = ensureGenerationTokenInQuery(q, titleHint);
+    q = stripCategoryQueryNoise(inferProductCategory(titleHint), q);
+    q = enforcePrimaryLeadQuery(q, titleHint);
   }
-  return q;
+  return sliceQueryByWords(q, 80);
+}
+
+/**
+ * If the title has Pixel 7 / iPhone 15 / Redmi 13 but the query lost the digit,
+ * reinject it (prevents SERP matching Pixel 6 / wrong generation).
+ */
+export function ensureGenerationTokenInQuery(query: string, title: string): string {
+  const patterns: Array<{ re: RegExp; family: string }> = [
+    { re: /\b(?:google\s+)?(pixel)\s*(\d{1,2}[a-z]?(?:\s*(?:pro|xl))?)\b/i, family: 'pixel' },
+    { re: /\b(iphone)\s*(\d{1,2}(?:\s*(?:pro|plus|max|mini))?)\b/i, family: 'iphone' },
+    { re: /\b(redmi(?:\s+note)?)\s*(\d{1,2}[a-z]?)\b/i, family: 'redmi' },
+  ];
+
+  for (const { re } of patterns) {
+    const m = title.match(re);
+    if (!m) continue;
+    const family = m[1]!.replace(/\s+/g, ' ').trim();
+    const gen = m[2]!.replace(/\s+/g, '').trim();
+    const full = new RegExp(
+      `\\b${family.replace(/\s+/g, '\\s+')}\\s*${gen.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+      'i',
+    );
+    if (full.test(query)) return query;
+
+    const bareFamily = new RegExp(`\\b${family.replace(/\s+/g, '\\s+')}\\b(?!\\s*\\d)`, 'i');
+    if (bareFamily.test(query)) {
+      return query.replace(bareFamily, `${family} ${gen}`);
+    }
+    return `${query} ${family} ${gen}`.replace(/\s+/g, ' ').trim();
+  }
+  return query;
+}
+
+/** Prefer stored productModel only when it still carries the generation digit from title. */
+function preferQueryWithGeneration(
+  stored: string | undefined,
+  fromTitle: string,
+  title: string,
+): string {
+  const genMatch =
+    title.match(/\bpixel\s*(\d{1,2}[a-z]?)/i) ??
+    title.match(/\biphone\s*(\d{1,2})/i) ??
+    title.match(/\bredmi(?:\s+note)?\s*(\d{1,2}[a-z]?)/i);
+  if (!genMatch) {
+    return stored && stored.length >= 4 ? stored : fromTitle;
+  }
+  const digit = genMatch[1]!;
+  const hasDigit = (q: string) => new RegExp(digit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(q);
+  if (stored && stored.length >= 4 && hasDigit(stored)) return stored;
+  if (fromTitle.length >= 4 && hasDigit(fromTitle)) return fromTitle;
+  if (stored && stored.length >= 4) return stored;
+  return fromTitle;
+}
+
+function sliceQueryByWords(text: string, max: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) return trimmed;
+  const cut = trimmed.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp >= Math.floor(max * 0.5) ? cut.slice(0, sp) : cut).trim();
 }
 
 /**

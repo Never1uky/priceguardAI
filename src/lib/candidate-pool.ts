@@ -11,9 +11,11 @@ import type {
 import { isOfferWithPrice, isPendingManualChoice } from '@/lib/compare-offers';
 import { isUrlExcluded, isProductPageUrl } from '@/lib/product-match';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
+import { offerIdentityFingerprint } from '@/lib/offer-identity';
 
 export const MAX_CANDIDATE_POOL = 3;
 export const MAX_REJECTED_URLS = 20;
+export const MAX_REJECTED_FINGERPRINTS = 40;
 export const POOL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function normalizePoolUrl(url: string): string {
@@ -31,6 +33,13 @@ export function getRejectedUrls(
   return product.rejectedOfferUrls?.[marketplace] ?? [];
 }
 
+export function getRejectedFingerprints(
+  product: CompareProduct,
+  marketplace: ComparisonMarketplace,
+): string[] {
+  return product.rejectedOfferFingerprints?.[marketplace] ?? [];
+}
+
 export function capRejectedUrls(urls: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -40,6 +49,19 @@ export function capRejectedUrls(urls: string[]): string[] {
     seen.add(n);
     out.push(n);
     if (out.length >= MAX_REJECTED_URLS) break;
+  }
+  return out;
+}
+
+export function capRejectedFingerprints(fps: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of fps) {
+    const n = raw.trim().toLowerCase();
+    if (!n || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+    if (out.length >= MAX_REJECTED_FINGERPRINTS) break;
   }
   return out;
 }
@@ -160,17 +182,30 @@ export function clearBoundOffer(
   };
 }
 
-/** Blacklist URL; сохранить пул без rejected; опционально bump variant */
+/** Blacklist URL + identity fingerprint; сохранить пул без rejected; опционально bump variant */
 export function markOfferRejectedKeepPool(
   product: CompareProduct,
   marketplace: ComparisonMarketplace,
   rejectedUrl: string,
-  options: { bumpSearchVariant?: boolean } = {},
+  options: { bumpSearchVariant?: boolean; rejectedTitle?: string } = {},
 ): CompareProduct {
   const norm = normalizePoolUrl(rejectedUrl);
   const rejected = capRejectedUrls([
     ...(product.rejectedOfferUrls?.[marketplace] ?? []),
     norm,
+  ]);
+
+  const title =
+    options.rejectedTitle ??
+    product.marketplaceOffers?.[marketplace]?.searchCandidates?.find(
+      (c) => normalizePoolUrl(c.url) === norm,
+    )?.title ??
+    product.marketplaceOffers?.[marketplace]?.title ??
+    '';
+  const fp = offerIdentityFingerprint(title, rejectedUrl, marketplace);
+  const fingerprints = capRejectedFingerprints([
+    ...(product.rejectedOfferFingerprints?.[marketplace] ?? []),
+    ...(fp ? [fp] : []),
   ]);
 
   const pool = filterPoolExcluding(getCandidatePool(product, marketplace), rejected);
@@ -181,6 +216,10 @@ export function markOfferRejectedKeepPool(
     rejectedOfferUrls: {
       ...next.rejectedOfferUrls,
       [marketplace]: rejected,
+    },
+    rejectedOfferFingerprints: {
+      ...next.rejectedOfferFingerprints,
+      [marketplace]: fingerprints,
     },
     candidatePoolByMarketplace: {
       ...next.candidatePoolByMarketplace,

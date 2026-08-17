@@ -53,6 +53,7 @@ export type ProductCategory =
   | 'detergents'
   | 'cosmetics'
   | 'pet_food'
+  | 'memory_cards'
   | 'generic';
 
 /** Features that can carry weight in a profile */
@@ -72,7 +73,11 @@ export type MatchFeatureKey =
   | 'price';
 
 export interface CategoryMatchProfile {
-  /** Relative weights (renormalized over present attrs at score time) */
+  /**
+   * Relative weights (renormalized over present attrs at score time).
+   * Contract: hard identity (required / lineage) first → soft attrs → price only as tie-break
+   * among hard-compatible candidates (see computeCandidatePriority / pickSearchFromCandidates).
+   */
   weights: Partial<Record<MatchFeatureKey, number>>;
   /** Both sides present + disagree → hard conflict (low score) */
   required: MatchFeatureKey[];

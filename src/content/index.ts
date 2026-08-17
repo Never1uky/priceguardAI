@@ -281,6 +281,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const referencePrice = message.referencePrice as number | undefined;
     const referenceSpecs = message.referenceSpecs as string | undefined;
     const excludedUrls = message.excludedUrls as string[] | undefined;
+    const excludedFingerprints = message.excludedFingerprints as string[] | undefined;
     const offer = scrapeMarketplaceSearch(
       marketplace,
       query,
@@ -288,6 +289,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       referencePrice,
       referenceSpecs,
       excludedUrls,
+      excludedFingerprints,
     );
     sendResponse({ ok: Boolean(offer), offer });
     return true;

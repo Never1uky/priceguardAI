@@ -2,6 +2,7 @@
  * Сбор отзывов Я.Маркет через фоновую вкладку (когда активная вкладка недоступна).
  */
 import { acquireHiddenBrowser, releaseHiddenBrowser } from '@/lib/hidden-browser';
+import { waitForTabComplete } from '@/lib/tab-complete';
 import { ensureContentScriptReady } from '@/lib/safe-messaging';
 import type { ReviewFilter } from '@/types/review-analysis';
 import { toCanonicalProductUrl } from '@/utils/product-url';
@@ -13,23 +14,8 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForTabComplete(tabId: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error('Страница Я.Маркет не загрузилась'));
-    }, TAB_LOAD_TIMEOUT_MS);
-
-    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (updatedTabId === tabId && info.status === 'complete') {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+async function waitYmTab(tabId: number): Promise<void> {
+  await waitForTabComplete(tabId, TAB_LOAD_TIMEOUT_MS, 'Страница Я.Маркет не загрузилась');
 }
 
 async function ensureContentScript(tabId: number): Promise<void> {
@@ -47,7 +33,7 @@ export async function scrapeYandexReviewsViaHiddenTab(
     return await browser.runExclusive(async (nav) => {
       const tabId = await nav(canonical);
 
-      await waitForTabComplete(tabId);
+      await waitYmTab(tabId);
       await delay(PAGE_DELAY_MS);
       await ensureContentScript(tabId);
 

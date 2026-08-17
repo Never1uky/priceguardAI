@@ -1,7 +1,6 @@
 import { agentLog } from '@/lib/debug-log';
 import {
   getHiddenBrowserTabId,
-  getHiddenBrowserWindowId,
   isHiddenBrowserTab,
 } from '@/lib/hidden-browser';
 import { ensureContentScriptReady, safeSendMessage } from '@/lib/safe-messaging';
@@ -18,12 +17,10 @@ export interface TabLike {
 
 /** Выбрать вкладку с карточкой товара (popup не должен ломать currentWindow). */
 export function pickActiveProductTab(tabs: TabLike[]): TabLike | null {
-  const hiddenWin = getHiddenBrowserWindowId();
   const hiddenTab = getHiddenBrowserTabId();
   const productTabs = tabs.filter((tab) => {
     if (!tab.url || !isProductPage(tab.url)) return false;
     if (hiddenTab != null && tab.id === hiddenTab) return false;
-    if (hiddenWin != null && tab.windowId === hiddenWin) return false;
     if (isHiddenBrowserTab(tab.id, tab.windowId)) return false;
     if (tab.windowState === 'minimized') return false;
     return true;
@@ -37,11 +34,9 @@ export function pickActiveProductTab(tabs: TabLike[]): TabLike | null {
 }
 
 export async function findActiveProductTab(): Promise<chrome.tabs.Tab | null> {
-  const hiddenWin = getHiddenBrowserWindowId();
   const normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
   const visibleWindows = normalWindows.filter(
     (window) =>
-      window.id !== hiddenWin &&
       window.state !== 'minimized' &&
       !isHiddenBrowserTab(undefined, window.id),
   );

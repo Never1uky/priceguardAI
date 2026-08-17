@@ -108,6 +108,8 @@ const MODEL_PATTERNS: RegExp[] = [
   /\bpolaris\s+[a-z]{2,5}[\s-]?\d{3,5}\b/i,
   /\bsamsung\s+ww\d{2}[a-z]?\d{3,5}[a-z]?\b/i,
   /\boptimum\s+nutrition\s+gold\s+standard\b/i,
+  /\bgoogle\s+pixel\s*\d{1,2}[a-z]?(?:\s*(?:pro|a|xl))?\b/i,
+  /\bpixel\s*\d{1,2}[a-z]?(?:\s*(?:pro|a|xl))?\b/i,
   /\b(?:redmi|poco|xiaomi)\s*(?:note\s*)?\d{1,2}(?:\s*(?:pro|ultra|\+|t|s|c))?\b/i,
   /\brealme\s*(?:\d{1,2}(?:\s*5g)?(?:\s*pro)?|note\s*\d+)\b/i,
   /\bredmi\s+\d{1,2}\b/i,
@@ -257,13 +259,30 @@ export function inferProductModel(
   // Only structured model lines from specs — never the whole kit dump
   // (e.g. «В комплекте DualSense» must not become the console's searchQuery).
   const fromSpecs = specsOrModelField ? parseModelFromSpecsText(specsOrModelField) : null;
+  const titleInfo = extractProductModel(title);
 
   if (fromSpecs && fromSpecs.length >= 3) {
-    const info = extractProductModel(fromSpecs);
-    if (info.model.length >= 3) return info;
+    const specsInfo = extractProductModel(fromSpecs);
+    if (specsInfo.model.length >= 3) {
+      // Specs often say «Google Pixel» without generation; title has «Pixel 7»
+      if (titleModelHasRicherGeneration(titleInfo.model, specsInfo.model)) {
+        return titleInfo;
+      }
+      return specsInfo;
+    }
   }
 
-  return extractProductModel(title);
+  return titleInfo;
+}
+
+/** Title model wins when it carries a generation digit the specs model lost. */
+function titleModelHasRicherGeneration(titleModel: string, specsModel: string): boolean {
+  const t = titleModel.toLowerCase();
+  const s = specsModel.toLowerCase();
+  if (/\bpixel\s*\d/i.test(t) && !/\bpixel\s*\d/i.test(s)) return true;
+  if (/\biphone\s*\d/i.test(t) && !/\biphone\s*\d/i.test(s)) return true;
+  if (/\bredmi(?:\s*note)?\s*\d/i.test(t) && !/\bredmi(?:\s*note)?\s*\d/i.test(s)) return true;
+  return false;
 }
 
 /** Память/объём для поиска: «8+256», «128 ГБ», «256gb» */
@@ -301,10 +320,16 @@ const COLOR_ALIASES: Record<string, string> = {
   purple: 'purple',
   розовый: 'pink',
   pink: 'pink',
+  желтый: 'yellow',
+  жёлтый: 'yellow',
+  'светло-желтый': 'yellow',
+  'светло-жёлтый': 'yellow',
+  lemongrass: 'yellow',
+  yellow: 'yellow',
 };
 
 const COLOR_PATTERN =
-  /\b(ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|black|white|blue|silver|grey|gray|green|red|gold|purple|pink)\b/i;
+  /\b(ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|lemongrass|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|yellow)\b/i;
 
 function normalizeColorKey(raw: string): string {
   const lower = raw.toLowerCase().trim();
@@ -346,13 +371,13 @@ function extractStorageKey(title: string, specs?: string): string | undefined {
   return undefined;
 }
 
-/** Читаемый фрагмент памяти для поискового запроса: «8 256» */
+/** Читаемый фрагмент памяти для поискового запроса: «8 256» — never a bare «ГБ». */
 export function formatStorageForSearch(storageKey: string | undefined): string | undefined {
-  if (!storageKey) return undefined;
+  if (!storageKey || !/\d/.test(storageKey)) return undefined;
   const plus = storageKey.match(/^(\d{1,2})\+(\d{2,4})$/);
   if (plus) return `${plus[1]} ${plus[2]}`;
   const gb = storageKey.match(/^(\d{2,4})gb$/);
-  if (gb) return `${gb[1]} GB`;
+  if (gb) return gb[1];
   return storageKey;
 }
 
@@ -365,6 +390,7 @@ function normalizeStorageKey(raw: string | undefined): string | undefined {
   if (slash) return `${slash[1]}+${slash[2]}`;
   const gb = lower.match(/^(\d{2,4})gb$/);
   if (gb) return `${gb[1]}gb`;
+  if (!/\d/.test(lower)) return undefined;
   return lower;
 }
 

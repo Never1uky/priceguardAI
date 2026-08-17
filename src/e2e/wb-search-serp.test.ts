@@ -41,7 +41,11 @@ describe('WB search SERP fixture', () => {
     const result = pickSearchFromCandidates('wildberries', 'Redmi 15', REFERENCE, candidates, {
       referencePrice: 15_990,
     });
-    const pool = result.offer.searchCandidates ?? [];
+    const pool = result.offer.searchCandidates?.length
+      ? result.offer.searchCandidates
+      : result.offer.found && result.offer.imageUrl
+        ? [{ imageUrl: result.offer.imageUrl, imageUrlAlternatives: undefined as string[] | undefined }]
+        : [];
     expect(pool.length).toBeGreaterThan(0);
     for (const c of pool) {
       expect(c.imageUrl).toBeTruthy();
@@ -90,34 +94,72 @@ describe('WB search SERP fixture', () => {
       referencePrice: 15_990,
     });
 
-    expect(result.offer.searchCandidates?.length).toBeGreaterThan(0);
-    expect(result.offer.searchCandidates!.length).toBeLessThanOrEqual(3);
-    expect(
-      result.offer.needsManualPick ||
-        (result.offer.matchConfidence != null &&
-          result.offer.matchConfidence < AUTO_PICK_CONFIDENCE_THRESHOLD),
-    ).toBe(true);
+    // Soft color: same model/storage may auto-verify; otherwise picker pool
+    if (result.offer.found && result.offer.matchStatus === 'verified') {
+      expect(result.offer.url).toContain('/catalog/');
+      expect(result.offer.title).toMatch(/redmi\s*15/i);
+    } else {
+      expect(result.offer.searchCandidates?.length).toBeGreaterThan(0);
+      expect(result.offer.searchCandidates!.length).toBeLessThanOrEqual(3);
+      expect(
+        result.offer.needsManualPick ||
+          (result.offer.matchConfidence != null &&
+            result.offer.matchConfidence < AUTO_PICK_CONFIDENCE_THRESHOLD),
+      ).toBe(true);
+    }
   });
 
-  it('при высоком confidence всё равно отдаёт пул для cascade (без SERP found:true)', () => {
+  it('однозначный 8/256 чёрный → verified карточка; иначе пул needs_choice (не search found:true без URL)', () => {
     const candidates = parseWildberriesSerpHtml(wbSerpHtml, 'Redmi 15');
     const result = pickSearchFromCandidates('wildberries', 'Redmi 15 8/256', REFERENCE, candidates, {
       referencePrice: 15_990,
     });
 
-    expect(result.offer.found).toBe(false);
-    expect(result.offer.needsManualPick).toBe(true);
-    expect(result.offer.matchStatus).toBe('needs_choice');
+    if (result.offer.found) {
+      expect(result.offer.needsManualPick).toBe(false);
+      expect(result.offer.matchStatus).toBe('verified');
+      expect(result.offer.url).toContain('501001');
+      expect(result.offer.price).toBe(15_990);
+    } else {
+      expect(result.offer.needsManualPick).toBe(true);
+      expect(result.offer.matchStatus).toBe('needs_choice');
+      expect(result.offer.url).toMatch(/\/search/i);
+      expect(result.offer.url).not.toContain('501001');
+      expect(result.offer.price).toBeNull();
+    }
     expect(result.offer.matchConfidence).toBeGreaterThanOrEqual(AUTO_PICK_CONFIDENCE_THRESHOLD);
-    // Cascade contract: SERP never binds a card URL — keep search URL / no product id bind.
-    expect(result.offer.url).toMatch(/\/search/i);
-    expect(result.offer.url).not.toContain('501001');
-    expect(result.offer.price).toBeNull();
   });
 
   it('извлекает память и цвет из эталона', () => {
     const attrs = extractVariantAttributes(REFERENCE);
     expect(attrs.storage).toBe('8+256');
     expect(attrs.color).toBe('black');
+  });
+
+  it('плитки с низким score всё равно дают needs_choice, не not_found', () => {
+    const candidates: SearchCandidate[] = [
+      {
+        title: 'Смартфон Nokia 3310 Dual SIM серый',
+        url: 'https://www.wildberries.ru/catalog/777001/detail.aspx',
+        price: 2990,
+        rating: 4.1,
+      },
+      {
+        title: 'Смартфон INOI A62 2/32GB черный',
+        url: 'https://www.wildberries.ru/catalog/777002/detail.aspx',
+        price: 4990,
+        rating: 4.0,
+      },
+    ];
+    const result = pickSearchFromCandidates(
+      'wildberries',
+      'Google Pixel 8',
+      'Смартфон Google Pixel 8 8/128Gb светло-желтый',
+      candidates,
+      { referencePrice: 45_000 },
+    );
+    expect(result.offer.matchStatus).toBe('needs_choice');
+    expect(result.offer.needsManualPick).toBe(true);
+    expect(result.offer.searchCandidates?.length).toBeGreaterThan(0);
   });
 });

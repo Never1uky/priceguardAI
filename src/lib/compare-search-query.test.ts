@@ -64,4 +64,67 @@ describe('compare-search-query', () => {
     expect(q.toLowerCase()).toMatch(/realme/);
     expect(q).not.toMatch(/8ГБ\/ГБ/i);
   });
+
+  it('Pixel 8 query keeps model number and storage digits, no bare ГБ or empty commas', () => {
+    const title = 'Смартфон Google Pixel 8 8/128Gb светло-желтый Lemongrass';
+    const product: CompareProduct = {
+      ...baseProduct,
+      title,
+      productModel: undefined,
+      sourceMarketplace: 'wildberries',
+    };
+    const q = sanitizeCrossMarketplaceQuery(
+      getSearchQueryForVariant(product, 'yandex_market', 0),
+      title,
+    );
+    expect(q.toLowerCase()).toMatch(/pixel\s*8/);
+    expect(q).not.toMatch(/(?<!\d)\s*(?:ГБ|GB)\b/i);
+    expect(q).not.toContain(', ,');
+    expect(q).not.toMatch(/смартфон/i);
+
+    const cross = buildCrossMarketplaceQueries(product, 'yandex_market');
+    expect(cross.some((item) => /pixel\s*8/i.test(item))).toBe(true);
+    expect(cross.every((item) => !item.includes(', ,'))).toBe(true);
+    expect(cross.every((item) => !/(?<!\d)(?:ГБ|GB)\b/i.test(item))).toBe(true);
+  });
+
+  it('Redmi 13 query keeps model number', () => {
+    const title = 'Смартфон Xiaomi Redmi 13 8/256 Черный';
+    const product: CompareProduct = {
+      ...baseProduct,
+      title,
+      productModel: undefined,
+    };
+    const q = sanitizeCrossMarketplaceQuery(
+      getSearchQueryForVariant(product, 'ozon', 0),
+      title,
+    );
+    expect(q.toLowerCase()).toMatch(/redmi\s*13/);
+    expect(q).not.toContain(', ,');
+    const cross = buildCrossMarketplaceQueries(product, 'ozon');
+    expect(cross.some((item) => /8|256/.test(item))).toBe(true);
+  });
+
+  it('Pixel 7 keeps generation when productModel is stale Google Pixel', () => {
+    const title = 'Смартфон Google Pixel 7 8/128Gb Lemongrass';
+    const product: CompareProduct = {
+      ...baseProduct,
+      title,
+      productModel: 'Google Pixel',
+      sourceMarketplace: 'wildberries',
+    };
+    const cross = buildCrossMarketplaceQueries(product, 'yandex_market');
+    expect(cross.every((q) => /pixel\s*7/i.test(q))).toBe(true);
+    expect(cross.every((q) => !/google\s+google/i.test(q))).toBe(true);
+    expect(cross.every((q) => !/(?<!\d)(?:ГБ|GB)\b/i.test(q))).toBe(true);
+    expect(cross.every((q) => !q.includes(', ,'))).toBe(true);
+  });
+
+  it('ensureGenerationTokenInQuery reinjects Pixel 7 into bare Pixel query', () => {
+    const bare = sanitizeCrossMarketplaceQuery(
+      'Google Pixel',
+      'Смартфон Google Pixel 7 8/128Gb Lemongrass',
+    );
+    expect(bare.toLowerCase()).toMatch(/pixel\s*7/);
+  });
 });

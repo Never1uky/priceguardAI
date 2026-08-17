@@ -80,7 +80,44 @@ describe('safeFetch', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('fetchWithRetry returns Response for HTTP error', async () => {
+  it('does not retry 429 on marketplace search APIs', async () => {
+    const fetchMock = vi.fn(async () => new Response('no', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await safeFetch(
+      'https://search.wb.ru/exactmatch/ru/common/v5/search?query=pixel',
+      undefined,
+      { retries: 3, delayMs: 1, jitter: false },
+    );
+    expect(result.ok).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries 429 on non-search URLs', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('no', { status: 429 }))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await safeFetch('https://example.com/card', undefined, {
+      retries: 2,
+      delayMs: 1,
+      jitter: false,
+      timeoutMs: 5_000,
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('fetchWithRetry', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('returns Response for HTTP error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('x', { status: 403 })));
     const res = await fetchWithRetry('https://example.com', undefined, {
       retries: 0,

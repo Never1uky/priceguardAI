@@ -44,10 +44,15 @@ export function resetAllEmptyScrapes(marketplace?: ComparisonMarketplace): void 
   }
 }
 
-/** Skip HiddenBrowser SERP when serp bucket is exhausted (default). */
+/**
+ * Skip HiddenBrowser only for exhausted **card** scrapes.
+ * SERP must always be attempted (visible tab / HiddenBrowser) — a session-wide
+ * skip after 2 empty SERPs left WB/YM on dead search APIs for the rest of SW life.
+ */
 export function shouldSkipTabScrape(
   marketplace: ComparisonMarketplace,
   kind: EmptyScrapeKind = 'serp',
 ): boolean {
+  if (kind === 'serp') return false;
   return (emptyCounts.get(key(marketplace, kind)) ?? 0) >= 2;
 }

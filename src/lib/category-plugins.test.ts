@@ -28,6 +28,7 @@ const ALL_CATEGORIES: ProductCategory[] = [
   'detergents',
   'cosmetics',
   'pet_food',
+  'memory_cards',
   'generic',
 ];
 

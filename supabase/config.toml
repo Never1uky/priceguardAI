@@ -151,3 +151,6 @@ verify_jwt = false
 
 [functions.seo-refresh-offers]
 verify_jwt = false
+
+[functions.shopping-agent]
+verify_jwt = false

@@ -6,6 +6,7 @@ import {
   inferProductCategory,
   shouldIgnoreSizeMismatch,
   shouldPenalizeStorageMismatch,
+  isSoftFeature,
   SOFT_MODEL_MATCH_CATEGORIES,
   type ProductCategory,
 } from '@/lib/match-category';
@@ -292,6 +293,18 @@ export function areModelsCompatible(refModel: string, candModel: string): boolea
     return refType === candType;
   }
 
+  // Kingston Canvas Go Plus ≠ Canvas Select Plus
+  if (/\bcanvas\b/.test(refKey) && /\bcanvas\b/.test(candKey)) {
+    const line = (k: string) => {
+      if (/canvasgo/.test(k)) return 'go_plus';
+      if (/canvasselect/.test(k)) return 'select_plus';
+      if (/canvasreact/.test(k)) return 'react';
+      if (/canvasendurance/.test(k)) return 'endurance';
+      return 'other';
+    };
+    return line(refKey) === line(candKey);
+  }
+
   // iPad Pro ≠ iPad Air
   if (refKey.includes('ipad') && candKey.includes('ipad')) {
     const tier = (k: string) =>
@@ -427,13 +440,27 @@ export function scoreProductMatch(
 
   // Apparel/shoes: size is soft — don't apply storage-style variant penalty for size.
   // Storage penalty only for categories that care about memory.
+  // Smartphones: color is soft — do not apply color variantPenalty (model/lineage dominate).
   let variantPenalty = variantMismatchPenalty(referenceTitle, candidateTitle, referenceSpecs);
+  if (resolvedCategory && isSoftFeature(resolvedCategory, 'color')) {
+    const ref = extractProductFeatures(referenceTitle, referenceSpecs);
+    const cand = extractProductFeatures(candidateTitle);
+    if (ref.color && cand.color && ref.color !== cand.color) {
+      // Remove color portion (~0.3) that variantMismatchPenalty added
+      variantPenalty = Math.max(0, variantPenalty - 0.3);
+    }
+  }
   if (resolvedCategory && !shouldPenalizeStorageMismatch(resolvedCategory)) {
     // Recalculate: only color (and never size) for non-electronics
     const ref = extractProductFeatures(referenceTitle, referenceSpecs);
     const cand = extractProductFeatures(candidateTitle);
     variantPenalty = 0;
-    if (ref.color && cand.color && ref.color !== cand.color) {
+    if (
+      ref.color &&
+      cand.color &&
+      ref.color !== cand.color &&
+      !isSoftFeature(resolvedCategory, 'color')
+    ) {
       variantPenalty += 0.2;
     }
     if (

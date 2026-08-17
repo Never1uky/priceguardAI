@@ -19,13 +19,14 @@ import {
 } from '../_shared/product-cache-store.ts';
 import { formatFocusAxesPromptBlock } from '../_shared/seo-category-focus.ts';
 import { inferSeoCategoryFromTitle } from '../_shared/seo-category.ts';
-
-type Provider = 'grok' | 'openai' | 'perplexity';
-
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
+import {
+  AITUNNEL_URL,
+  MODELS,
+  callProvider,
+  logAiRequest as logRequest,
+  type ChatMessage,
+  type Provider,
+} from '../_shared/ai-provider.ts';
 
 interface WebSource {
   title: string;
@@ -57,28 +58,10 @@ const VALID_MARKETPLACES = ['wildberries', 'ozon', 'yandex_market'];
 /** Live Perplexity Sonar calls per user per UTC day (cache hits do not count). */
 const DEFAULT_SONAR_DAILY_CAP = 5;
 
-const AITUNNEL_URL = 'https://api.aitunnel.ru/v1/chat/completions';
-
-const DIRECT_ENDPOINTS: Record<'grok' | 'openai', string> = {
-  grok: 'https://api.x.ai/v1/chat/completions',
-  openai: 'https://api.openai.com/v1/chat/completions',
-};
-
-const MODELS: Record<Provider, string> = {
-  grok: 'grok-3-mini',
-  openai: 'gpt-4o-mini',
-  perplexity: 'sonar',
-};
-
 const PROVIDER_LABELS: Record<Provider, string> = {
   grok: 'Grok 3 Mini',
   openai: 'GPT-4o Mini',
   perplexity: 'Perplexity Sonar',
-};
-
-const DIRECT_SECRET_ENV: Record<'grok' | 'openai', string> = {
-  grok: 'GROK_API_KEY',
-  openai: 'OPENAI_API_KEY',
 };
 
 const DEFAULT_TEMPERATURE = 0.2;
@@ -192,43 +175,6 @@ async function isSonarDailyCapped(
   return (count ?? 0) >= max;
 }
 
-async function logRequest(
-  supabase: ReturnType<typeof serviceClient>,
-  entry: {
-    userId?: string | null;
-    deviceId?: string | null;
-    provider: Provider;
-    model: string;
-    success: boolean;
-    error?: string;
-    durationMs: number;
-    promptTokens?: number;
-    completionTokens?: number;
-    pipeline?: string;
-    webResearchUsed?: boolean;
-    webResearchCached?: boolean;
-  },
-): Promise<void> {
-  try {
-    await supabase.from('ai_request_log').insert({
-      user_id: entry.userId || null,
-      device_id: entry.deviceId || null,
-      provider: entry.provider,
-      model: entry.model,
-      success: entry.success,
-      error: entry.error ? entry.error.slice(0, 500) : null,
-      duration_ms: entry.durationMs,
-      prompt_tokens: entry.promptTokens ?? null,
-      completion_tokens: entry.completionTokens ?? null,
-      pipeline: entry.pipeline ?? null,
-      web_research_used: entry.webResearchUsed ?? null,
-      web_research_cached: entry.webResearchCached ?? null,
-    });
-  } catch (e) {
-    console.error('ai_request_log insert failed', e);
-  }
-}
-
 function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   const match = trimmed.match(/\{[\s\S]*\}/);
@@ -288,109 +234,6 @@ function parseSonarResponse(raw: string): {
     promptTokens: data.usage?.prompt_tokens,
     completionTokens: data.usage?.completion_tokens,
   };
-}
-
-function parseCompletionResponse(raw: string): {
-  text: string;
-  model: string;
-  promptTokens?: number;
-  completionTokens?: number;
-} {
-  const data = JSON.parse(raw) as {
-    model?: string;
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-  };
-  const text = data.choices?.[0]?.message?.content ?? '';
-  if (!text.trim()) throw new Error('empty_response');
-  return {
-    text,
-    model: data.model ?? 'unknown',
-    promptTokens: data.usage?.prompt_tokens,
-    completionTokens: data.usage?.completion_tokens,
-  };
-}
-
-async function postChatCompletion(
-  url: string,
-  apiKey: string,
-  model: string,
-  messages: ChatMessage[],
-  temperature: number,
-  maxTokens: number | undefined,
-  jsonMode: boolean,
-  extraBody?: Record<string, unknown>,
-): Promise<{ text: string; model: string; promptTokens?: number; completionTokens?: number }> {
-  const body: Record<string, unknown> = {
-    model,
-    temperature,
-    messages,
-    ...extraBody,
-  };
-  if (jsonMode) body.response_format = { type: 'json_object' };
-  if (maxTokens) body.max_tokens = maxTokens;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`provider_${response.status}:${raw.slice(0, 200)}`);
-  }
-
-  const parsed = parseCompletionResponse(raw);
-  return { ...parsed, model: parsed.model === 'unknown' ? model : parsed.model };
-}
-
-async function callProvider(
-  provider: Provider,
-  messages: ChatMessage[],
-  temperature: number,
-  maxTokens: number | undefined,
-  jsonMode: boolean,
-  extraBody?: Record<string, unknown>,
-): Promise<{ text: string; model: string; promptTokens?: number; completionTokens?: number }> {
-  const model = MODELS[provider];
-  const aitunnelKey = Deno.env.get('AITUNNEL_API_KEY');
-
-  if (aitunnelKey) {
-    return postChatCompletion(
-      AITUNNEL_URL,
-      aitunnelKey,
-      model,
-      messages,
-      temperature,
-      maxTokens,
-      jsonMode,
-      extraBody,
-    );
-  }
-
-  if (provider === 'perplexity') {
-    throw new Error('missing_secret:AITUNNEL_API_KEY');
-  }
-
-  const directKey = Deno.env.get(DIRECT_SECRET_ENV[provider]);
-  if (!directKey) {
-    throw new Error(`missing_secret:${DIRECT_SECRET_ENV[provider]}`);
-  }
-
-  return postChatCompletion(
-    DIRECT_ENDPOINTS[provider],
-    directKey,
-    model,
-    messages,
-    temperature,
-    maxTokens,
-    jsonMode,
-    extraBody,
-  );
 }
 
 const SONAR_EXTRA_BODY = {

@@ -10,17 +10,21 @@ import { analyzePriceHistory } from '@/lib/price-insights';
 import { formatDate, formatPrice, paymentDiscountLabel } from '@/lib/utils';
 import { MARKETPLACE_LABELS, marketplaceBadgeVariant } from '@/utils/marketplace';
 import type { PricePoint, Product } from '@/types/product';
+import { ShoppingAgentPanel } from '@/popup/components/ShoppingAgentPanel';
 import { ProductLink } from '@/popup/components/ProductLink';
 import {
   BellOff,
+  ChevronLeft,
   ExternalLink,
   Info,
   PackagePlus,
   RefreshCw,
   Search,
   Shield,
+  Sparkles,
   TrendingDown,
 } from 'lucide-react';
+import { useState } from 'react';
 
 interface CurrentPriceTabProps {
   product: Product | null;
@@ -34,6 +38,7 @@ interface CurrentPriceTabProps {
   onAddToMyProducts: () => void;
   isComparePending?: boolean;
   fullAnalysisBusy?: boolean;
+  onOpenAuth?: () => void;
 }
 
 const marketplaceLabels = MARKETPLACE_LABELS;
@@ -49,7 +54,10 @@ export function CurrentPriceTab({
   onAddToMyProducts,
   isComparePending = false,
   fullAnalysisBusy = false,
+  onOpenAuth,
 }: CurrentPriceTabProps) {
+  const [showAgent, setShowAgent] = useState(false);
+
   if (isLoading && !product) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-12">
@@ -59,13 +67,27 @@ export function CurrentPriceTab({
     );
   }
 
-  if (!product) {
+  if (!product || showAgent) {
     return (
-      <Surface variant="subtle" padding="lg" className="text-center">
-        <p className="pg-body text-muted-foreground">
-          {error ?? 'Откройте карточку товара на Wildberries, Ozon или Яндекс.Маркет'}
-        </p>
-      </Surface>
+      <div className="space-y-3">
+        {product && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1 px-1 text-muted-foreground"
+            onClick={() => setShowAgent(false)}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+            К карточке
+          </Button>
+        )}
+        <ShoppingAgentPanel onOpenAuth={onOpenAuth} />
+        {!product && (
+          <p className="text-center pg-hint">
+            {error ?? 'Или откройте карточку на Wildberries, Ozon или Яндекс.Маркет'}
+          </p>
+        )}
+      </div>
     );
   }
 
@@ -230,6 +252,15 @@ export function CurrentPriceTab({
                 Убрать из «Мои»
               </Button>
             )}
+            <Button
+              variant="ghost"
+              className="w-full text-muted-foreground"
+              onClick={() => setShowAgent(true)}
+              disabled={isLoading || isComparePending || fullAnalysisBusy}
+            >
+              <Sparkles className="h-4 w-4" strokeWidth={1.75} />
+              Подобрать другой
+            </Button>
           </div>
 
           <div className="flex gap-2">

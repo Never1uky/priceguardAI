@@ -47,6 +47,19 @@ export interface FetchRetryOptions {
 
 const DEFAULT_RETRY_ON = [429, 500, 502, 503, 504];
 
+/** Unofficial marketplace search endpoints — 429 retries burn quota (~10s) and poison UI. */
+export const MARKETPLACE_SEARCH_RETRY: FetchRetryOptions = {
+  retries: 1,
+  delayMs: 400,
+  retryOn: [500, 502, 503, 504],
+};
+
+export function isMarketplaceSearchApiUrl(url: string): boolean {
+  return /search\.wb\.ru|market\.yandex\.ru\/api\/|ozon\.ru\/api\/composer-api/i.test(
+    url,
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -170,7 +183,10 @@ export async function safeFetch(
   const delayMs = options.delayMs ?? 600;
   const backoff = options.backoff ?? 'exponential';
   const jitter = options.jitter ?? true;
-  const retryOn = options.retryOn ?? DEFAULT_RETRY_ON;
+  let retryOn = options.retryOn ?? DEFAULT_RETRY_ON;
+  if (isMarketplaceSearchApiUrl(url)) {
+    retryOn = retryOn.filter((status) => status !== 429);
+  }
   const retryOnNetwork = options.retryOnNetwork ?? true;
   const respectRetryAfter = options.respectRetryAfter ?? true;
 

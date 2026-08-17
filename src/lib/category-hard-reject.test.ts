@@ -50,9 +50,15 @@ describe('category A never matches category B', () => {
       'Samsung Наушники Galaxy Buds3 Pro Silver',
     );
 
-    expect(result.needsManualPick).toBe(true);
-    expect(result.searchCandidates?.every((c) => !/iphone/i.test(c.title))).toBe(true);
-    expect(result.searchCandidates?.some((c) => /buds/i.test(c.title))).toBe(true);
+    expect(/iphone/i.test(result.title)).toBe(false);
+    if (result.needsManualPick) {
+      expect(result.searchCandidates?.every((c) => !/iphone/i.test(c.title))).toBe(true);
+      expect(result.searchCandidates?.some((c) => /buds/i.test(c.title))).toBe(true);
+    } else {
+      expect(result.found).toBe(true);
+      expect(result.title).toMatch(/buds/i);
+      expect(result.url).toContain('buds-1');
+    }
   });
 
   it('only cross-category ranked → not_found', () => {

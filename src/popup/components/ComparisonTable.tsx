@@ -21,7 +21,8 @@ import { ProductImage } from '@/popup/components/ProductImage';
 import { safeMarketplaceHref } from '@/utils/safe-marketplace-url';
 import { ExternalLink, Link2, Loader2, Star, Trophy, XCircle, Check, Search, ChevronDown, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { errorSuggestsVpnHint, VPN_SEARCH_HINT } from '@/lib/ozon-serp-dom';
+import { VPN_SEARCH_HINT } from '@/lib/ozon-serp-dom';
+import { formatOfferErrorForDisplay } from '@/lib/offer-error-display';
 import { sanitizeCandidateTitle } from '@/lib/serp-title';
 
 interface ComparisonTableProps {
@@ -127,50 +128,6 @@ function MatchStatusBadge({
 }
 
 /** Короткие тексты ошибок для UI (полный query — только в title). */
-function formatOfferErrorForDisplay(error: string): {
-  text: string;
-  title?: string;
-  vpnHint?: boolean;
-} {
-  const trimmed = error.trim();
-
-  if (/ограничивает автоматический поиск|подтвердите.*не робот|captcha|antibot/i.test(trimmed)) {
-    return {
-      text: /ozon/i.test(trimmed)
-        ? 'Ozon временно ограничивает автоматический поиск. Укажите ссылку на карточку вручную.'
-        : 'Площадка временно ограничивает автоматический поиск. Укажите ссылку вручную.',
-      title: trimmed,
-      vpnHint: true,
-    };
-  }
-
-  if (/лимит запросов|слишком много запросов|429|rate.?limit|временно недоступ/i.test(trimmed)) {
-    const mp =
-      /wildberries|wb/i.test(trimmed)
-        ? 'Wildberries'
-        : /ozon/i.test(trimmed)
-          ? 'Ozon'
-          : /яндекс|я\.?маркет|yandex/i.test(trimmed)
-            ? 'Яндекс.Маркет'
-            : null;
-    const text = mp
-      ? `${mp} временно недоступен из‑за лимита запросов. Попробуйте позже или укажите ссылку вручную.`
-      : 'Площадка временно недоступна из‑за лимита запросов. Попробуйте позже или укажите ссылку вручную.';
-    return { text, title: trimmed, vpnHint: true };
-  }
-
-  const queryMatch = trimmed.match(/\(запрос:\s*«([^»]+)»\)/i);
-  if (queryMatch || /не найден подходящий|не найден в выдаче|в выдаче не найден/i.test(trimmed)) {
-    return {
-      text: 'Подходящий товар в выдаче не найден. Укажите ссылку вручную.',
-      title: queryMatch ? `Запрос: ${queryMatch[1]}` : trimmed,
-      vpnHint: errorSuggestsVpnHint(trimmed),
-    };
-  }
-
-  return { text: trimmed, vpnHint: errorSuggestsVpnHint(trimmed) };
-}
-
 function OfferStatusBadge({
   offer,
   isSearching,
@@ -615,6 +572,19 @@ export function ComparisonTable({
   rejectedOfferUrls,
 }: ComparisonTableProps) {
   const cheapest = findCheapestOffer(offers);
+  const searchingOffer =
+    searchingMarketplace && searchingMarketplace !== SEARCHING_MP_CROSS
+      ? offers.find((o) => o.marketplace === searchingMarketplace)
+      : undefined;
+  const searchingSlotSettled =
+    searchingOffer != null &&
+    searchingOffer.matchStatus !== 'loading_card' &&
+    (Boolean(searchingOffer.needsManualPick) ||
+      searchingOffer.matchStatus === 'not_found' ||
+      searchingOffer.matchStatus === 'needs_choice' ||
+      searchingOffer.matchStatus === 'blocked' ||
+      isOfferWithPrice(searchingOffer));
+  const showSearchOverlay = Boolean(isLoading) && !searchingSlotSettled;
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -638,7 +608,7 @@ export function ComparisonTable({
 
   return (
     <div className="relative min-w-0 overflow-hidden rounded-md bg-muted/50">
-      {isLoading && (
+      {showSearchOverlay && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/70 backdrop-blur-[1px]">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           <p className="text-center text-[11px] text-muted-foreground">
@@ -751,13 +721,14 @@ export function ComparisonTable({
                         {offer.specs}
                       </p>
                     )}
-                    {((offer.error && !hasPrice) ||
+                    {((offer.error && !hasPrice && !isSearching) ||
                       ((offer.matchStatus === 'not_found' ||
                         offer.matchStatus === 'blocked' ||
                         offer.matchStatus === 'oos' ||
                         (offer.matchStatus === 'loading_card' && !isLoading)) &&
                         !hasPrice &&
-                        !needsChoice)) && (() => {
+                        !needsChoice &&
+                        !isSearching)) && (() => {
                       const formatted = formatOfferErrorForDisplay(
                         offer.error ?? 'Товар не найден — добавьте прямую ссылку на карточку',
                       );

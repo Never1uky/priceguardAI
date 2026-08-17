@@ -2,7 +2,12 @@
  * Inline FAQ tree for @PriceGuardAlertsBot (callback_data faq:*).
  */
 
-import { CHROME_WEB_STORE_URL, CHROME_WEB_STORE_REVIEWS_URL } from './telegram.ts';
+import {
+  CHROME_WEB_STORE_URL,
+  CHROME_WEB_STORE_REVIEWS_URL,
+  TELEGRAM_CHANNEL_URL,
+  TELEGRAM_CHANNEL_BUTTON,
+} from './telegram.ts';
 
 export type FaqInlineBtn =
   | { text: string; callback_data: string }
@@ -16,6 +21,7 @@ export function faqRootKeyboard(): FaqKeyboard {
   return [
     [{ text: '⬇️ Установить расширение', url: CHROME_WEB_STORE_URL }],
     [{ text: '⭐ Оставить отзыв', url: CHROME_WEB_STORE_REVIEWS_URL }],
+    [{ text: TELEGRAM_CHANNEL_BUTTON, url: TELEGRAM_CHANNEL_URL }],
     [{ text: '📦 Как добавить товар', callback_data: 'faq:add' }],
     [{ text: '💰 Почему другая цена', callback_data: 'faq:price' }],
     [{ text: '🔍 Почему не найден', callback_data: 'faq:notfound' }],
@@ -34,6 +40,7 @@ export function faqBackKeyboard(): FaqKeyboard {
   return [
     [{ text: '⬇️ Установить расширение', url: CHROME_WEB_STORE_URL }],
     [{ text: '⭐ Оставить отзыв', url: CHROME_WEB_STORE_REVIEWS_URL }],
+    [{ text: TELEGRAM_CHANNEL_BUTTON, url: TELEGRAM_CHANNEL_URL }],
     [{ text: '⬅️ Назад к FAQ', callback_data: 'faq:root' }],
     [{ text: '💬 Написать в поддержку', url: SUPPORT_URL }],
   ];

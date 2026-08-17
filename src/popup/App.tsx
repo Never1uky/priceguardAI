@@ -532,6 +532,7 @@ export function App() {
             isComparePending={isComparePending}
             fullAnalysisBusy={fullAnalysisBusy}
             onGoToMyProducts={() => goToMyProducts(focusCompareId)}
+            onOpenAuth={() => setActiveTab('auth')}
           />
         )}
 

@@ -22,6 +22,7 @@ interface PricesAndCompareTabProps {
   isComparePending?: boolean;
   fullAnalysisBusy?: boolean;
   onGoToMyProducts?: () => void;
+  onOpenAuth?: () => void;
 }
 
 const SUB_VIEWS: { id: PriceSubView; label: string; icon: typeof Tag }[] = [

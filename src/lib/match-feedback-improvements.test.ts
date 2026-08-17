@@ -123,4 +123,20 @@ describe('2 lineage generation digits', () => {
     expect(areLineageGenerationsCompatible(a, b)).toBe(false);
     expect(scoreProductMatch(a, b)).toBeLessThanOrEqual(0.15);
   });
+
+  it('Pixel 7 vs Pixel 6 incompatible', () => {
+    const a = 'Смартфон Google Pixel 7 8/128Gb Lemongrass';
+    const b = 'Смартфон Google Pixel 6 8/128Gb';
+    expect(extractLineageGeneration(a)).toMatchObject({ lineage: 'pixel', gen: 7 });
+    expect(extractLineageGeneration(b)).toMatchObject({ lineage: 'pixel', gen: 6 });
+    expect(areLineageGenerationsCompatible(a, b)).toBe(false);
+    expect(scoreProductMatch(a, b)).toBeLessThanOrEqual(0.15);
+  });
+
+  it('Pixel 9a vs Pixel 10a incompatible via genKey', () => {
+    expect(areLineageGenerationsCompatible(
+      'Смартфон Google Pixel 9a 128 ГБ',
+      'Смартфон Google Pixel 10a 8/128Gb',
+    )).toBe(false);
+  });
 });

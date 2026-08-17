@@ -396,6 +396,10 @@ export function mergeCompareProducts(
       ...existing.rejectedOfferUrls,
       ...incoming.rejectedOfferUrls,
     },
+    rejectedOfferFingerprints: {
+      ...existing.rejectedOfferFingerprints,
+      ...incoming.rejectedOfferFingerprints,
+    },
     searchVariantByMarketplace: {
       ...existing.searchVariantByMarketplace,
       ...incoming.searchVariantByMarketplace,

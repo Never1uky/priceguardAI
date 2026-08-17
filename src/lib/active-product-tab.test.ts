@@ -49,6 +49,40 @@ describe('pickActiveProductTab', () => {
     ]);
     expect(result?.id).toBe(2);
   });
+
+  it('still picks a user product tab in the same window as the hidden scrape tab', async () => {
+    const own = {
+      id: 99,
+      windowId: 7,
+      groupId: -1,
+      url: ozonProduct,
+    };
+    vi.stubGlobal('chrome', {
+      windows: {
+        create: vi.fn().mockResolvedValue({ id: 7, tabs: [own] }),
+      },
+      tabs: {
+        ungroup: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    const { acquireHiddenBrowser, __resetHiddenBrowserForTests } = await import(
+      '@/lib/hidden-browser'
+    );
+    try {
+      const browser = acquireHiddenBrowser();
+      await browser.navigate(ozonProduct);
+
+      const result = pickActiveProductTab([
+        { id: 99, active: true, url: ozonProduct, windowId: 7, windowState: 'normal' },
+        { id: 2, active: false, url: wbProduct, windowId: 7, windowState: 'normal' },
+      ]);
+      expect(result?.id).toBe(2);
+    } finally {
+      __resetHiddenBrowserForTests();
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('isProductPage (WB)', () => {

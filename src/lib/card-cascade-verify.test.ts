@@ -7,6 +7,7 @@ vi.mock('@/lib/offer-fetch', () => ({
 import { fetchOfferFromUrl } from '@/lib/offer-fetch';
 import {
   collectSerpCascadeCandidates,
+  pickSerpOrCardPrice,
   verifySerpOfferWithCardCascade,
 } from '@/lib/card-cascade-verify';
 import type { MarketplaceOffer } from '@/types/comparison';
@@ -26,6 +27,15 @@ function serpOffer(partial: Partial<MarketplaceOffer>): MarketplaceOffer {
     ...partial,
   };
 }
+
+describe('pickSerpOrCardPrice', () => {
+  it('keeps cheaper SERP from-price over dearer card default (YM)', () => {
+    expect(pickSerpOrCardPrice(24_682, 34_549)).toBe(24_682);
+    expect(pickSerpOrCardPrice(34_549, 24_682)).toBe(24_682);
+    expect(pickSerpOrCardPrice(null, 34_549)).toBe(34_549);
+    expect(pickSerpOrCardPrice(24_682, null)).toBe(24_682);
+  });
+});
 
 describe('collectSerpCascadeCandidates', () => {
   it('skips search-page URLs and keeps product cards', () => {
@@ -131,7 +141,7 @@ describe('verifySerpOfferWithCardCascade', () => {
     expect(result.url).toContain('/catalog/123/');
   });
 
-  it('keeps needs_choice for single SERP candidate below 95 when cards fail', async () => {
+  it('keeps needs_choice for single SERP candidate below AUTO_PICK when cards fail', async () => {
     vi.mocked(fetchOfferFromUrl).mockResolvedValue(null);
 
     const result = await verifySerpOfferWithCardCascade(
@@ -145,7 +155,7 @@ describe('verifySerpOfferWithCardCascade', () => {
             title: 'AirPods Max',
             url: 'https://www.ozon.ru/product/airpods-max-1/',
             price: 49990,
-            matchConfidence: 88,
+            matchConfidence: 60,
             priority: 100,
             rating: 4.8,
           },
@@ -269,7 +279,7 @@ describe('verifySerpOfferWithCardCascade', () => {
             title: '250 баллов',
             url: 'https://www.ozon.ru/product/apple-iphone-17-pro-123/',
             price: 100328,
-            matchConfidence: 70,
+            matchConfidence: 60,
             priority: 100,
           },
         ],
@@ -295,7 +305,7 @@ describe('verifySerpOfferWithCardCascade', () => {
         found: true,
         url: 'https://www.ozon.ru/product/airpods-max-1/',
         title: 'AirPods Max',
-        matchConfidence: 88,
+        matchConfidence: 60,
       }),
       {
         referenceTitle: 'Apple AirPods Max',
@@ -527,5 +537,129 @@ describe('verifySerpOfferWithCardCascade', () => {
     expect(result.found).toBe(true);
     expect(result.url).toContain('airpods-max-midnight');
     expect(result.price).toBe(49990);
+  });
+
+  it('auto-picks unambiguous Pixel SERP without opening the card (YM /card/)', async () => {
+    const { tryUnambiguousSerpVerified } = await import('@/lib/serp-auto-pick');
+    const result = tryUnambiguousSerpVerified('yandex_market', [
+      {
+        title: 'Смартфон Google Pixel 8 8/128Gb Lemongrass',
+        url: 'https://market.yandex.ru/card/google-pixel-8/123456',
+        price: 42990,
+        confidence: 86,
+      },
+    ]);
+
+    expect(result?.found).toBe(true);
+    expect(result?.needsManualPick).toBeFalsy();
+    expect(result?.url).toContain('/card/');
+    expect(result?.url).not.toMatch(/\/search/i);
+  });
+
+  it('keeps needs_choice for mixed Pixel generations when cards fail (not not_found)', async () => {
+    vi.mocked(fetchOfferFromUrl).mockResolvedValue(null);
+
+    const result = await verifySerpOfferWithCardCascade(
+      {
+        marketplace: 'yandex_market',
+        title: 'Google Pixel',
+        price: null,
+        delivery: null,
+        rating: null,
+        url: 'https://market.yandex.ru/search?text=pixel',
+        found: false,
+        needsManualPick: true,
+        searchCandidates: [
+          {
+            title: 'Смартфон Google Pixel 7 8/128Gb Lemongrass',
+            url: 'https://market.yandex.ru/card/pixel-7/111',
+            price: 24682,
+            matchConfidence: 48,
+            priority: 100,
+          },
+          {
+            title: 'Смартфон Google Pixel 9a 128 ГБ',
+            url: 'https://market.yandex.ru/card/pixel-9a/222',
+            price: 39270,
+            matchConfidence: 52,
+            priority: 99,
+          },
+          {
+            title: 'Смартфон Google Pixel 10a 8/128Gb',
+            url: 'https://market.yandex.ru/card/pixel-10a/333',
+            price: 47467,
+            matchConfidence: 50,
+            priority: 98,
+          },
+        ],
+      },
+      {
+        referenceTitle: 'Смартфон Google Pixel 8 8/128Gb светло-желтый Lemongrass',
+        query: 'Google Pixel 8 128',
+        searchUrl: 'https://market.yandex.ru/search?text=pixel',
+      },
+    );
+
+    expect(result.found).toBe(false);
+    expect(result.needsManualPick).toBe(true);
+    expect(result.matchStatus).toBe('needs_choice');
+    expect(result.searchCandidates?.length).toBe(3);
+    expect(result.error).toMatch(/Выберите товар \(3\)/);
+    expect(result.matchStatus).not.toBe('not_found');
+  });
+
+  it('picker keeps SERP from-price when card default is dearer (YM)', async () => {
+    vi.mocked(fetchOfferFromUrl).mockImplementation(async (url) => ({
+      marketplace: 'yandex_market',
+      title: 'Смартфон Google Pixel 7 8/128Gb Lemongrass',
+      price: 34_549,
+      delivery: null,
+      rating: 5,
+      url,
+      found: true,
+    }));
+
+    const result = await verifySerpOfferWithCardCascade(
+      {
+        marketplace: 'yandex_market',
+        title: 'Google Pixel 7',
+        price: null,
+        delivery: null,
+        rating: null,
+        url: 'https://market.yandex.ru/search?text=pixel+7',
+        found: false,
+        needsManualPick: true,
+        searchCandidates: [
+          {
+            title: 'Смартфон Google Pixel 7 8/128Gb Lemongrass',
+            url: 'https://market.yandex.ru/card/pixel-7/111',
+            price: 24_682,
+            matchConfidence: 88,
+            priority: 100,
+          },
+          {
+            title: 'Смартфон Google Pixel 7 8/128Gb',
+            url: 'https://market.yandex.ru/card/pixel-7-b/222',
+            price: 34_911,
+            matchConfidence: 86,
+            priority: 99,
+          },
+        ],
+      },
+      {
+        referenceTitle: 'Смартфон Google Pixel 7 8/128Gb Lemongrass',
+        query: 'Google Pixel 7 128',
+        searchUrl: 'https://market.yandex.ru/search?text=pixel+7',
+      },
+    );
+
+    // Either auto-picked or choice — displayed candidate prices must keep SERP floor
+    if (result.found && result.price != null) {
+      expect(result.price).toBeLessThanOrEqual(24_682);
+    } else {
+      const prices = (result.searchCandidates ?? []).map((c) => c.price).filter((p): p is number => p != null);
+      expect(prices.some((p) => p <= 24_682)).toBe(true);
+      expect(Math.min(...prices)).toBeLessThanOrEqual(24_682);
+    }
   });
 });

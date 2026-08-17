@@ -10,13 +10,15 @@ import {
   truncateTitle,
   CHROME_WEB_STORE_URL,
   CHROME_WEB_STORE_REVIEWS_URL,
+  TELEGRAM_CHANNEL_URL,
+  TELEGRAM_CHANNEL_BUTTON,
 } from './telegram.ts';
 
 export const SUPPORT_BOT_USERNAME = 'priceguard_supportbot';
 export const ALERTS_BOT_USERNAME = 'PriceGuardAlertsBot';
 export const SUPPORT_EMAIL = 'priceguardAlsupp0rt@yandex.ru';
 export const LANDING_PREMIUM_URL = 'https://priceguard-landing.vercel.app/#pricing';
-export { CHROME_WEB_STORE_URL, CHROME_WEB_STORE_REVIEWS_URL };
+export { CHROME_WEB_STORE_URL, CHROME_WEB_STORE_REVIEWS_URL, TELEGRAM_CHANNEL_URL, TELEGRAM_CHANNEL_BUTTON };
 
 /** Цены как в PREMIUM_PLANS */
 export const SUPPORT_PREMIUM_PRICES = {
@@ -40,10 +42,9 @@ export function supportMainMenuKeyboard(): InlineKeyboard {
     [{ text: '👑 Подписка Premium', callback_data: 'menu:premium' }],
     [{ text: '🛠 Сообщить о проблеме', callback_data: 'menu:problem' }],
     [{ text: '💬 Написать нам', callback_data: 'menu:review' }],
-    [
-      { text: 'ℹ️ Справка', callback_data: 'menu:help' },
-      { text: '📉 Бот алертов', url: `https://t.me/${ALERTS_BOT_USERNAME}` },
-    ],
+    [{ text: 'ℹ️ Справка', callback_data: 'menu:help' }],
+    [{ text: TELEGRAM_CHANNEL_BUTTON, url: TELEGRAM_CHANNEL_URL }],
+    [{ text: '📉 Бот алертов', url: `https://t.me/${ALERTS_BOT_USERNAME}` }],
   ];
 }
 
@@ -117,6 +118,7 @@ export function buildSupportHelpMessage(): string {
     `📧 Почта: <code>${SUPPORT_EMAIL}</code>`,
     `🌐 Тарифы: ${LANDING_PREMIUM_URL}`,
     `⬇️ Chrome Web Store: ${CHROME_WEB_STORE_URL}`,
+    `📢 ${TELEGRAM_CHANNEL_BUTTON}: ${TELEGRAM_CHANNEL_URL}`,
     '',
     'Не нашли ответ — напишите сюда обычным сообщением.',
   ].join('\n');

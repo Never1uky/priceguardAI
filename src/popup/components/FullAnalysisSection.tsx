@@ -567,6 +567,9 @@ export function FullAnalysisSection({
                 <p className="pg-body text-muted-foreground">
                   {analysis.qualitySummary || analysis.verdictExplanation}
                 </p>
+                <p className="pg-caption text-muted-foreground/80">
+                  Автоматический разбор отзывов и данных — не персональная рекомендация к покупке.
+                </p>
                 <Badge variant="outline">{analysis.providerLabel}</Badge>
               </div>
               <ScoreRing

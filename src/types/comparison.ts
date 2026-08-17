@@ -31,6 +31,11 @@ export interface CompareProduct {
   productModel?: string;
   /** Отклонённые URL автопоиска («Это не тот товар») */
   rejectedOfferUrls?: Partial<Record<ComparisonMarketplace, string[]>>;
+  /**
+   * Identity fingerprints of rejected offers (article + lineage + gen).
+   * Blocks the same SKU class under a new URL after reject / research.
+   */
+  rejectedOfferFingerprints?: Partial<Record<ComparisonMarketplace, string[]>>;
   /** Локальный Top-N пул кандидатов по площадке (Variant B) */
   candidatePoolByMarketplace?: Partial<Record<ComparisonMarketplace, SearchCandidateOffer[]>>;
   /** Когда пул был заполнен (TTL) */

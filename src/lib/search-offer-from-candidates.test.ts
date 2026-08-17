@@ -21,7 +21,7 @@ function rankedOffer(
 describe('buildOfferFromRankedCandidates', () => {
   const searchUrl = 'https://www.ozon.ru/search/?text=airpods';
 
-  it('never returns found:true from SERP alone', () => {
+  it('auto-picks unambiguous SERP top-1 (product URL, AUTO_PICK, no tie)', () => {
     const result = buildOfferFromRankedCandidates('ozon', 'airpods', searchUrl, [
       rankedOffer(
         {
@@ -33,11 +33,11 @@ describe('buildOfferFromRankedCandidates', () => {
       ),
     ]);
 
-    expect(result.found).toBe(false);
-    expect(result.needsManualPick).toBe(true);
-    expect(result.matchStatus).toBe('needs_choice');
-    expect(result.price).toBeNull();
-    expect(result.url).toBe(searchUrl);
+    expect(result.found).toBe(true);
+    expect(result.needsManualPick).toBeFalsy();
+    expect(result.url).toContain('/product/');
+    expect(result.url).not.toContain('/search');
+    expect(result.price).toBe(49990);
   });
 
   it('uses search URL as shell (not candidate card) so refresh cannot bind picker', () => {
@@ -64,6 +64,8 @@ describe('buildOfferFromRankedCandidates', () => {
     expect(result.url).toContain('/search');
     expect(result.searchCandidates?.every((c) => c.url.includes('/product/'))).toBe(true);
     expect(result.searchCandidates?.every((c) => !c.url.includes('/search'))).toBe(true);
+    expect(result.found).toBe(false);
+    expect(result.needsManualPick).toBe(true);
   });
 
   it('returns not_found with search URL only when no product cards', () => {

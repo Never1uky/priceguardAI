@@ -52,6 +52,8 @@ import {
   REPLY_BTN_AI,
   REPLY_BTN_FAQ,
   REPLY_BTN_HELP,
+  REPLY_BTN_CHANNEL,
+  telegramChannelInlineRow,
   escapeHtml,
   truncateTitle,
   matchFaqReply,
@@ -1519,6 +1521,14 @@ Deno.serve(async (req) => {
         replyKeyboard: alertsMainReplyKeyboard(),
       });
       return jsonResponse({ ok: true, action: 'reply_faq', sent: true });
+    } else if (textNorm === REPLY_BTN_CHANNEL) {
+      await sendTelegramMessage({
+        chatId: chatIdStr,
+        text: 'Разборы карточек WB / Ozon / Маркет — в канале. Алерты о цене по-прежнему здесь.',
+        inlineKeyboard: [telegramChannelInlineRow()],
+        replyKeyboard: alertsMainReplyKeyboard(),
+      });
+      return jsonResponse({ ok: true, action: 'reply_channel', sent: true });
     }
 
     const command = textNorm.split(/\s+/)[0].toLowerCase().replace(/@\w+$/, '');
@@ -1554,6 +1564,7 @@ Deno.serve(async (req) => {
         replyKeyboard = alertsMainReplyKeyboard();
         inlineKeyboard = [
           [{ text: '⬇️ Установить расширение', url: CHROME_WEB_STORE_URL }],
+          telegramChannelInlineRow(),
           [{ text: '❓ FAQ', callback_data: 'faq:root' }],
           [{ text: '💬 Поддержка', url: 'https://t.me/priceguard_supportbot' }],
         ];
@@ -1562,6 +1573,7 @@ Deno.serve(async (req) => {
         replyKeyboard = alertsMainReplyKeyboard();
         inlineKeyboard = [
           [{ text: '⬇️ Установить расширение', url: CHROME_WEB_STORE_URL }],
+          telegramChannelInlineRow(),
         ];
       }
     } else if (command === '/help') {
@@ -1569,6 +1581,7 @@ Deno.serve(async (req) => {
       replyKeyboard = alertsMainReplyKeyboard();
       inlineKeyboard = [
         [{ text: '⬇️ Установить расширение', url: CHROME_WEB_STORE_URL }],
+        telegramChannelInlineRow(),
         [{ text: '❓ FAQ', callback_data: 'faq:root' }],
         [{ text: '💬 Поддержка', url: 'https://t.me/priceguard_supportbot' }],
       ];

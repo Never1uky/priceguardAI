@@ -15,7 +15,6 @@ import {
 } from '@/lib/cross-market-map';
 import { recordMatchFeedback } from '@/lib/match-feedback';
 import {
-  capRejectedUrls,
   filterPoolExcluding,
   getCandidatePool,
   markOfferRejectedKeepPool,
@@ -89,12 +88,16 @@ export function applyRejectCompareCandidate(
   rejectedUrl: string,
 ): { product: CompareProduct; offer: MarketplaceOffer } {
   const norm = normalizePoolUrl(rejectedUrl);
-  const rejected = capRejectedUrls([
-    ...(product.rejectedOfferUrls?.[marketplace] ?? []),
-    norm,
-  ]);
-
   const prevOffer = product.marketplaceOffers?.[marketplace];
+  const rejectedTitle =
+    prevOffer?.searchCandidates?.find((c) => normalizePoolUrl(c.url) === norm)?.title ??
+    prevOffer?.title;
+
+  const withBlacklist = markOfferRejectedKeepPool(product, marketplace, rejectedUrl, {
+    rejectedTitle,
+  });
+  const rejected = withBlacklist.rejectedOfferUrls?.[marketplace] ?? [];
+
   const fromCandidates = prevOffer?.searchCandidates ?? [];
   const fromPool = product.candidatePoolByMarketplace?.[marketplace] ?? [];
   const sourceList = fromCandidates.length
@@ -142,18 +145,14 @@ export function applyRejectCompareCandidate(
   }
 
   let next: CompareProduct = {
-    ...product,
-    rejectedOfferUrls: {
-      ...product.rejectedOfferUrls,
-      [marketplace]: rejected,
-    },
+    ...withBlacklist,
     marketplaceUrls,
     marketplaceOffers: {
-      ...product.marketplaceOffers,
+      ...withBlacklist.marketplaceOffers,
       [marketplace]: offer,
     },
     candidatePoolByMarketplace: {
-      ...product.candidatePoolByMarketplace,
+      ...withBlacklist.candidatePoolByMarketplace,
       [marketplace]: remaining.length ? remaining : undefined,
     },
     comparedAt: Date.now(),

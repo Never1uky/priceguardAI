@@ -8,6 +8,7 @@ import { SectionLabel } from '@/components/ui/section-label';
 import { Surface } from '@/components/ui/surface';
 import { CompareProductDetail } from '@/popup/components/CompareProductDetail';
 import { ProductImage } from '@/popup/components/ProductImage';
+import { TelegramChannelLink } from '@/popup/components/TelegramChannelLink';
 import { useCompareTab } from '@/popup/hooks/useCompareTab';
 import {
   ensureCompareShellForTracked,
@@ -369,6 +370,9 @@ export function MyProductsTab({
               Добавить текущий товар
             </Button>
           )}
+          <div className="mt-3 w-full max-w-[260px]">
+            <TelegramChannelLink variant="outline" />
+          </div>
         </EmptyState>
       ) : (
         <Surface variant="subtle" padding="sm" className="space-y-1.5">

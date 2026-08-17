@@ -1,4 +1,4 @@
-import { sanitizeMarketplaceButtonUrl } from './safe-url.ts';
+import { sanitizeAlertButtonUrl } from './safe-url.ts';
 
 /**
  * Общие хелперы Telegram для @PriceGuardAlertsBot
@@ -11,6 +11,12 @@ export const CHROME_WEB_STORE_URL =
 
 /** Страница отзывов в Chrome Web Store */
 export const CHROME_WEB_STORE_REVIEWS_URL = `${CHROME_WEB_STORE_URL}/reviews`;
+
+/** Telegram-канал с разборами (не алерты о цене) */
+export const TELEGRAM_CHANNEL_URL = 'https://t.me/priceguard_ai';
+
+/** Подпись кнопки на канал — везде одинаковая */
+export const TELEGRAM_CHANNEL_BUTTON = 'Канал с разборами';
 
 /**
  * Server-side price sources (Telegram / update-prices / shared scrape cache).
@@ -195,6 +201,7 @@ export const REPLY_BTN_STATUS = '📦 Мои товары';
 export const REPLY_BTN_AI = '✨ AI-анализ';
 export const REPLY_BTN_FAQ = '❓ FAQ';
 export const REPLY_BTN_HELP = 'ℹ️ Помощь';
+export const REPLY_BTN_CHANNEL = TELEGRAM_CHANNEL_BUTTON;
 
 export function alertsMainReplyKeyboard(): {
   keyboard: Array<Array<{ text: string }>>;
@@ -205,10 +212,16 @@ export function alertsMainReplyKeyboard(): {
     keyboard: [
       [{ text: REPLY_BTN_STATUS }, { text: REPLY_BTN_AI }],
       [{ text: REPLY_BTN_FAQ }, { text: REPLY_BTN_HELP }],
+      [{ text: REPLY_BTN_CHANNEL }],
     ],
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+/** Inline URL-кнопка на канал (отдельно от алертов о цене). */
+export function telegramChannelInlineRow(): Array<{ text: string; url: string }> {
+  return [{ text: TELEGRAM_CHANNEL_BUTTON, url: TELEGRAM_CHANNEL_URL }];
 }
 
 export function buildStartWelcomeMessage(chatId: string | number): string {
@@ -564,7 +577,7 @@ export async function sendTelegramMessage(input: {
   } else if (input.removeKeyboard) {
     payload.reply_markup = { remove_keyboard: true };
   } else {
-    const safeButton = sanitizeMarketplaceButtonUrl(input.buttonUrl);
+    const safeButton = sanitizeAlertButtonUrl(input.buttonUrl);
     if (safeButton) {
       payload.reply_markup = {
         inline_keyboard: [[

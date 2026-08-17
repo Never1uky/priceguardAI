@@ -6,7 +6,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { requireAuthUser } from '../_shared/auth.ts';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
-import { sanitizeMarketplaceButtonUrl } from '../_shared/safe-url.ts';
+import { sanitizeAlertButtonUrl } from '../_shared/safe-url.ts';
 import {
   buildCheaperElsewhereMessage,
   buildComparePriceDropMessage,
@@ -66,7 +66,7 @@ Deno.serve(async (req) => {
       }, 400);
     }
 
-    const url = sanitizeMarketplaceButtonUrl(body.url ? String(body.url) : undefined);
+    const url = sanitizeAlertButtonUrl(body.url ? String(body.url) : undefined);
     const type = String(body.type ?? 'generic');
     const buttonText = body.buttonText ? String(body.buttonText).slice(0, 64) : undefined;
 

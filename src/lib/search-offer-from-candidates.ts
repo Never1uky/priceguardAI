@@ -1,6 +1,7 @@
 /**
  * Сборка MarketplaceOffer из ranked SERP-кандидатов (API / in-tab / DOM).
- * SERP never declares found:true — only a candidate pool for card cascade.
+ * Unambiguous top-1 (AUTO_PICK, product URL, no tie) → verified without cascade.
+ * Mixed / tied models stay a candidate pool for cascade / picker.
  */
 import type {
   ComparisonMarketplace,
@@ -16,6 +17,7 @@ import {
 import { isProductPageUrl } from '@/lib/product-match';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { sanitizeCandidateTitle } from '@/lib/serp-title';
+import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
 
 function notFoundOffer(
   marketplace: ComparisonMarketplace,
@@ -94,6 +96,19 @@ export function buildOfferFromRankedCandidates(
       'В выдаче нет ссылок на карточки товаров',
     );
   }
+
+  const unambiguous = tryUnambiguousSerpVerified(
+    marketplace,
+    searchCandidates.map((c) => ({
+      title: c.title,
+      url: c.url,
+      price: c.price,
+      confidence: c.matchConfidence ?? 0,
+      imageUrl: c.imageUrl,
+      rating: c.rating,
+    })),
+  );
+  if (unambiguous) return unambiguous;
 
   const best = searchCandidates[0]!;
   const shellUrl = searchUrl;

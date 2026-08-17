@@ -383,19 +383,34 @@ export function scoreFeatureMatch(
 /** Поисковая строка из features: brand + model + storage + color */
 export function buildFeatureSearchQuery(features: ProductFeatures): string {
   const parts: string[] = [];
-  if (features.brand) parts.push(features.brand);
-  if (features.model) parts.push(features.model);
+  if (features.model) {
+    parts.push(features.model);
+    // Avoid "Google Google Pixel 7" when model already includes the brand
+    if (
+      features.brand &&
+      !features.model.toLowerCase().includes(features.brand.toLowerCase())
+    ) {
+      parts.unshift(features.brand);
+    }
+  } else if (features.brand) {
+    parts.push(features.brand);
+  }
   if (features.series) parts.push(features.series);
   if (features.storage) {
     const plus = features.storage.match(/^(\d+)\+(\d+)$/);
     if (plus) parts.push(`${plus[1]} ${plus[2]}`);
-    else if (features.storage.endsWith('gb')) parts.push(features.storage.replace('gb', ' GB'));
-    else parts.push(features.storage);
+    else if (/\d/.test(features.storage) && features.storage.endsWith('gb')) {
+      parts.push(features.storage.replace(/gb$/i, '').trim());
+    } else if (/\d/.test(features.storage)) {
+      parts.push(features.storage);
+    }
   }
   if (features.volumeMl) {
     parts.push(features.volumeMl >= 1000 ? `${features.volumeMl / 1000} л` : `${features.volumeMl} мл`);
   }
-  if (features.color) parts.push(features.color);
+  if (features.color && features.category !== 'smartphones' && features.category !== 'memory_cards') {
+    parts.push(features.color);
+  }
   const q = parts.join(' ').trim();
   return q.slice(0, 100);
 }

@@ -25,6 +25,7 @@ import { SectionLabel } from '@/components/ui/section-label';
 import { Surface } from '@/components/ui/surface';
 import { PackageSearch } from 'lucide-react';
 import { toastError } from '@/popup/lib/toast';
+import { TelegramChannelLink } from '@/popup/components/TelegramChannelLink';
 
 interface TrackedTabProps {
   products: TrackedProduct[];
@@ -237,7 +238,11 @@ export function TrackedTab({
           title="Нет отслеживаемых товаров"
           description="Добавьте товар по ссылке или откройте карточку и включите «Следить за ценой». С Telegram сервер следит за ценой даже без открытого Chrome."
           className="py-12"
-        />
+        >
+          <div className="mt-3 w-full max-w-[260px]">
+            <TelegramChannelLink variant="outline" />
+          </div>
+        </EmptyState>
         {footer}
       </div>
     );
