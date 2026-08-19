@@ -45,6 +45,7 @@ type TabId = 'price' | 'reviews' | 'my' | 'premium' | 'settings' | 'auth';
 
 const POPUP_TAB_KEY = 'priceguard_popup_tab';
 const UPDATE_SYNC_HINT_KEY = 'priceguard_update_sync_hint';
+const ONBOARDING_SEEN_KEY = 'priceguard_onboarding_seen_v1';
 const VALID_TABS = new Set<TabId>(['price', 'reviews', 'my', 'premium', 'settings', 'auth']);
 
 function isTabId(value: unknown): value is TabId {
@@ -73,6 +74,7 @@ export function App() {
   const [fullAnalysisBusy, setFullAnalysisBusy] = useState(false);
   const [priceSubView, setPriceSubView] = useState<PriceSubView>('current');
   const [listRefreshing, setListRefreshing] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const loadTracked = useCallback(async () => {
     const [tracked, items] = await Promise.all([getTrackedProducts(), loadMyProductItems()]);
@@ -100,6 +102,12 @@ export function App() {
       setTabRestored(true);
     })();
   }, [loadTracked]);
+
+  useEffect(() => {
+    void chrome.storage.local.get(ONBOARDING_SEEN_KEY).then((stored) => {
+      if (!stored[ONBOARDING_SEEN_KEY]) setShowOnboarding(true);
+    });
+  }, []);
 
   useEffect(() => {
     if (!tabRestored) return;
@@ -435,6 +443,11 @@ export function App() {
     { id: 'settings' as const, label: 'Настройки', icon: Settings },
   ];
 
+  const dismissOnboarding = () => {
+    setShowOnboarding(false);
+    void chrome.storage.local.set({ [ONBOARDING_SEEN_KEY]: true });
+  };
+
   return (
     <div className="relative w-[400px] overflow-x-hidden bg-background text-foreground">
       <Toaster />
@@ -501,6 +514,19 @@ export function App() {
       </header>
 
       <div className="space-y-4 p-4 pb-5">
+        {showOnboarding && activeTab === 'price' && !liveProduct && !isLoading && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
+            <p className="pg-subtitle">Откройте товар на Wildberries, Ozon или Яндекс.Маркете</p>
+            <p className="mt-1 pg-hint text-foreground/80">
+              Сравнение цен появится автоматически. Расширение читает только страницы этих
+              маркетплейсов для сравнения цен, историю других сайтов не собирает.
+            </p>
+            <Button size="sm" className="mt-2" onClick={dismissOnboarding}>
+              Понятно
+            </Button>
+          </div>
+        )}
+
         <Tabs
           tabs={tabs}
           activeTab={activeTab}

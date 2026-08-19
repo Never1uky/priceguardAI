@@ -427,7 +427,8 @@ export function FullAnalysisSection({
             <div className="min-w-0">
               <p className="pg-title">AI-анализ товара</p>
               <p className="pg-hint mt-0.5">
-                Free: {FREE_LIMITS.maxAiRequestsPerDay}/день · Premium: без лимита + глубокий разбор
+                Бесплатно: {FREE_LIMITS.maxAiRequestsPerDay} разбора в день · Premium: без дневного
+                лимита + глубокий разбор
               </p>
             </div>
           </div>
@@ -519,7 +520,7 @@ export function FullAnalysisSection({
                   void handleRun('run', { webResearch: true });
                 }}
                 disabled={isLoading}
-                title="Sonar → GPT · дороже · актуальный веб-контекст"
+                title="Глубже анализируем и сверяем с актуальными данными из сети"
               >
                 <Crown className="h-3.5 w-3.5" strokeWidth={1.75} />
                 Глубокий разбор

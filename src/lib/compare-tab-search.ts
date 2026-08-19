@@ -406,7 +406,7 @@ export async function searchViaBrowserTab(
       return buildSearchNotFoundOffer(
         marketplace,
         query,
-        'Подходящий товар в выдаче не найден. Укажите ссылку вручную.',
+        'Точного совпадения нет. Проверьте похожие варианты: название, цвет и память.',
       );
     });
   } catch (error) {

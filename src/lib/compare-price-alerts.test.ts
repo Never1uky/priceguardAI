@@ -76,6 +76,50 @@ function offer(
 }
 
 describe('planComparePriceAlerts', () => {
+  it('uses OR thresholds: triggers when percent threshold passes even if rub does not', () => {
+    const product = ymProduct({
+      marketplaceOffers: {
+        yandex_market: offer('yandex_market', 10000, ymUrl),
+      },
+    });
+    const newOffers: MarketplaceOffer[] = [offer('yandex_market', 9900, ymUrl)];
+    const strictRub: PriceAlertSettings = { ...settings, minDropRub: 500, minDropPercent: 1 };
+
+    const plans = planComparePriceAlerts(product, newOffers, strictRub);
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'compare_price_drop',
+          marketplace: 'yandex_market',
+          previousPrice: 10000,
+          newPrice: 9900,
+        }),
+      ]),
+    );
+  });
+
+  it('uses OR thresholds: triggers when rub threshold passes even if percent does not', () => {
+    const product = ymProduct({
+      marketplaceOffers: {
+        yandex_market: offer('yandex_market', 50000, ymUrl),
+      },
+    });
+    const newOffers: MarketplaceOffer[] = [offer('yandex_market', 49900, ymUrl)];
+    const strictPercent: PriceAlertSettings = { ...settings, minDropRub: 100, minDropPercent: 1 };
+
+    const plans = planComparePriceAlerts(product, newOffers, strictPercent);
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'compare_price_drop',
+          marketplace: 'yandex_market',
+          previousPrice: 50000,
+          newPrice: 49900,
+        }),
+      ]),
+    );
+  });
+
   it('first sibling find = baseline only (no alert)', () => {
     const product = ymProduct();
     const newOffers: MarketplaceOffer[] = [

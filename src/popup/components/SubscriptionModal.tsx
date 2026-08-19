@@ -42,7 +42,7 @@ const PREMIUM_FEATURES = [
 ];
 
 const FREE_FEATURES = [
-  `${FREE_LIMITS.maxAiRequestsPerDay} AI-анализов в сутки (после входа)`,
+  `${FREE_LIMITS.maxAiRequestsPerDay} разбора в день (после входа)`,
   `До ${FREE_LIMITS.maxMyProducts} товаров в «Мои товары»`,
   'Алерты о падении цены (Telegram + AI по ссылке)',
   'Сравнение цен · где дешевле на маркетплейсах',
@@ -224,7 +224,7 @@ export function SubscriptionModal({
                 PriceGuard Premium
               </h2>
               <p className="pg-hint mt-0.5">
-                AI-анализ без лимитов и все функции
+                Разборы без дневного лимита и все функции
               </p>
             </div>
           </div>

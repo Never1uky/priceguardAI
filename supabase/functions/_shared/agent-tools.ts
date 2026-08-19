@@ -284,6 +284,26 @@ export async function analyzeCandidates(
 ): Promise<EvaluatedCandidate[]> {
   const capped = capAgentShortlist(shortlist, AGENT_MAX_PRODUCTS_AFTER_FILTER);
   if (capped.length === 0) return [];
+
+  // No soft constraints (the common case for exact-model queries, which skip
+  // PARSE entirely and so always have softConstraints === []) means there is
+  // nothing to judge — every candidate vacuously matches. Previously this
+  // still called the AI judge with an empty "МЯГКИЕ КРИТЕРИИ: (нет)" prompt,
+  // and the model — with nothing concrete to confirm — would frequently
+  // return matches:false, starving matchedCount below AGENT_ENOUGH_MATCHED
+  // and driving the loop into repeated re-searches until it hit
+  // AGENT_MAX_SEARCHES (observed bug: "Google Pixel 8" hitting the step
+  // limit). Skipping the AI call here is both the correctness fix and a
+  // cost/latency win (fewer AI calls for the most common query shape).
+  const hasRealConstraints = softConstraints.some((c) => c.trim().length > 0);
+  if (!hasRealConstraints) {
+    return capped.map((candidate) => ({
+      ...candidate,
+      matches: true,
+      reason: 'нет мягких критериев',
+    }));
+  }
+
   return Promise.all(
     capped.map(async (candidate) => {
       const result = await runAgentAi(

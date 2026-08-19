@@ -308,7 +308,7 @@ function CandidatePicker({
                 })
               }
             >
-              Самый дешёвый · {formatPrice(cheapest.price!)}
+              Похожий вариант · {formatPrice(cheapest.price!)}
             </Button>
           )}
           <ul className="space-y-1">
@@ -584,7 +584,7 @@ export function ComparisonTable({
       searchingOffer.matchStatus === 'needs_choice' ||
       searchingOffer.matchStatus === 'blocked' ||
       isOfferWithPrice(searchingOffer));
-  const showSearchOverlay = Boolean(isLoading) && !searchingSlotSettled;
+  const showSearchingHint = Boolean(isLoading) && !searchingSlotSettled;
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
   const confirmedOffersCount = offers.filter((offer) => {
     if (!isOfferWithPrice(offer) || offer.needsManualPick) return false;
@@ -615,15 +615,15 @@ export function ComparisonTable({
 
   return (
     <div className="relative min-w-0 overflow-hidden rounded-md bg-muted/50">
-      {showSearchOverlay && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/70 backdrop-blur-[1px]">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          <p className="text-center text-[11px] text-muted-foreground">
+      {showSearchingHint && (
+        <div className="flex items-center gap-2 border-b border-border/60 bg-primary/5 px-2.5 py-2 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          <p>
             {searchingMarketplace === SEARCHING_MP_CROSS
-              ? 'Ищем на других площадках…'
+              ? 'Продолжаем поиск на других площадках — уже найденные строки остаются видимыми.'
               : searchingMarketplace
-                ? `Ищем на ${marketplaceShortLabel[searchingMarketplace]}…`
-                : 'Обновляем цены…'}
+                ? `Ищем на ${marketplaceShortLabel[searchingMarketplace]} — остальные строки уже готовы.`
+                : 'Обновляем цены — уже найденные строки остаются видимыми.'}
           </p>
         </div>
       )}

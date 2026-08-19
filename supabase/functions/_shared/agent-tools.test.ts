@@ -178,6 +178,41 @@ describe('agent-tools', () => {
     );
   });
 
+  it(
+    'BUG FIX: empty softConstraints (exact-model queries, e.g. "Google Pixel 8") vacuously ' +
+      'match ALL candidates and skip the AI judge entirely — previously this always called the ' +
+      'judge with an empty "МЯГКИЕ КРИТЕРИИ: (нет)" prompt, and the model would often return ' +
+      'matches:false with nothing concrete to confirm, starving matchedCount and driving the ' +
+      'orchestrator into repeated re-searches until it hit AGENT_MAX_SEARCHES (observed: agent ' +
+      'reports "упёрся в лимит шагов" even for trivial, unambiguous queries).',
+    async () => {
+      const call = vi.fn();
+      const log = vi.fn();
+      const candidates = [sample(), sample({ url: 'https://www.ozon.ru/product/y-999' })];
+
+      const judged = await analyzeCandidates({ from: vi.fn() }, candidates, [], {
+        callProvider: call,
+        logRequest: log,
+      });
+
+      expect(call).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(judged).toHaveLength(2);
+      expect(judged.every((c) => c.matches === true)).toBe(true);
+      expect(judged.every((c) => c.reason === 'нет мягких критериев')).toBe(true);
+    },
+  );
+
+  it('whitespace-only softConstraints entries are treated as empty (no real constraint to check)', async () => {
+    const call = vi.fn();
+    const judged = await analyzeCandidates({ from: vi.fn() }, [sample()], ['  ', ''], {
+      callProvider: call,
+      logRequest: vi.fn(),
+    });
+    expect(call).not.toHaveBeenCalled();
+    expect(judged[0]?.matches).toBe(true);
+  });
+
   it('rankAndExplain uses medium-tier provider (gpt-4o-mini synthesis)', async () => {
     const call = vi.fn().mockResolvedValue({
       text: JSON.stringify({ ranked: [{ productId: '1', score: 9, reason: 'fit' }], summary: 'ok' }),

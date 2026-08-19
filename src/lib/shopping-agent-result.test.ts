@@ -99,6 +99,26 @@ describe('joinAgentOffers', () => {
     expect(rows[0]?.title).toBe(matched.title);
     expect(rows[0]?.score).toBeUndefined();
   });
+
+  it('drops matched===false rows even if ranked points at them', () => {
+    const rejected = {
+      ...matched,
+      productId: '999',
+      title: 'чехол Pixel 8',
+      matches: false,
+      reason: 'не тот товар',
+    };
+    const rows = joinAgentOffers(
+      sampleResult({
+        ranked: [
+          { productId: '999', score: 9, reason: 'дешевле' },
+          { productId: '123', score: 7, reason: 'модель' },
+        ],
+        matched: [matched, rejected],
+      }),
+    );
+    expect(rows.map((r) => r.productId)).toEqual(['123']);
+  });
 });
 
 describe('agentSubmitErrorMessage', () => {

@@ -69,10 +69,10 @@ function isSignificantDrop(
   const drop = previousPrice - newPrice;
   const percent = (drop / previousPrice) * 100;
 
-  if (settings.minDropPercent > 0 && percent < settings.minDropPercent) return false;
-  if (drop < settings.minDropRub) return false;
+  const percentPass = settings.minDropPercent <= 0 || percent >= settings.minDropPercent;
+  const rubPass = settings.minDropRub <= 0 || drop >= settings.minDropRub;
 
-  return true;
+  return percentPass || rubPass;
 }
 
 /** Baseline for cross-MP: prefer OLD source price so a leaked new source price can't hide cheaper_elsewhere. */

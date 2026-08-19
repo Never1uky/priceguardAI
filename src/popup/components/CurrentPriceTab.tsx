@@ -248,8 +248,8 @@ export function CurrentPriceTab({
               {isComparePending
                 ? 'Добавляем и ищем…'
                 : isTracked
-                  ? 'Обновить поиск'
-                  : 'В «Мои товары»'}
+                  ? 'Следим за ценой'
+                  : 'Следить за ценой'}
             </Button>
             {isTracked && (
               <Button

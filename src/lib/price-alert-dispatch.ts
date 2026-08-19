@@ -41,9 +41,9 @@ function isSignificantDrop(
   if (newPrice >= previousPrice) return false;
   const drop = previousPrice - newPrice;
   const percent = (drop / previousPrice) * 100;
-  if (settings.minDropPercent > 0 && percent < settings.minDropPercent) return false;
-  if (drop < settings.minDropRub) return false;
-  return true;
+  const percentPass = settings.minDropPercent <= 0 || percent >= settings.minDropPercent;
+  const rubPass = settings.minDropRub <= 0 || drop >= settings.minDropRub;
+  return percentPass || rubPass;
 }
 
 function marketplaceLabel(marketplace: Marketplace): string {

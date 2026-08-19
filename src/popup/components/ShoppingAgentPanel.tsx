@@ -163,70 +163,72 @@ export function ShoppingAgentPanel({ onOpenAuth }: ShoppingAgentPanelProps) {
 
       {agent.result?.status === 'done' && (
         <div className="space-y-2">
-          {agent.result.summary && (
-            <Surface variant="subtle" padding="sm">
-              <p className="pg-body">{agent.result.summary}</p>
-            </Surface>
-          )}
-          {agent.result.disclosure && (
-            <p className="rounded-md bg-warning/10 px-3 py-2 pg-hint text-warning">
-              Подбор упёрся в лимит шагов — ниже то, что удалось найти.
-            </p>
-          )}
           {agent.offers.length === 0 ? (
             <p className="pg-hint text-center">Подходящих товаров не нашлось.</p>
           ) : (
-            <ul className="space-y-2">
-              {agent.offers.map((row) => {
-                const href = offerLinkUrl(row.url, row.marketplace);
-                const tracking = trackingUrl === href;
-                return (
-                  <li key={`${row.marketplace}-${row.productId ?? row.url}`}>
-                    <Surface padding="sm" className="space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <Badge variant={marketplaceBadgeVariant(row.marketplace)}>
-                          {MARKETPLACE_SHORT_LABELS[row.marketplace]}
-                        </Badge>
-                        {row.price != null && row.price > 0 && (
-                          <span className="pg-subtitle tabular-nums text-primary">
-                            {formatPrice(row.price)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="line-clamp-3 pg-body">{row.title}</p>
-                      {(row.rankReason || row.reason) && (
-                        <p className="pg-hint">{row.rankReason || row.reason}</p>
-                      )}
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="min-w-0 flex-1"
-                          disabled={tracking}
-                          onClick={() => void handleTrack(row)}
-                        >
-                          {tracking ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
-                          ) : (
-                            <PackagePlus className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <>
+              {agent.result.summary && (
+                <Surface variant="subtle" padding="sm">
+                  <p className="pg-body">{agent.result.summary}</p>
+                </Surface>
+              )}
+              {agent.result.disclosure && (
+                <p className="rounded-md bg-warning/10 px-3 py-2 pg-hint text-warning">
+                  Подбор упёрся в лимит шагов — ниже то, что удалось найти.
+                </p>
+              )}
+              <ul className="space-y-2">
+                {agent.offers.map((row) => {
+                  const href = offerLinkUrl(row.url, row.marketplace);
+                  const tracking = trackingUrl === href;
+                  return (
+                    <li key={`${row.marketplace}-${row.productId ?? row.url}`}>
+                      <Surface padding="sm" className="space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <Badge variant={marketplaceBadgeVariant(row.marketplace)}>
+                            {MARKETPLACE_SHORT_LABELS[row.marketplace]}
+                          </Badge>
+                          {row.price != null && row.price > 0 && (
+                            <span className="pg-subtitle tabular-nums text-primary">
+                              {formatPrice(row.price)}
+                            </span>
                           )}
-                          В «Мои товары»
-                        </Button>
-                        <ProductLink
-                          url={href}
-                          marketplace={row.marketplace}
-                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                          title="Открыть на площадке"
-                          aria-label="Открыть на площадке"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        </ProductLink>
-                      </div>
-                    </Surface>
-                  </li>
-                );
-              })}
-            </ul>
+                        </div>
+                        <p className="line-clamp-3 pg-body">{row.title}</p>
+                        {(row.rankReason || row.reason) && (
+                          <p className="pg-hint">{row.rankReason || row.reason}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="min-w-0 flex-1"
+                            disabled={tracking}
+                            onClick={() => void handleTrack(row)}
+                          >
+                            {tracking ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.75} />
+                            ) : (
+                              <PackagePlus className="h-3.5 w-3.5" strokeWidth={1.75} />
+                            )}
+                            Следить за ценой
+                          </Button>
+                          <ProductLink
+                            url={href}
+                            marketplace={row.marketplace}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                            title="Открыть на площадке"
+                            aria-label="Открыть на площадке"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} />
+                          </ProductLink>
+                        </div>
+                      </Surface>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </div>
       )}

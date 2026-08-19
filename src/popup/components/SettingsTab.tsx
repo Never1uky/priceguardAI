@@ -209,7 +209,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
       `HB ${metrics.hiddenBrowserSuccess}/${metrics.hiddenBrowserAttempts} · API ${metrics.apiSearchSuccess} · map ${metrics.mappingHits} · AI cache ${metrics.aiCacheLocalHits + metrics.aiCacheRemoteHits}/${metrics.aiCacheMisses}`,
     );
 
-    // После reinstall: подтянуть Chat ID с аккаунта
+    // После reinstall: подтянуть привязку Telegram с аккаунта
     if (loggedIn && !alerts.telegramChatId.trim()) {
       const pulled = await pullAlertSettingsFromCloud();
       if (pulled?.restored) {
@@ -257,7 +257,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
 
     const chatId = alertSettings.telegramChatId.trim();
     if (!chatId) {
-      setTelegramStatus('Укажите Chat ID (команда /chatid у бота) и повторите.');
+      setTelegramStatus('Откройте @PriceGuardAlertsBot, нажмите /start и повторите проверку.');
       setTelegramBusy(false);
       return;
     }
@@ -319,7 +319,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
           sync?.error ? `Причина: ${sync.error}` : null,
           networkFail
             ? 'Проверьте VPN/Zapret и DNS — supabase.co должен открываться.'
-            : 'Проверьте: вход в «Аккаунт» на этом Mac, Telegram Вкл, Chat ID, интернет.',
+            : 'Проверьте: вход в «Аккаунт» на этом устройстве, Telegram включён, интернет доступен.',
           test.sent ? 'Тест-сообщение в Telegram ушло, но привязка к аккаунту не сохранилась.' : null,
         ]
           .filter(Boolean)
@@ -551,7 +551,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
               </label>
             </div>
             <p className="pg-caption text-foreground/70">
-              Уведомим, если падение не меньше указанного ₽ и не меньше указанного %
+              Пришлём уведомление, если цена упадёт на указанную сумму ₽ или на указанный процент
             </p>
             <button
               type="button"
@@ -602,43 +602,49 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                 className={`h-1.5 w-1.5 rounded-full ${serverMonitoring ? 'bg-success' : 'bg-muted-foreground'}`}
                 aria-hidden
               />
-              Сервер {serverMonitoring ? 'Вкл' : 'Выкл'}
+              {serverMonitoring && alertSettings?.telegramEnabled
+                ? 'Проверка цен работает даже при закрытом Chrome'
+                : 'Telegram не подключён'}
             </Badge>
           </div>
 
-          <label className="block space-y-1">
-            <span className="pg-caption font-medium text-foreground/80">Chat ID</span>
-            <input
-              type="text"
-              placeholder="123456789"
-              aria-label="Telegram Chat ID"
-              disabled={alertSettings?.notificationsEnabled === false || !alertSettings?.telegramEnabled}
-              value={alertSettings?.telegramChatId ?? ''}
-              onChange={(e) =>
-                setAlertSettings((prev) =>
-                  prev ? { ...prev, telegramChatId: e.target.value } : prev,
-                )
-              }
-              onBlur={() => {
-                if (!alertSettings) return;
-                const chatId = alertSettings.telegramChatId.trim();
-                void (async () => {
-                  const saved = await savePriceAlertSettings(
-                    { telegramChatId: alertSettings.telegramChatId },
-                    { clearTelegram: chatId.length === 0 },
-                  );
-                  setAlertSettings(saved);
-                  if (chatId.length === 0 && saved.cloudSyncOk === false) {
-                    setTelegramStatus(
-                      `Chat ID очищен локально. Сервер: ${saved.cloudSyncError ?? 'ошибка'} — войдите и нажмите «Отключить».`,
+          <details className="rounded-sm bg-muted/35 px-2.5 py-2">
+            <summary className="cursor-pointer select-none pg-caption font-medium text-foreground/80">
+              Ручная привязка Telegram (если авто-подключение не сработало)
+            </summary>
+            <div className="mt-2 space-y-1">
+              <input
+                type="text"
+                placeholder="ID чата Telegram"
+                aria-label="Telegram ID"
+                disabled={alertSettings?.notificationsEnabled === false || !alertSettings?.telegramEnabled}
+                value={alertSettings?.telegramChatId ?? ''}
+                onChange={(e) =>
+                  setAlertSettings((prev) =>
+                    prev ? { ...prev, telegramChatId: e.target.value } : prev,
+                  )
+                }
+                onBlur={() => {
+                  if (!alertSettings) return;
+                  const chatId = alertSettings.telegramChatId.trim();
+                  void (async () => {
+                    const saved = await savePriceAlertSettings(
+                      { telegramChatId: alertSettings.telegramChatId },
+                      { clearTelegram: chatId.length === 0 },
                     );
-                  }
-                })();
-              }}
-              className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-            <p className="pg-caption">Ваш Telegram Chat ID для отправки уведомлений</p>
-          </label>
+                    setAlertSettings(saved);
+                    if (chatId.length === 0 && saved.cloudSyncOk === false) {
+                      setTelegramStatus(
+                        `Локально очищено. Сервер: ${saved.cloudSyncError ?? 'ошибка'} — войдите и нажмите «Отключить».`,
+                      );
+                    }
+                  })();
+                }}
+                className="w-full rounded-sm border-0 bg-muted/60 px-2.5 py-2 pg-body outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p className="pg-caption">Заполняйте только если подключение через кнопку не сработало.</p>
+            </div>
+          </details>
 
           <div className="flex items-center justify-between gap-3 rounded-sm bg-muted/40 px-3 py-2.5">
             <div className="min-w-0">
@@ -669,10 +675,10 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                     setServerMonitoring(false);
                     if (saved.cloudSyncOk === false) {
                       setTelegramStatus(
-                        `Локально выкл. Сервер: ${saved.cloudSyncError ?? 'не удалось снять Chat ID'} — войдите в «Аккаунт» и нажмите «Отключить».`,
+                        `Локально выключено. Сервер: ${saved.cloudSyncError ?? 'не удалось снять привязку Telegram'} — войдите в «Аккаунт» и нажмите «Отключить».`,
                       );
                     } else {
-                      setTelegramStatus('Telegram выключен, Chat ID снят с аккаунта.');
+                      setTelegramStatus('Telegram выключен, привязка Telegram снята с аккаунта.');
                     }
                   }
                   setTelegramBusy(false);
@@ -701,42 +707,22 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
             ) : (
               <Send className="h-4 w-4" strokeWidth={1.75} />
             )}
-            {alertSettings?.telegramChatId?.trim()
-              ? 'Проверить и сохранить'
-              : 'Подключить'}
+            Подключить Telegram
           </Button>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <a
-                href="https://t.me/pricealertbot"
+                href="https://t.me/PriceGuardAlertsBot"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 pg-hint font-medium text-primary hover:underline"
               >
-                Как получить Chat ID?
-              </a>
-              <a
-                href="https://t.me/PriceGuardAlertsBot"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 pg-hint font-medium text-muted-foreground hover:text-primary hover:underline"
-              >
-                @PriceGuardAlertsBot
+                Открыть @PriceGuardAlertsBot
               </a>
               <TelegramChannelLink variant="link" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1.5 text-[11px]"
-                disabled={telegramBusy || alertSettings?.notificationsEnabled === false}
-                onClick={() => void handleConnectTelegram()}
-              >
-                <Wifi className="h-3.5 w-3.5" strokeWidth={1.75} />
-                Проверить подключение
-              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -754,10 +740,10 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                     setServerMonitoring(false);
                     if (saved.cloudSyncOk === false) {
                       setTelegramStatus(
-                        `Локально отключён. Сервер: ${saved.cloudSyncError ?? 'не удалось снять Chat ID'} — войдите в «Аккаунт» и повторите «Отключить».`,
+                        `Локально отключено. Сервер: ${saved.cloudSyncError ?? 'не удалось снять привязку Telegram'} — войдите в «Аккаунт» и повторите «Отключить».`,
                       );
                     } else {
-                      setTelegramStatus('Telegram отключён, привязка Chat ID снята с аккаунта.');
+                      setTelegramStatus('Telegram отключён, привязка Telegram снята с аккаунта.');
                     }
                     setTelegramBusy(false);
                   })();
@@ -794,15 +780,15 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
           )}
           <p className="pg-caption leading-relaxed text-muted-foreground">
             {authed
-              ? 'Бот алертов @PriceGuardAlertsBot · Chat ID: @pricealertbot (/start). Вставьте ID выше → «Проверить и сохранить». Free — до 5 товаров; Premium — до 50. Chrome для алертов не обязателен.'
-              : 'Сначала войдите во вкладку «Аккаунт» на этом устройстве — без входа Chat ID не привяжется к серверу.'}
+              ? 'Бот алертов: @PriceGuardAlertsBot. Нажмите /start в боте и затем «Проверить подключение». Лимиты: Free — до 5 товаров и 3 AI-разбора в день; Premium — до 50 товаров.'
+              : 'Сначала войдите во вкладку «Аккаунт» на этом устройстве — без входа Telegram не привяжется к серверу.'}
           </p>
         </Surface>
       </section>
 
       {isDev && (
         <section className="space-y-2">
-          <SectionLabel>Для разработчиков</SectionLabel>
+          <SectionLabel>Диагностика</SectionLabel>
           <Surface variant="raised" className="overflow-hidden">
             <button
               type="button"

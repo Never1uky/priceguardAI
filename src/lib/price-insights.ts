@@ -87,7 +87,8 @@ export function analyzePriceHistory(
     return {
       kind: 'average',
       label: 'Собираем историю',
-      detail: 'Откройте товар ещё раз — появится график цен',
+      detail:
+        'Пока одна проверка — цена как на этой карточке. График появится позже.',
       minPrice,
       maxPrice,
       avgPrice,

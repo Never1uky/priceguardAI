@@ -43,7 +43,7 @@ import { useEffect, useState } from 'react';
 
 const PREMIUM_FEATURES = [
   'Неограниченный AI-анализ товаров',
-  'Глубокий разбор: AI + веб-контекст (Sonar)',
+  'Глубокий разбор: AI + актуальный веб-контекст',
   'До 50 товаров в отслеживании',
   'Алерты о цене + приоритет проверки (без Chrome)',
   'Сравнение · где дешевле на всех маркетплейсах',
@@ -358,7 +358,7 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
                 ))}
               </ul>
               <p className="pt-1 pg-caption text-muted-foreground">
-                Free: {FREE_LIMITS.maxAiRequestsPerDay} AI-анализов в сутки
+                Бесплатно: {FREE_LIMITS.maxAiRequestsPerDay} разбора в день
               </p>
           </Surface>
 
@@ -368,8 +368,7 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
               </p>
               <p className="pg-hint">
                 Нужен вход в аккаунт. Лицензия привязывается к аккаунту — после переустановки
-                войдите снова, Premium восстановится. Ключ также можно запросить командой /mykey у
-                @priceguard_supportbot (если Telegram подключён в Настройках).
+                войдите снова, Premium восстановится. Если ключ потерялся, напишите в поддержку.
               </p>
               {!isAuthenticated ? (
                 <Button
@@ -435,7 +434,6 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
             {!onTrial && (
               <p className="pg-hint">
                 Лицензия привязана к аккаунту. После переустановки войдите — Premium восстановится.
-                Ключ: /mykey в @priceguard_supportbot.
               </p>
             )}
             {onTrial && (

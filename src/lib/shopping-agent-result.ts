@@ -141,10 +141,11 @@ export function parseAgentSearchResult(raw: unknown): AgentSearchResult | null {
   };
 }
 
-/** Ranked order first; fall back to matched if rank list is empty. */
+/** Ranked order first; fall back to matched if rank list is empty. Only matches:true. */
 export function joinAgentOffers(result: AgentSearchResult): AgentOfferRow[] {
+  const accepted = result.matched.filter((item) => item.matches !== false);
   const byId = new Map<string, AgentEvaluatedCandidate>();
-  for (const item of result.matched) {
+  for (const item of accepted) {
     const key = item.productId || item.url;
     byId.set(key, item);
   }
@@ -154,12 +155,12 @@ export function joinAgentOffers(result: AgentSearchResult): AgentOfferRow[] {
     for (const rank of result.ranked) {
       const hit =
         byId.get(rank.productId) ??
-        result.matched.find((m) => m.productId === rank.productId);
+        accepted.find((m) => m.productId === rank.productId);
       if (!hit) continue;
       rows.push({ ...hit, score: rank.score, rankReason: rank.reason });
     }
     if (rows.length) return rows;
   }
 
-  return result.matched.map((item) => ({ ...item }));
+  return accepted.map((item) => ({ ...item }));
 }
