@@ -454,7 +454,7 @@ export function App() {
                 PriceGuard AI
               </h1>
               <p className="pg-caption">
-                v{chrome.runtime.getManifest().version} · Beta · WB · Ozon · Я.Маркет
+                Сравнение цен на Wildberries, Ozon и Маркете
               </p>
             </div>
           </div>

@@ -29,7 +29,7 @@ export function ProductContextBar({ product, dataSource, isLoading }: ProductCon
     return (
       <div className="border-t border-border px-4 py-3">
         <p className="pg-hint text-center text-foreground/70">
-          Откройте карточку товара на WB, Ozon или Я.Маркет
+          Откройте любой товар на Wildberries. Сравнение появится само.
         </p>
       </div>
     );

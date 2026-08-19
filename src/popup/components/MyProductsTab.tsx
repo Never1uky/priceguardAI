@@ -362,8 +362,8 @@ export function MyProductsTab({
       {items.length === 0 ? (
         <EmptyState
           icon={PackageSearch}
-          title="Пока нет товаров"
-          description="Добавьте товар с вкладки «Текущая цена» кнопкой «В Мои товары» — сразу запустится поиск по площадкам и появятся оповещения."
+          title="Пока ничего не отслеживаете"
+          description="Откройте карточку на Wildberries и нажмите «Следить за ценой». Сообщим, если подешевеет."
         >
           {liveProduct && onAddLiveProduct && (
             <Button size="sm" className="mt-2" onClick={() => void onAddLiveProduct()}>

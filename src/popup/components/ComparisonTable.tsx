@@ -586,6 +586,13 @@ export function ComparisonTable({
       isOfferWithPrice(searchingOffer));
   const showSearchOverlay = Boolean(isLoading) && !searchingSlotSettled;
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
+  const confirmedOffersCount = offers.filter((offer) => {
+    if (!isOfferWithPrice(offer) || offer.needsManualPick) return false;
+    const status = offerMatchStatus(offer, {
+      isSource: offer.marketplace === sourceMarketplace,
+    });
+    return status === 'verified' || status === 'probable';
+  }).length;
 
   useEffect(() => {
     void chrome.storage.local.get(MATCH_WARN_DISMISS_KEY).then((stored) => {
@@ -650,7 +657,10 @@ export function ComparisonTable({
                 : null;
             const showMatchWarn = warnKind != null;
             const isCheapest =
-              cheapest?.marketplace === offer.marketplace && hasPrice && !showMatchWarn;
+              confirmedOffersCount >= 2 &&
+              cheapest?.marketplace === offer.marketplace &&
+              hasPrice &&
+              !showMatchWarn;
             const isLinking = linkingMarketplace === offer.marketplace;
             const isRejecting = rejectingMarketplace === offer.marketplace;
             const isSelecting = selectingMarketplace === offer.marketplace;
@@ -693,6 +703,11 @@ export function ComparisonTable({
                         <Trophy className="h-3 w-3" aria-hidden />
                         Где дешевле
                       </Badge>
+                    )}
+                    {isSource && hasPrice && confirmedOffersCount < 2 && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Эта карточка · {marketplaceShortLabel[offer.marketplace]}
+                      </p>
                     )}
                     {showMatchWarn && (
                       <div className="flex items-start gap-1 rounded-sm bg-amber-500/10 px-1.5 py-1 text-[10px] leading-snug text-amber-900 dark:text-amber-100">
@@ -753,10 +768,16 @@ export function ComparisonTable({
                               disabled={isLoading}
                               onClick={() => onResearchMarketplace(offer.marketplace)}
                               className="mt-0.5 h-7 gap-1 px-2 text-[10px] font-medium"
-                              title={`Найти товар только на ${marketplaceShortLabel[offer.marketplace]}`}
+                              title={
+                                formatted.kind === 'unavailable'
+                                  ? `Повторить попытку для ${marketplaceShortLabel[offer.marketplace]}`
+                                  : `Найти товар только на ${marketplaceShortLabel[offer.marketplace]}`
+                              }
                             >
                               <Search className="h-3 w-3" />
-                              Найти на {marketplaceShortLabel[offer.marketplace]}
+                              {formatted.kind === 'unavailable'
+                                ? 'Повторить'
+                                : `Найти на ${marketplaceShortLabel[offer.marketplace]}`}
                             </Button>
                           ) : null}
                         </div>

@@ -39,8 +39,8 @@ export function ReviewPreviewQuotes({
         <SectionLabel>Превью отзывов</SectionLabel>
         <EmptyState
           icon={MessageSquareText}
-          title="Отзывов пока нет"
-          description="Откройте карточку товара на маркетплейсе или вставьте ссылку выше."
+          title="У этого товара пока нет отзывов"
+          description="Разбор по отзывам недоступен. Можно сравнить цену на вкладке «Цены»."
           className="rounded-[20px] py-6"
         />
       </Surface>

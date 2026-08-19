@@ -9,7 +9,7 @@ export const AUTH_REQUIRED_MESSAGE =
   'Войдите во вкладку «Аккаунт» для синхронизации и облачных функций';
 
 export const AI_AUTH_REQUIRED_MESSAGE =
-  'Войдите во вкладку «Аккаунт» (email и пароль), чтобы использовать AI-анализ.';
+  'Войдите, чтобы разобрать отзывы.';
 
 /** Supabase настроен и есть активная сессия */
 export async function canUseCloudFeatures(): Promise<boolean> {

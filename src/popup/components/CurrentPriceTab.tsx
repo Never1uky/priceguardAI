@@ -67,10 +67,22 @@ export function CurrentPriceTab({
     );
   }
 
-  if (!product || showAgent) {
+  if (!product && !showAgent) {
+    return (
+      <div className="space-y-2 rounded-md bg-muted/40 p-4 text-center">
+        <p className="pg-subtitle">Нет открытого товара</p>
+        <p className="pg-hint">
+          Откройте любой товар на Wildberries, Ozon или Яндекс Маркете — цена и сравнение появятся здесь.
+        </p>
+        <p className="pg-caption text-muted-foreground">Или вставьте ссылку во вкладке «Отзывы».</p>
+      </div>
+    );
+  }
+
+  if (showAgent) {
     return (
       <div className="space-y-3">
-        {product && (
+        {product ? (
           <Button
             variant="ghost"
             size="sm"
@@ -80,16 +92,14 @@ export function CurrentPriceTab({
             <ChevronLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
             К карточке
           </Button>
-        )}
+        ) : null}
         <ShoppingAgentPanel onOpenAuth={onOpenAuth} />
-        {!product && (
-          <p className="text-center pg-hint">
-            {error ?? 'Или откройте карточку на Wildberries, Ozon или Яндекс.Маркет'}
-          </p>
-        )}
+        {!product ? <p className="text-center pg-hint">{error ?? 'Нет открытого товара'}</p> : null}
       </div>
     );
   }
+
+  if (!product) return null;
 
   const displayPrice = product.basePrice ?? product.price;
   const discount =
