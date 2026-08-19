@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PriceGuard AI",
-  "version": "0.9.100",
+  "version": "0.9.101",
   "description": "AI-анализ отзывов, сравнение цен WB/Ozon/Маркет и алерты в Telegram — даже без открытого Chrome",
   "permissions": [
     "storage",
