@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  aggregateFeedbackBiasByFingerprint,
   aggregateMatchFeedback,
   multiUserMappingConfidence,
   shouldPromoteMultiUserMapping,
@@ -69,5 +70,29 @@ describe('multi-user-mapping promotion', () => {
     expect(multiUserMappingConfidence(2)).toBe(80);
     expect(multiUserMappingConfidence(6)).toBe(95);
     expect(multiUserMappingConfidence(2, 88)).toBe(88);
+  });
+
+  it('aggregates weak labels by fingerprint', () => {
+    const rows = aggregateFeedbackBiasByFingerprint([
+      {
+        accepted: true,
+        created_at: '2026-07-01T10:00:00Z',
+        fingerprint: 'wb|iphone17|256',
+      },
+      {
+        accepted: false,
+        created_at: '2026-07-02T10:00:00Z',
+        fingerprint: 'wb|iphone17|256',
+      },
+      {
+        accepted: true,
+        created_at: '2026-07-03T10:00:00Z',
+        fingerprint: 'wb|iphone17|512',
+      },
+    ]);
+    expect(rows).toHaveLength(2);
+    const a = rows.find((r) => r.fingerprint === 'wb|iphone17|256');
+    expect(a?.accepts).toBe(1);
+    expect(a?.rejects).toBe(1);
   });
 });

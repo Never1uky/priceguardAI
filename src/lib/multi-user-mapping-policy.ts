@@ -12,6 +12,7 @@ interface FeedbackRow {
   created_at: string;
   user_id?: string | null;
   match_confidence?: number | null;
+  fingerprint?: string | null;
 }
 
 export function scoreTitleSimilarity(ref: string, cand: string): number {
@@ -116,4 +117,42 @@ export function multiUserMappingConfidence(accepts: number, matchConfidence?: nu
     return Math.min(95, Math.max(fromVotes, Math.round(matchConfidence)));
   }
   return fromVotes;
+}
+
+export interface FingerprintFeedbackBias {
+  fingerprint: string;
+  accepts: number;
+  rejects: number;
+  rejectsRecent: number;
+}
+
+/**
+ * Aggregate accept/reject weak labels per deterministic fingerprint.
+ * Missing fingerprint rows are ignored to prevent noisy overfitting.
+ */
+export function aggregateFeedbackBiasByFingerprint(
+  rows: FeedbackRow[],
+  nowMs = Date.now(),
+): FingerprintFeedbackBias[] {
+  const rejectSince = nowMs - DISPUTE_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+  const map = new Map<string, FingerprintFeedbackBias>();
+  for (const row of rows) {
+    const fp = row.fingerprint?.trim().toLowerCase();
+    if (!fp) continue;
+    const current = map.get(fp) ?? {
+      fingerprint: fp,
+      accepts: 0,
+      rejects: 0,
+      rejectsRecent: 0,
+    };
+    if (row.accepted) {
+      current.accepts += 1;
+    } else {
+      current.rejects += 1;
+      const ts = Date.parse(String(row.created_at));
+      if (Number.isFinite(ts) && ts >= rejectSince) current.rejectsRecent += 1;
+    }
+    map.set(fp, current);
+  }
+  return [...map.values()];
 }

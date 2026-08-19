@@ -33,6 +33,23 @@ describe('match-status', () => {
     expect(d.status).toBe('needs_choice');
   });
 
+  it('calibrated thresholds are stricter for auto-pick boundary', () => {
+    const base = decideMatchOutcome({
+      bestMatch: 71,
+      secondMatch: 60,
+      alternativeCount: 0,
+      featureFlags: { enableCalibratedThresholds: false },
+    });
+    const calibrated = decideMatchOutcome({
+      bestMatch: 71,
+      secondMatch: 60,
+      alternativeCount: 0,
+      featureFlags: { enableCalibratedThresholds: true },
+    });
+    expect(base.autoPick).toBe(true);
+    expect(calibrated.autoPick).toBe(false);
+  });
+
   it('priority boosts cheaper high-rated offers', () => {
     const a = computeCandidatePriority({
       match: 90,

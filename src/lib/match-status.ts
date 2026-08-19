@@ -9,6 +9,7 @@ import {
   MIN_COMPARE_MATCH_CONFIDENCE,
   isCloseMatchTie,
 } from '@/lib/product-match';
+import { resolveMatchFeatureFlags, type MatchFeatureFlags } from '@/lib/match-flags';
 import type { MarketplaceOffer, SearchCandidateOffer } from '@/types/comparison';
 
 /** Публичные статусы — без процентов */
@@ -25,6 +26,9 @@ export type MatchStatus =
 
 /** Среди близких матчей: разброс цен ≥5% → ручной выбор */
 export const PRICE_SPREAD_FORCE_CHOICE_RATIO = 1.05;
+export const CALIBRATED_MIN_COMPARE_MATCH_CONFIDENCE = 57;
+export const CALIBRATED_AUTO_PICK_CONFIDENCE_THRESHOLD = 72;
+export const CALIBRATED_VERIFIED_CONFIDENCE_NO_ALTS = 90;
 
 export const MATCH_STATUS_LABELS: Record<MatchStatus, string> = {
   verified: 'Проверено',
@@ -75,6 +79,7 @@ export function resolveMatchStatus(input: {
   needsManualPick?: boolean;
   matchConfidence?: number;
   alternativeCount?: number;
+  featureFlags?: Partial<MatchFeatureFlags>;
 }): MatchStatus {
   if (input.isSource || input.isManual) return 'verified';
 
@@ -84,12 +89,22 @@ export function resolveMatchStatus(input: {
 
   const conf = input.matchConfidence ?? 0;
   const alts = input.alternativeCount ?? 0;
+  const flags = resolveMatchFeatureFlags(input.featureFlags);
+  const minCompare = flags.enableCalibratedThresholds
+    ? CALIBRATED_MIN_COMPARE_MATCH_CONFIDENCE
+    : MIN_COMPARE_MATCH_CONFIDENCE;
+  const autoPick = flags.enableCalibratedThresholds
+    ? CALIBRATED_AUTO_PICK_CONFIDENCE_THRESHOLD
+    : AUTO_PICK_CONFIDENCE_THRESHOLD;
+  const verifiedNoAlts = flags.enableCalibratedThresholds
+    ? CALIBRATED_VERIFIED_CONFIDENCE_NO_ALTS
+    : 90;
 
-  if (conf >= 90 && alts === 0) return 'verified';
-  if (conf >= AUTO_PICK_CONFIDENCE_THRESHOLD) {
+  if (conf >= verifiedNoAlts && alts === 0) return 'verified';
+  if (conf >= autoPick) {
     return alts > 0 ? 'probable' : conf >= 85 ? 'verified' : 'probable';
   }
-  if (conf >= MIN_COMPARE_MATCH_CONFIDENCE) return 'probable';
+  if (conf >= minCompare) return 'probable';
 
   return 'not_found';
 }
@@ -194,14 +209,22 @@ export function decideMatchOutcome(params: {
   bestMatch: number;
   secondMatch?: number;
   alternativeCount: number;
+  featureFlags?: Partial<MatchFeatureFlags>;
 }): {
   autoPick: boolean;
   needsChoice: boolean;
   status: MatchStatus;
 } {
   const { bestMatch, secondMatch, alternativeCount } = params;
+  const flags = resolveMatchFeatureFlags(params.featureFlags);
+  const minCompare = flags.enableCalibratedThresholds
+    ? CALIBRATED_MIN_COMPARE_MATCH_CONFIDENCE
+    : MIN_COMPARE_MATCH_CONFIDENCE;
+  const autoPick = flags.enableCalibratedThresholds
+    ? CALIBRATED_AUTO_PICK_CONFIDENCE_THRESHOLD
+    : AUTO_PICK_CONFIDENCE_THRESHOLD;
 
-  if (bestMatch < MIN_COMPARE_MATCH_CONFIDENCE) {
+  if (bestMatch < minCompare) {
     return {
       autoPick: false,
       needsChoice: alternativeCount > 0,
@@ -209,7 +232,7 @@ export function decideMatchOutcome(params: {
     };
   }
 
-  if (bestMatch < AUTO_PICK_CONFIDENCE_THRESHOLD) {
+  if (bestMatch < autoPick) {
     return { autoPick: false, needsChoice: true, status: 'needs_choice' };
   }
 
@@ -221,6 +244,7 @@ export function decideMatchOutcome(params: {
     found: true,
     matchConfidence: bestMatch,
     alternativeCount,
+    featureFlags: params.featureFlags,
   });
 
   return { autoPick: true, needsChoice: false, status };

@@ -19,6 +19,7 @@ import {
 import { extractProductFeatures, scoreFeatureMatch } from '@/lib/product-features';
 import { isWildberriesFeedbacksUrl } from '@/utils/product-url';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
+import { resolveMatchFeatureFlags, type MatchFeatureFlags } from '@/lib/match-flags';
 
 /** Минимальная уверенность совпадения (0–100) для удержания оффера в сравнении */
 export const MIN_COMPARE_MATCH_CONFIDENCE = 55;
@@ -189,6 +190,34 @@ function pickScoreBoostForUrl(
   }
 }
 
+function pickFeedbackBiasForUrl(
+  url: string | undefined,
+  feedbackBiasByUrl?: ReadonlyMap<string, number>,
+): number {
+  if (!url || !feedbackBiasByUrl?.size) return 0;
+  const direct = feedbackBiasByUrl.get(url.toLowerCase());
+  if (direct != null) return direct;
+  try {
+    const normalized = normalizeCompareUrl(url).toLowerCase();
+    return feedbackBiasByUrl.get(normalized) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function isFeedbackBlockedUrl(
+  url: string | undefined,
+  blockedCandidateUrls?: ReadonlySet<string>,
+): boolean {
+  if (!url || !blockedCandidateUrls?.size) return false;
+  if (blockedCandidateUrls.has(url.toLowerCase())) return true;
+  try {
+    return blockedCandidateUrls.has(normalizeCompareUrl(url).toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function pickScoreBoost<T>(
   candidate: T,
   options: PickMatchOptions & { getUrl?: (item: T) => string | undefined },
@@ -201,7 +230,17 @@ function applyPickScoreBoost<T>(
   candidate: T,
   options: PickMatchOptions & { getUrl?: (item: T) => string | undefined },
 ): number {
-  return Math.min(1, baseScore + pickScoreBoost(candidate, options));
+  if (baseScore <= 0) return 0; // hard-gates always win
+  const flags = resolveMatchFeatureFlags(options.featureFlags);
+  const url = options.getUrl?.(candidate);
+  if (flags.enableFeedbackBias && isFeedbackBlockedUrl(url, options.blockedCandidateUrls)) {
+    return 0;
+  }
+  const historyBoost = pickScoreBoost(candidate, options);
+  const feedbackBias = flags.enableFeedbackBias
+    ? pickFeedbackBiasForUrl(url, options.feedbackBiasByUrl)
+    : 0;
+  return Math.min(1, Math.max(0, baseScore + historyBoost + feedbackBias));
 }
 
 /** Ручная ссылка: ниже порога или чужой бренд — спросить подтверждение */
@@ -242,6 +281,12 @@ export interface PickMatchOptions {
    * Does not bypass brand/price filters — tie-break only.
    */
   scoreBoostByUrl?: ReadonlyMap<string, number>;
+  /** Weak-label score bias by URL fingerprint (capped externally, e.g. -0.08..+0.06). */
+  feedbackBiasByUrl?: ReadonlyMap<string, number>;
+  /** Hard block list from recent rejects/disputes for weak-label policy. */
+  blockedCandidateUrls?: ReadonlySet<string>;
+  /** P2 rollout flags. Defaults are safe OFF. */
+  featureFlags?: Partial<MatchFeatureFlags>;
 }
 
 /**
@@ -698,6 +743,13 @@ export function pickBestMatchWithScore<T>(
     if (options.getUrl && isUrlExcluded(options.getUrl(candidate), excluded)) {
       continue;
     }
+    if (
+      resolveMatchFeatureFlags(options.featureFlags).enableFeedbackBias &&
+      options.getUrl &&
+      isFeedbackBlockedUrl(options.getUrl(candidate), options.blockedCandidateUrls)
+    ) {
+      continue;
+    }
 
     if (refPrice && options.getPrice) {
       const candPrice = options.getPrice(candidate);
@@ -744,6 +796,13 @@ export function pickTopMatchesWithScore<T>(
 
   for (const candidate of candidates) {
     if (options.getUrl && isUrlExcluded(options.getUrl(candidate), excluded)) {
+      continue;
+    }
+    if (
+      resolveMatchFeatureFlags(options.featureFlags).enableFeedbackBias &&
+      options.getUrl &&
+      isFeedbackBlockedUrl(options.getUrl(candidate), options.blockedCandidateUrls)
+    ) {
       continue;
     }
 
@@ -794,6 +853,13 @@ export function pickBestMatchWithFallback<T>(
 
   for (const candidate of candidates) {
     if (options.getUrl && isUrlExcluded(options.getUrl(candidate), excluded)) {
+      continue;
+    }
+    if (
+      resolveMatchFeatureFlags(options.featureFlags).enableFeedbackBias &&
+      options.getUrl &&
+      isFeedbackBlockedUrl(options.getUrl(candidate), options.blockedCandidateUrls)
+    ) {
       continue;
     }
 

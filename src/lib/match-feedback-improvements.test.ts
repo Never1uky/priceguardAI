@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeFeedbackScoreBias,
   demoteMappingOnDispute,
   hasBlockingRejectFeedback,
   shouldSkipAutoUpsert,
@@ -38,6 +39,15 @@ describe('1a mapping demotion policy', () => {
     expect(hasBlockingRejectFeedback(1)).toBe(true);
     expect(hasBlockingRejectFeedback(0, { disputedOrDead: true })).toBe(true);
     expect(hasBlockingRejectFeedback(0)).toBe(false);
+  });
+
+  it('computes capped weak-label score bias', () => {
+    const positive = computeFeedbackScoreBias({ accepts: 5, rejects: 0 });
+    const negative = computeFeedbackScoreBias({ accepts: 0, rejects: 5 });
+    const blocked = computeFeedbackScoreBias({ accepts: 2, rejects: 1, rejectsRecent: 1 });
+    expect(positive.delta).toBeGreaterThan(0);
+    expect(negative.delta).toBeLessThan(0);
+    expect(blocked.blocked).toBe(true);
   });
 
   it('blocks multi_user promote when rejects >= half accepts', () => {
