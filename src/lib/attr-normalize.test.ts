@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractNormalizedColor,
+  extractNormalizedConnector,
   extractNormalizedPackageCount,
   extractNormalizedStorage,
   extractNormalizedVolumeMl,
+  normalizeConnector,
   normalizeColor,
   normalizePackageCount,
   normalizeStorage,
@@ -44,6 +46,18 @@ describe('attr-normalize', () => {
     expect(normalizePackageCount('6 шт')).toBe(6);
     expect(normalizePackageCount('уп. 12')).toBe(12);
     expect(extractNormalizedPackageCount('Салфетки 24 шт в уп')).toBe(24);
+  });
+
+  it('normalizes connector aliases to canonical values', () => {
+    expect(normalizeConnector('USB-C')).toBe('usb-c');
+    expect(normalizeConnector('Type C')).toBe('usb-c');
+    expect(normalizeConnector('Lightning')).toBe('lightning');
+    expect(normalizeConnector('3.5 мм')).toBe('3.5mm');
+    expect(normalizeConnector('mini-jack')).toBe('3.5mm');
+    expect(normalizeConnector('USB A')).toBe('usb-a');
+    expect(
+      extractNormalizedConnector('Apple AirPods Pro 2 USB-C с зарядным кейсом'),
+    ).toBe('usb-c');
   });
 });
 

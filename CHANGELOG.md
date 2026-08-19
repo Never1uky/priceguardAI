@@ -4,6 +4,22 @@
 
 ---
 
+## Unreleased — Matching P0 hardening
+
+- `scoreProductMatch`: hard identity-gates для lineage/model/storage/connector теперь не «реанимируются» title similarity fallback.
+- Добавлен connector normalization/extraction (`usb-c`, `lightning`, `3.5mm`, `usb-a`) и category-aware connector handling для `headphones`/`accessories`.
+- Добавлены P0 golden regression tests: iPhone storage mismatch, AirPods connector mismatch/unknown, Dyson host vs dependent.
+
+---
+
+## 0.9.99 — 2026-08-18
+
+### Shopping Agent
+
+- Пустые soft-критерии (skip-parse: «Pixel 8», «блок питания 750W») больше не зовут AI-judge: все кандидаты matches:true, без лимита шагов и тройного empty в UI.
+
+---
+
 ## 0.9.98 — 2026-08-17
 
 ### Shopping Agent

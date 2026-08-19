@@ -5,6 +5,7 @@
 
 import {
   extractNormalizedColor,
+  extractNormalizedConnector,
   extractNormalizedMaterial,
   extractNormalizedPackageCount,
   extractNormalizedSize,
@@ -12,6 +13,7 @@ import {
   extractNormalizedVolumeMl,
   extractNormalizedWeightG,
   normalizeColor,
+  normalizeConnector,
   normalizeStorage,
 } from '@/lib/attr-normalize';
 import {
@@ -44,6 +46,7 @@ export interface ProductFeatures {
   gender?: string;
   material?: string;
   mpn?: string;
+  connector?: string;
 }
 
 /** Legacy default weights (generic / electronics-lite). Sum ≈ 100 */
@@ -93,6 +96,7 @@ export function extractProductFeatures(title: string, specs?: string): ProductFe
     normalizeColor(variant.color) ??
     extractNormalizedColor(title, specs) ??
     variant.color;
+  const connector = normalizeConnector(`${title} ${specs ?? ''}`) ?? extractNormalizedConnector(title, specs);
 
   return {
     brand: info.brand,
@@ -109,6 +113,7 @@ export function extractProductFeatures(title: string, specs?: string): ProductFe
     gender: extractGender(title, specs),
     material: extractNormalizedMaterial(title, specs),
     mpn: extractMpn(title, specs),
+    connector,
   };
 }
 
@@ -150,6 +155,8 @@ function featurePresent(
       return Boolean(features.gender);
     case 'material':
       return Boolean(features.material);
+    case 'connector':
+      return Boolean(features.connector);
     case 'title':
       return Boolean(features.title);
     case 'price':
@@ -225,6 +232,10 @@ function featureEqual(
     case 'material': {
       if (!reference.material || !candidate.material) return 'unknown';
       return reference.material === candidate.material;
+    }
+    case 'connector': {
+      if (!reference.connector || !candidate.connector) return 'unknown';
+      return reference.connector === candidate.connector;
     }
     case 'title':
     case 'price':

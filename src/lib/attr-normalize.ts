@@ -20,6 +20,8 @@ export type ColorFamily =
   | 'yellow'
   | 'multicolor';
 
+export type ConnectorType = 'usb-c' | 'lightning' | '3.5mm' | 'usb-a';
+
 const COLOR_ALIASES: Record<string, ColorFamily> = {
   black: 'black',
   чёрный: 'black',
@@ -321,6 +323,28 @@ export function colorsCompatible(
 ): boolean | 'unknown' {
   if (!a || !b) return 'unknown';
   return normalizeColor(a) === normalizeColor(b);
+}
+
+const CONNECTOR_ALIASES: Array<{ re: RegExp; value: ConnectorType }> = [
+  { re: /\b(?:usb[\s\-]?c|type[\s\-]?c|тайп[\s\-]?си|typec)\b/i, value: 'usb-c' },
+  { re: /\b(?:lightning|лайтнинг)\b/i, value: 'lightning' },
+  { re: /(?:3[\.,]5\s*(?:mm|мм)|jack\s*3[\.,]5|mini[\s\-]?jack)/i, value: '3.5mm' },
+  { re: /\b(?:usb[\s\-]?a|type[\s\-]?a)\b/i, value: 'usb-a' },
+];
+
+export function normalizeConnector(raw: string | null | undefined): ConnectorType | undefined {
+  if (!raw) return undefined;
+  const text = raw.toLowerCase().replace(/\u00a0/g, ' ').trim();
+  if (!text) return undefined;
+  for (const alias of CONNECTOR_ALIASES) {
+    if (alias.re.test(text)) return alias.value;
+  }
+  return undefined;
+}
+
+export function extractNormalizedConnector(title: string, specs?: string): ConnectorType | undefined {
+  const combined = `${title} ${specs ?? ''}`;
+  return normalizeConnector(combined);
 }
 
 export function storageCompatible(

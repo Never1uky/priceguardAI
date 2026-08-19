@@ -362,16 +362,12 @@ export function scoreProductMatch(
 
   // Same product line, different generation digit (Buds 5 ≠ Buds 6)
   if (!areLineageGenerationsCompatible(referenceTitle, candidateTitle)) {
-    return Math.min(
-      titleSimilarity(referenceTitle, candidateTitle),
-      productTokenOverlapScore(referenceTitle, candidateTitle),
-      0.15,
-    );
+    return 0;
   }
 
   // Разные бренды (Redmi ≠ Realme, ASUS ≠ Xiaomi) — жёсткий штраф
   if (!areBrandsCompatible(referenceTitle, candidateTitle)) {
-    return 0.05;
+    return 0;
   }
 
   const refModel = extractProductModel(referenceTitle);
@@ -393,11 +389,7 @@ export function scoreProductMatch(
       (refLin!.lineage === candLin!.lineage ||
         (refLin!.lineage.startsWith('buds:') && candLin!.lineage.startsWith('buds:')));
     if (!sameLineageGen) {
-      return Math.min(
-        titleSimilarity(referenceTitle, candidateTitle),
-        productTokenOverlapScore(referenceTitle, candidateTitle),
-        0.15,
-      );
+      return 0;
     }
   }
 
@@ -409,6 +401,28 @@ export function scoreProductMatch(
     candFeatures.category = category;
   }
   const resolvedCategory = refFeatures.category ?? candFeatures.category;
+
+  // Hard identity gate: storage mismatch for categories where storage defines SKU.
+  if (
+    resolvedCategory &&
+    shouldPenalizeStorageMismatch(resolvedCategory) &&
+    refFeatures.storage &&
+    candFeatures.storage &&
+    refFeatures.storage !== candFeatures.storage
+  ) {
+    return 0;
+  }
+
+  // Hard identity gate: connector mismatch where connector defines SKU.
+  if (
+    (resolvedCategory === 'headphones' || resolvedCategory === 'accessories') &&
+    refFeatures.connector &&
+    candFeatures.connector &&
+    refFeatures.connector !== candFeatures.connector
+  ) {
+    return 0;
+  }
+
   const { score: featureScore } = scoreFeatureMatch(refFeatures, candFeatures, true);
   let score = featureScore / 100;
 
@@ -491,6 +505,14 @@ export function scoreProductMatch(
   // generic ↔ specific: never high-confidence auto-pick
   if (genericVsSpecific) {
     score = Math.min(score, GENERIC_VS_SPECIFIC_SCORE_CAP);
+  }
+
+  // Connector unknown on one side: allow compare, but no auto-pick for connector-sensitive categories.
+  if (
+    (resolvedCategory === 'headphones' || resolvedCategory === 'accessories') &&
+    ((refFeatures.connector && !candFeatures.connector) || (!refFeatures.connector && candFeatures.connector))
+  ) {
+    score = Math.min(score, 0.69);
   }
 
   return score;
