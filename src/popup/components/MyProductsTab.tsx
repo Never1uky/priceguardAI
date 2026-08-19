@@ -468,12 +468,23 @@ export function MyProductsTab({
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
                     </Button>
+                  </div>
+                  <button
+                    type="button"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm hover:bg-muted/60"
+                    title={expanded ? 'Свернуть' : 'Развернуть'}
+                    aria-expanded={expanded}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void toggleExpand(item);
+                    }}
+                  >
                     {expanded ? (
                       <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
                     ) : (
                       <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
-                  </div>
+                  </button>
                 </div>
 
                 {showDetail && (

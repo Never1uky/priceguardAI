@@ -351,7 +351,7 @@ function CandidatePicker({
                     )}
                     <div className="min-w-0 flex-1">
                       <p
-                        className={`line-clamp-2 text-[11px] font-medium leading-snug ${
+                        className={`line-clamp-3 text-[12px] font-medium leading-snug ${
                           alreadyRejected ? 'text-muted-foreground line-through' : ''
                         }`}
                         title={candidate.title}
@@ -620,10 +620,10 @@ export function ComparisonTable({
           <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
           <p>
             {searchingMarketplace === SEARCHING_MP_CROSS
-              ? 'Продолжаем поиск на других площадках — уже найденные строки остаются видимыми.'
+              ? 'Поиск: WB · Ozon · Я.Маркет — уже найденные строки остаются видимыми.'
               : searchingMarketplace
-                ? `Ищем на ${marketplaceShortLabel[searchingMarketplace]} — остальные строки уже готовы.`
-                : 'Обновляем цены — уже найденные строки остаются видимыми.'}
+                ? `Ищем на ${marketplaceShortLabel[searchingMarketplace]} — остальные площадки уже готовы.`
+                : 'Обновляем цены на всех площадках — найденные строки остаются видимыми.'}
           </p>
         </div>
       )}
@@ -727,7 +727,7 @@ export function ComparisonTable({
                       </div>
                     )}
                     {hasPrice && offer.title && offer.title !== 'Товар' && (
-                      <p className="line-clamp-2 text-[11px] text-foreground/90" title={offer.title}>
+                      <p className="line-clamp-3 text-[12px] text-foreground/90" title={offer.title}>
                         {offer.title}
                       </p>
                     )}

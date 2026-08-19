@@ -10,6 +10,7 @@ import { resolveAfterEnsure, type AddToMyProductsResult } from '@/lib/add-to-my-
 import { logAuthenticityCheck } from '@/lib/authenticity/supabase-log';
 import { loadReferralSettings } from '@/lib/referral-settings';
 import { canAddMyProduct, canTrackMoreProducts, isPremium, syncSubscriptionWithServer } from '@/lib/subscription';
+import { isLiveProductInTrackedList } from '@/lib/price-identity';
 import { loadUiTheme, saveUiTheme, type UiTheme } from '@/lib/ui-theme';
 import { sendRuntimeMessage } from '@/lib/runtime-message';
 import { isFullAnalysisBusy, FULL_ANALYSIS_BUSY_MESSAGE } from '@/lib/ai-busy-lock';
@@ -397,18 +398,31 @@ export function App() {
   };
 
   const handleRefreshTrackedList = async () => {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      toastUserError('Нет сети — проверьте интернет и повторите.');
+      return;
+    }
     setListRefreshing(true);
     try {
-      const { syncTrackedProductsWithCloud } = await import('@/lib/storage');
-      const { syncCompareProductsFromCloud } = await import('@/lib/comparison-storage');
-      await syncTrackedProductsWithCloud({ reconcile: true });
-      await syncCompareProductsFromCloud();
-      await sendRuntimeMessage({ type: 'CHECK_PRICES_NOW' });
-      await loadTracked();
-      await refreshLiveProduct({ silent: true });
+      const refreshWork = (async () => {
+        const { syncTrackedProductsWithCloud } = await import('@/lib/storage');
+        const { syncCompareProductsFromCloud } = await import('@/lib/comparison-storage');
+        await syncTrackedProductsWithCloud({ reconcile: true });
+        await syncCompareProductsFromCloud();
+        await sendRuntimeMessage({ type: 'CHECK_PRICES_NOW' });
+        await loadTracked();
+        await refreshLiveProduct({ silent: true });
+      })();
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('timeout')), 20_000);
+      });
+      await Promise.race([refreshWork, timeout]);
       toastSuccess('Список обновлён');
-    } catch {
-      toastUserError('Не удалось обновить список');
+    } catch (error) {
+      const msg = error instanceof Error && error.message === 'timeout'
+        ? 'Не удалось обновить за 20 с — проверьте интернет.'
+        : 'Не удалось обновить список';
+      toastUserError(msg);
     } finally {
       setListRefreshing(false);
     }
@@ -546,7 +560,9 @@ export function App() {
             subView={priceSubView}
             onSubViewChange={setPriceSubView}
             product={liveProduct}
-            isTracked={liveProduct ? trackedProducts.some((p) => p.id === liveProduct.id) : false}
+            isTracked={
+              liveProduct ? isLiveProductInTrackedList(liveProduct, trackedProducts) : false
+            }
             isLoading={isLoading}
             priceHistory={liveProduct ? currentHistory : []}
             error={liveError}

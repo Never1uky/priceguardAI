@@ -173,3 +173,11 @@ export function assertScrapedPriceIdentity(
   }
   return match;
 }
+
+/** Popup: live scraped product vs tracked list (id may differ after restart). */
+export function isLiveProductInTrackedList(
+  live: PriceIdentityRef,
+  tracked: PriceIdentityRef[],
+): boolean {
+  return tracked.some((item) => productsIdentityMatch(item, live).ok);
+}

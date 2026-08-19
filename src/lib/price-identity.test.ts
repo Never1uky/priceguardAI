@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isStableArticle,
+  isLiveProductInTrackedList,
   isSuspiciousIdentityDrop,
   productsIdentityMatch,
   resolveProductArticle,
@@ -94,5 +95,25 @@ describe('price-identity', () => {
     expect(productsIdentityMatch(realme, xiaomi).ok).toBe(false);
     expect(stableProductStorageId(realme)).toBe('yandex-5001111111');
     expect(stableProductStorageId(xiaomi)).toBe('yandex-5002222222');
+  });
+
+  it('isLiveProductInTrackedList matches by article when ids differ', () => {
+    const tracked = [
+      {
+        marketplace: 'wildberries' as const,
+        article: '741076063',
+        url: 'https://www.wildberries.ru/catalog/741076063/detail.aspx',
+        id: 'wb-741076063',
+        title: 'Sony WH-1000XM5',
+      },
+    ];
+    const live = {
+      marketplace: 'wildberries' as const,
+      article: '741076063',
+      url: 'https://www.wildberries.ru/catalog/741076063/detail.aspx',
+      id: 'scraped-wb-741076063',
+      title: 'Sony WH-1000XM5',
+    };
+    expect(isLiveProductInTrackedList(live, tracked)).toBe(true);
   });
 });
