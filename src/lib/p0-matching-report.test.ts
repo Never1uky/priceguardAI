@@ -97,4 +97,18 @@ describe('P0 matching-report golden pairs', () => {
       ),
     ).toBeGreaterThanOrEqual(AUTO_PICK_CONFIDENCE_THRESHOLD);
   });
+
+  it('Head & Shoulders Menthol vs Citrus is hard mismatch (QA P1-1)', () => {
+    const ref = 'Head & Shoulders шампунь от перхоти Ментол 0,6 л';
+    const cand = 'Head & Shoulders шампунь Цитрусовая свежесть для жирных волос 600 мл';
+    expect(scoreProductMatch(ref, cand, undefined, 'cosmetics')).toBe(0);
+    expect(computeMatchConfidence(ref, cand)).toBeLessThan(MIN_COMPARE_MATCH_CONFIDENCE);
+  });
+
+  it('Sony WH-1000XM5 vs XM6 is hard mismatch (QA P1-2)', () => {
+    const ref = 'Sony WH-1000XM5 беспроводные наушники';
+    const cand = 'Sony WH-1000XM6 беспроводные наушники';
+    expect(scoreProductMatch(ref, cand, undefined, 'headphones')).toBe(0);
+    expect(computeMatchConfidence(ref, cand)).toBeLessThan(MIN_COMPARE_MATCH_CONFIDENCE);
+  });
 });

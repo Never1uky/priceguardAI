@@ -58,6 +58,14 @@ export function extractLineageGeneration(title: string): LineageGeneration | nul
     return { lineage: 'pixel', gen, genKey: `${base}${tier}` };
   }
 
+  const sonyXm = t.match(/\bwh[-\s]?1000xm(\d)\b/i);
+  if (sonyXm) {
+    const gen = Number.parseInt(sonyXm[1]!, 10);
+    if (Number.isFinite(gen)) {
+      return { lineage: 'sony_wh1000xm', gen, genKey: `xm${sonyXm[1]}` };
+    }
+  }
+
   // Flash / microSD product lines (Canvas Go Plus ≠ Select Plus; Gen3 ≠ Gen4)
   const flashLine = t.match(
     /\bcanvas\s*(go!?|select|react|endurance)\s*(plus)?\b/i,

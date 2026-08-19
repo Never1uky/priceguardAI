@@ -57,7 +57,7 @@ describe('full-analysis quota policy', () => {
     expect(fullAnalysisCacheBadgeLabel({ fromCache: true })).toBe('Из кэша');
     expect(
       fullAnalysisCacheBadgeLabel({ fromCache: true, quotaConsumed: true }),
-    ).toBe('Из кэша · попытка учтена');
+    ).toBe('Из кэша · повторный запуск · попытка учтена');
     expect(fullAnalysisCacheBadgeLabel({ fromCache: false, quotaConsumed: true })).toBeNull();
     expect(
       fullAnalysisCacheBadgeLabel({ fromCache: true, cacheReason: 'CROSS_MARKETPLACE' }),
@@ -68,6 +68,6 @@ describe('full-analysis quota policy', () => {
         quotaConsumed: true,
         cacheReason: 'SAME_SKU',
       }),
-    ).toBe('Из кэша · Тот же SKU · попытка учтена');
+    ).toBe('Из кэша · повторный запуск · попытка учтена');
   });
 });

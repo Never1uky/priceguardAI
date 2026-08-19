@@ -165,6 +165,32 @@ describe('cheap-offer ranking parity WB + Ozon', () => {
     );
     expect(ranked[0]?.candidate.price).toBe(24_682);
   });
+
+  it('XM5 ref excludes XM6 from ranked WB candidates (QA P1-2)', () => {
+    const ref = 'Sony WH-1000XM5 беспроводные наушники';
+    const { ranked } = pickSearchFromCandidates(
+      'wildberries',
+      'Sony WH-1000XM5',
+      ref,
+      [
+        {
+          title: 'Sony WH-1000XM6 беспроводные наушники',
+          url: 'https://www.wildberries.ru/catalog/1200598856/detail.aspx',
+          price: 14_667,
+          rating: null,
+        },
+        {
+          title: 'Sony WH-1000XM5 синие',
+          url: 'https://www.wildberries.ru/catalog/811830372/detail.aspx',
+          price: 25_179,
+          rating: null,
+        },
+      ],
+      { referencePrice: 17_802 },
+    );
+    expect(ranked.every((r) => !/xm6/i.test(r.candidate.title))).toBe(true);
+    expect(ranked[0]?.candidate.title.toLowerCase()).toMatch(/xm5/);
+  });
 });
 
 describe('SERP article dedupe keeps min price (WB + Ozon)', () => {

@@ -52,9 +52,11 @@ const PREMIUM_FEATURES = [
 interface PremiumTabProps {
   onClose?: () => void;
   onOpenAuth?: () => void;
+  /** Показать баннер «достигнут лимит Free» */
+  reason?: 'limit' | null;
 }
 
-export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
+export function PremiumTab({ onClose, onOpenAuth, reason }: PremiumTabProps) {
   const [sub, setSub] = useState<SubscriptionState>({ tier: 'free' });
   const [licenseKey, setLicenseKey] = useState('');
   const [licenseError, setLicenseError] = useState<string | null>(null);
@@ -184,6 +186,16 @@ export function PremiumTab({ onClose, onOpenAuth }: PremiumTabProps) {
 
   return (
     <div className="space-y-3">
+      {reason === 'limit' && !isPremium && (
+        <Surface variant="subtle" padding="sm" className="border border-warning/30 bg-warning/10">
+          <p className="pg-subtitle text-warning-foreground">
+            Достигнут лимит {FREE_LIMITS.maxMyProducts} товаров (Free)
+          </p>
+          <p className="mt-1 pg-caption text-muted-foreground">
+            Удалите товар из «Мои товары» или оформите Premium — до 50 позиций.
+          </p>
+        </Surface>
+      )}
       <Surface variant="hero" padding="md">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-purple text-purple-foreground shadow-soft">

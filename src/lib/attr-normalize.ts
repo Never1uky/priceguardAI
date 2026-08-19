@@ -328,6 +328,29 @@ export function extractNormalizedMaterial(title: string, specs?: string): string
   return normalizeMaterial(`${title} ${specs ?? ''}`);
 }
 
+/** Scent / fragrance variant for cosmetics & detergents (Head & Shoulders Menthol ≠ Citrus). */
+const SCENT_VARIANTS: Array<{ key: string; patterns: RegExp[] }> = [
+  { key: 'menthol', patterns: [/ментол/i, /menthol/i] },
+  {
+    key: 'citrus',
+    patterns: [/цитрус/i, /citrus/i, /цитрусовая\s+свежест/i],
+  },
+  { key: 'classic', patterns: [/классик/i, /classic/i, /классическ/i] },
+  { key: 'fresh', patterns: [/свежест/i, /\bfresh\b/i] },
+  { key: 'apple', patterns: [/яблок/i, /\bapple\b/i] },
+  { key: 'lavender', patterns: [/лаванд/i, /lavender/i] },
+  { key: 'coconut', patterns: [/кокос/i, /coconut/i] },
+  { key: 'aloe', patterns: [/алoe/i, /алое/i, /aloe/i] },
+];
+
+export function extractScentVariant(title: string, specs?: string): string | undefined {
+  const text = `${title} ${specs ?? ''}`;
+  for (const { key, patterns } of SCENT_VARIANTS) {
+    if (patterns.some((p) => p.test(text))) return key;
+  }
+  return undefined;
+}
+
 export function colorsCompatible(
   a: string | undefined,
   b: string | undefined,

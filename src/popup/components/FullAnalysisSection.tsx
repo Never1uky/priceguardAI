@@ -454,6 +454,11 @@ export function FullAnalysisSection({
         {quotaLabel && isAuthenticated && (
           <p className="pg-caption text-center font-medium text-foreground">{quotaLabel}</p>
         )}
+        {isAuthenticated && !isPremiumProp && (
+          <p className="pg-caption text-center text-muted-foreground">
+            Повторный запуск по тому же товару списывает 1 из 3 попыток, даже если ответ из кэша.
+          </p>
+        )}
 
         <div className="space-y-2">
           <div className="flex gap-2">

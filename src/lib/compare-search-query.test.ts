@@ -127,4 +127,16 @@ describe('compare-search-query', () => {
     );
     expect(bare.toLowerCase()).toMatch(/pixel\s*7/);
   });
+
+  it('headphones XM5 query keeps model token for cross-market search (QA P2-2)', () => {
+    const xm5: CompareProduct = {
+      ...baseProduct,
+      title: 'Sony WH-1000XM5 беспроводные наушники',
+      productModel: 'WH-1000XM5',
+      sourceMarketplace: 'wildberries',
+      article: '741076063',
+    };
+    const q = getSearchQueryForVariant(xm5, 'yandex_market', 0);
+    expect(q.toLowerCase()).toMatch(/wh[-\s]?1000xm5|1000xm5/);
+  });
 });

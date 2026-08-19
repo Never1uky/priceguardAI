@@ -7,6 +7,7 @@ import { Surface } from '@/components/ui/surface';
 import { PriceHistoryChart } from '@/popup/components/PriceHistoryChart';
 import { ProductImage } from '@/popup/components/ProductImage';
 import { analyzePriceHistory } from '@/lib/price-insights';
+import { isProductOutOfStock } from '@/lib/product-availability';
 import { formatDate, formatPrice, paymentDiscountLabel } from '@/lib/utils';
 import { MARKETPLACE_LABELS, marketplaceBadgeVariant } from '@/utils/marketplace';
 import type { PricePoint, Product } from '@/types/product';
@@ -38,6 +39,9 @@ interface CurrentPriceTabProps {
   onAddToMyProducts: () => void;
   isComparePending?: boolean;
   fullAnalysisBusy?: boolean;
+  atMyProductsLimit?: boolean;
+  myProductsLimit?: number;
+  onOpenPremium?: () => void;
   onOpenAuth?: () => void;
 }
 
@@ -54,6 +58,9 @@ export function CurrentPriceTab({
   onAddToMyProducts,
   isComparePending = false,
   fullAnalysisBusy = false,
+  atMyProductsLimit = false,
+  myProductsLimit = 5,
+  onOpenPremium,
   onOpenAuth,
 }: CurrentPriceTabProps) {
   const [showAgent, setShowAgent] = useState(false);
@@ -101,6 +108,7 @@ export function CurrentPriceTab({
 
   if (!product) return null;
 
+  const outOfStock = isProductOutOfStock(product);
   const displayPrice = product.basePrice ?? product.price;
   const discount =
     product.oldPrice && product.oldPrice > displayPrice
@@ -137,31 +145,45 @@ export function CurrentPriceTab({
               <p className="pg-caption">Арт. {product.article}</p>
               <div>
                 <p className="inline-flex items-center gap-1 pg-caption text-muted-foreground">
-                  Текущая цена
-                  <Info className="h-3 w-3" strokeWidth={1.75} aria-hidden />
+                  {outOfStock ? 'Наличие' : 'Текущая цена'}
+                  {!outOfStock && <Info className="h-3 w-3" strokeWidth={1.75} aria-hidden />}
                 </p>
                 <div className="mt-1 flex flex-wrap items-end gap-2">
-                  <span className="text-[28px] font-semibold leading-none tracking-tight text-primary tabular-nums">
-                    {formatPrice(displayPrice)}
-                  </span>
-                  {product.oldPrice && product.oldPrice > displayPrice && (
+                  {outOfStock ? (
+                    <span className="text-[22px] font-semibold leading-none tracking-tight text-muted-foreground">
+                      Нет в наличии
+                    </span>
+                  ) : (
                     <>
-                      <span className="pg-body text-muted-foreground line-through">
-                        {formatPrice(product.oldPrice)}
+                      <span className="text-[28px] font-semibold leading-none tracking-tight text-primary tabular-nums">
+                        {formatPrice(displayPrice)}
                       </span>
-                      {discount && (
-                        <span className="inline-flex items-center gap-0.5 rounded-sm bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
-                          <TrendingDown className="h-3 w-3" strokeWidth={1.75} />−{discount}%
-                        </span>
+                      {product.oldPrice && product.oldPrice > displayPrice && (
+                        <>
+                          <span className="pg-body text-muted-foreground line-through">
+                            {formatPrice(product.oldPrice)}
+                          </span>
+                          {discount && (
+                            <span className="inline-flex items-center gap-0.5 rounded-sm bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+                              <TrendingDown className="h-3 w-3" strokeWidth={1.75} />−{discount}%
+                            </span>
+                          )}
+                        </>
                       )}
                     </>
                   )}
                 </div>
+                {outOfStock && (
+                  <p className="mt-1.5 pg-caption text-muted-foreground">
+                    Можно добавить в «Мои товары» — сообщим, когда появится цена.
+                  </p>
+                )}
               </div>
             </div>
           </div>
 
           {(product.marketplace === 'yandex_market' || product.marketplace === 'ozon') &&
+            !outOfStock &&
             product.payPrice != null &&
             product.basePrice != null &&
             product.payPrice < product.basePrice && (
@@ -172,6 +194,7 @@ export function CurrentPriceTab({
               </p>
             )}
           {(product.marketplace === 'yandex_market' || product.marketplace === 'ozon') &&
+            !outOfStock &&
             product.payPrice != null &&
             product.basePrice == null && (
               <p className="pg-caption text-emerald-700 dark:text-emerald-400">
@@ -180,11 +203,13 @@ export function CurrentPriceTab({
               </p>
             )}
           {product.marketplace === 'yandex_market' &&
+            !outOfStock &&
             product.basePrice != null &&
             !product.payPrice && (
               <p className="pg-caption text-muted-foreground">Цена по карте</p>
             )}
           {product.marketplace === 'ozon' &&
+            !outOfStock &&
             product.basePrice != null &&
             !product.payPrice && (
               <p className="pg-caption text-muted-foreground">С другими банками</p>
@@ -236,7 +261,12 @@ export function CurrentPriceTab({
             <Button
               className="w-full"
               onClick={onAddToMyProducts}
-              disabled={isLoading || isComparePending || fullAnalysisBusy}
+              disabled={
+                isLoading ||
+                isComparePending ||
+                fullAnalysisBusy ||
+                (atMyProductsLimit && !isTracked)
+              }
             >
               {isComparePending ? (
                 <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={1.75} />
@@ -247,10 +277,17 @@ export function CurrentPriceTab({
               )}
               {isComparePending
                 ? 'Добавляем и ищем…'
-                : isTracked
-                  ? 'Следим за ценой'
-                  : 'Следить за ценой'}
+                : atMyProductsLimit && !isTracked
+                  ? `Лимит ${myProductsLimit} товаров (Free)`
+                  : isTracked
+                    ? 'Следим за ценой'
+                    : 'Следить за ценой'}
             </Button>
+            {atMyProductsLimit && !isTracked && onOpenPremium && (
+              <Button variant="outline" className="w-full" onClick={onOpenPremium}>
+                Premium — до 50 товаров
+              </Button>
+            )}
             {isTracked && (
               <Button
                 variant="secondary"

@@ -99,6 +99,7 @@ const MODEL_PATTERNS: RegExp[] = [
   /\bbuds\s*\d{1,2}(?:\s*(?:pro|live|fe|plus|\+|titan|play|active))?\b/i,
   /\bjbl\s+tune\s*\d{3}\b/i,
   /\bjbl\s+(?:live|wave|quantum)\s*\d{2,3}\b/i,
+  /\bwh[-\s]?1000xm\d\b/i,
   /\bamazfit\s+(?:gtr|bip|balance|cheetah|t-rex)\s*\d{1,2}\b/i,
   /\bxiaomi\s+smart\s+band\s*\d{1,2}\b/i,
   /\bmi\s+band\s*\d{1,2}\b/i,

@@ -21,6 +21,9 @@ interface PricesAndCompareTabProps {
   onAddToMyProducts: () => void;
   isComparePending?: boolean;
   fullAnalysisBusy?: boolean;
+  atMyProductsLimit?: boolean;
+  myProductsLimit?: number;
+  onOpenPremium?: () => void;
   onGoToMyProducts?: () => void;
   onOpenAuth?: () => void;
 }

@@ -11,6 +11,7 @@ import {
   type ProductCategory,
 } from '@/lib/match-category';
 import { areEntityRolesIncompatible } from '@/lib/entity-extract';
+import { extractScentVariant } from '@/lib/attr-normalize';
 import { areBrandsCompatible, extractProductModel, variantMismatchPenalty } from '@/lib/model-extract';
 import {
   areLineageGenerationsCompatible,
@@ -388,6 +389,13 @@ export function areModelsCompatible(refModel: string, candModel: string): boolea
     return tier(refKey) === tier(candKey);
   }
 
+  // Sony WH-1000XM5 ≠ WH-1000XM6
+  const refSonyXm = refKey.match(/wh1000xm(\d)/);
+  const candSonyXm = candKey.match(/wh1000xm(\d)/);
+  if (refSonyXm && candSonyXm) {
+    return refSonyXm[1] === candSonyXm[1];
+  }
+
   // Частичное вхождение только при почти одинаковой длине
   if (refKey.includes(candKey) || candKey.includes(refKey)) {
     const ratio = Math.min(refKey.length, candKey.length) / Math.max(refKey.length, candKey.length);
@@ -542,6 +550,15 @@ export function scoreProductMatch(
     refFeatures.packageCount !== candFeatures.packageCount
   ) {
     return 0;
+  }
+
+  // Hard identity gate: scent/fragrance variant for cosmetics & detergents.
+  if (resolvedCategory === 'cosmetics' || resolvedCategory === 'detergents') {
+    const refScent = extractScentVariant(referenceTitle, referenceSpecs);
+    const candScent = extractScentVariant(candidateTitle);
+    if (refScent && candScent && refScent !== candScent) {
+      return 0;
+    }
   }
 
   const { score: featureScore } = scoreFeatureMatch(refFeatures, candFeatures, true);

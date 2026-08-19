@@ -76,6 +76,12 @@ export function App() {
   const [priceSubView, setPriceSubView] = useState<PriceSubView>('current');
   const [listRefreshing, setListRefreshing] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [myProductsGate, setMyProductsGate] = useState({
+    atLimit: false,
+    alreadyPresent: false,
+    limit: 5,
+  });
+  const [premiumReason, setPremiumReason] = useState<'limit' | null>(null);
 
   const loadTracked = useCallback(async () => {
     const [tracked, items] = await Promise.all([getTrackedProducts(), loadMyProductItems()]);
@@ -154,6 +160,20 @@ export function App() {
   }, [activeTab, refreshLiveProduct]);
 
   useEffect(() => {
+    if (!liveProduct?.url) {
+      setMyProductsGate({ atLimit: false, alreadyPresent: false, limit: 5 });
+      return;
+    }
+    void canAddMyProduct({ url: liveProduct.url }).then((gate) => {
+      setMyProductsGate({
+        atLimit: !gate.allowed && !gate.alreadyPresent,
+        alreadyPresent: gate.alreadyPresent,
+        limit: gate.limit,
+      });
+    });
+  }, [liveProduct?.url, myProductsCount, premiumActive]);
+
+  useEffect(() => {
     void isPremium().then(setPremiumActive);
     void syncSubscriptionWithServer().then(() => isPremium().then(setPremiumActive));
     const onSubChange = (changes: { [key: string]: chrome.storage.StorageChange }, area: string) => {
@@ -225,7 +245,6 @@ export function App() {
         toastUserError(
           `Лимит: ${gate.limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
         );
-        setActiveTab('premium');
         return {
           kind: 'limit',
           message: `Лимит: ${gate.limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
@@ -244,7 +263,6 @@ export function App() {
             toastUserError(
               `Лимит: ${limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
             );
-            setActiveTab('premium');
             return {
               kind: 'limit',
               message: `Лимит: ${limit} товаров в «Мои товары». Удалите лишние или оформите Premium.`,
@@ -563,6 +581,12 @@ export function App() {
             isTracked={
               liveProduct ? isLiveProductInTrackedList(liveProduct, trackedProducts) : false
             }
+            atMyProductsLimit={myProductsGate.atLimit && !myProductsGate.alreadyPresent}
+            myProductsLimit={myProductsGate.limit}
+            onOpenPremium={() => {
+              setPremiumReason('limit');
+              setActiveTab('premium');
+            }}
             isLoading={isLoading}
             priceHistory={liveProduct ? currentHistory : []}
             error={liveError}
@@ -609,7 +633,14 @@ export function App() {
           )}
 
           {activeTab === 'premium' && (
-            <PremiumTab onClose={() => setActiveTab('price')} onOpenAuth={() => setActiveTab('auth')} />
+            <PremiumTab
+              reason={premiumReason}
+              onClose={() => {
+                setPremiumReason(null);
+                setActiveTab('price');
+              }}
+              onOpenAuth={() => setActiveTab('auth')}
+            />
           )}
 
           {activeTab === 'my' && (

@@ -1,5 +1,6 @@
 import { sendScrapeProductMessage } from '@/lib/active-product-tab';
 import { agentLog } from '@/lib/debug-log';
+import { buildOutOfStockProduct } from '@/lib/product-availability';
 import { saveLastScrapedProduct } from '@/lib/storage';
 import type { Product } from '@/types/product';
 import { detectMarketplace, extractArticle, isProductPage } from '@/utils/marketplace';
@@ -18,9 +19,20 @@ export async function fetchProductFromTabUrl(url: string): Promise<Product | nul
   if (!article) return null;
 
   const api = await fetchWildberriesProduct(article);
-  if (!api?.price || !api.title) return null;
+  if (!api?.title) return null;
 
   const normalizedUrl = toCanonicalProductUrl(url, 'wildberries');
+
+  if (!api.price || api.outOfStock) {
+    return buildOutOfStockProduct({
+      marketplace: 'wildberries',
+      title: api.title,
+      article,
+      url: normalizedUrl,
+      imageUrl: api.imageUrl,
+      imageUrlAlternatives: api.imageUrlAlternatives ?? buildWbImageUrlAlternatives(article),
+    });
+  }
 
   return {
     id: `wb-${article}`,
@@ -34,6 +46,7 @@ export async function fetchProductFromTabUrl(url: string): Promise<Product | nul
     imageUrl: api.imageUrl,
     imageUrlAlternatives: api.imageUrlAlternatives ?? buildWbImageUrlAlternatives(article),
     scrapedAt: Date.now(),
+    availability: 'in_stock' as const,
   };
 }
 

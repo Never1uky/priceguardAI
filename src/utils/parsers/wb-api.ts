@@ -113,6 +113,8 @@ export interface WbApiResult {
   reviewRating?: number;
   feedbacks?: number;
   delivery?: string | null;
+  /** Карточка найдена в API, но цены нет (OOS) */
+  outOfStock?: boolean;
 }
 
 export async function fetchWildberriesProduct(nmId: string): Promise<WbApiResult | null> {
@@ -134,9 +136,23 @@ export async function fetchWildberriesProduct(nmId: string): Promise<WbApiResult
       const title = buildTitle(product);
       const { price, oldPrice } = pickApiPrices(product);
 
-      if (!title || !price || isGenericWildberriesTitle(title)) continue;
+      if (!title || isGenericWildberriesTitle(title)) continue;
 
       const id = String(product.nmId ?? product.id ?? nmId);
+
+      if (!price) {
+        return {
+          title,
+          price: 0,
+          oldPrice,
+          imageUrl: buildWbImageUrl(id),
+          imageUrlAlternatives: buildWbImageUrlAlternatives(id),
+          reviewRating: product.reviewRating ?? product.nmReviewRating,
+          feedbacks: product.feedbacks ?? product.nmFeedbacks,
+          delivery: pickWbDelivery(product),
+          outOfStock: true,
+        };
+      }
 
       return {
         title,

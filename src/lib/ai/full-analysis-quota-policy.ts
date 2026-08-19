@@ -61,7 +61,9 @@ export function fullAnalysisCacheBadgeLabel(params: {
   })();
 
   if (params.quotaConsumed) {
-    return reasonLabel ? `Из кэша · ${reasonLabel} · попытка учтена` : 'Из кэша · попытка учтена';
+    return reasonLabel
+      ? `Из кэша · повторный запуск · попытка учтена`
+      : 'Из кэша · повторный запуск · попытка учтена';
   }
   return reasonLabel ? `Из кэша · ${reasonLabel}` : 'Из кэша';
 }

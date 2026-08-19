@@ -45,7 +45,7 @@ import {
   getRejectedFingerprints,
 } from '@/lib/candidate-pool';
 import { isIdentityExcluded } from '@/lib/offer-identity';
-import { isOutOfStockError } from '@/lib/out-of-stock';
+import { isOutOfStockError, outOfStockOffer } from '@/lib/out-of-stock';
 import { matchConfidencePercent } from '@/lib/fuzzy-match';
 import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
 import { buildMarketplaceSearchUrl } from '@/utils/comparison-url';
@@ -375,17 +375,38 @@ function buildInstantSourceOffer(product: CompareProduct): MarketplaceOffer {
   const cached = product.sourceOffer ?? product.marketplaceOffers?.[marketplace];
   const url = getStoredProductPageUrl(product, marketplace) ?? product.sourceUrl ?? cached?.url ?? '';
 
-  if (cached && (isOfferWithPrice(cached) || cached.title)) {
+  if (cached && isOfferWithPrice(cached)) {
     return ensureOfferWithPrice({
       ...cached,
       marketplace,
       url: url || cached.url,
-      found: isOfferWithPrice(cached),
+      found: true,
       matchConfidence: 100,
       matchStatus: 'verified',
       needsManualPick: false,
       searchCandidates: undefined,
     });
+  }
+
+  if (cached?.title && (isOutOfStockError(cached.error) || cached.matchStatus === 'oos')) {
+    return outOfStockOffer(marketplace, cached.title, url || cached.url, {
+      ...cached,
+      marketplace,
+      matchStatus: 'oos',
+    });
+  }
+
+  if (cached?.title) {
+    return {
+      ...cached,
+      marketplace,
+      url: url || cached.url,
+      found: false,
+      price: null,
+      matchStatus: cached.matchStatus ?? 'not_found',
+      needsManualPick: false,
+      searchCandidates: undefined,
+    };
   }
 
   return notFoundOffer(
@@ -2287,7 +2308,14 @@ export async function compareAndUpdateProduct(
 }
 
 export function findCheapestOffer(offers: MarketplaceOffer[]): MarketplaceOffer | null {
-  const withPrice = offers.filter((o) => isOfferWithPrice(o));
+  const withPrice = offers.filter(
+    (o) =>
+      isOfferWithPrice(o) &&
+      !o.needsManualPick &&
+      (o.matchStatus === 'verified' ||
+        o.matchStatus === 'probable' ||
+        (o.matchConfidence != null && o.matchConfidence >= MIN_COMPARE_MATCH_CONFIDENCE)),
+  );
   if (!withPrice.length) return null;
   return withPrice.reduce((best, cur) =>
     (cur.price ?? Infinity) < (best.price ?? Infinity) ? cur : best,

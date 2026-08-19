@@ -25,6 +25,8 @@ export interface Product {
   scrapedAt: number;
   /** Метка «Оригинал» на WB / Ozon */
   authenticity?: ProductAuthenticity;
+  /** Явный статус наличия; price=0 допустим только при out_of_stock */
+  availability?: 'in_stock' | 'out_of_stock';
 }
 
 export interface TrackedProduct extends Product {
