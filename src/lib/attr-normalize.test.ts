@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractNormalizedAuthenticity,
   extractNormalizedColor,
+  extractNormalizedCondition,
   extractNormalizedConnector,
+  extractNormalizedEdition,
   extractNormalizedPackageCount,
+  extractNormalizedRegion,
   extractNormalizedStorage,
   extractNormalizedVolumeMl,
+  normalizeAuthenticity,
+  normalizeCondition,
   normalizeConnector,
   normalizeColor,
+  normalizeEdition,
   normalizePackageCount,
+  normalizeRegion,
   normalizeStorage,
   normalizeVolumeMl,
 } from '@/lib/attr-normalize';
@@ -58,6 +66,37 @@ describe('attr-normalize', () => {
     expect(
       extractNormalizedConnector('Apple AirPods Pro 2 USB-C с зарядным кейсом'),
     ).toBe('usb-c');
+  });
+
+  it('normalizes condition/authenticity/region/edition markers', () => {
+    expect(normalizeCondition('CPO')).toBe('cpo');
+    expect(normalizeCondition('восстановленный')).toBe('refurbished');
+    expect(normalizeCondition('б/у')).toBe('used');
+    expect(normalizeCondition('новый')).toBe('new');
+
+    expect(normalizeAuthenticity('оригинал')).toBe('original');
+    expect(normalizeAuthenticity('OEM')).toBe('oem');
+    expect(normalizeAuthenticity('совместимый')).toBe('compatible');
+    expect(normalizeAuthenticity('аналог')).toBe('analog');
+    expect(normalizeAuthenticity('реплика')).toBe('replica');
+
+    expect(normalizeRegion('Global Version')).toBe('global');
+    expect(normalizeRegion('Ростест')).toBe('ru');
+    expect(normalizeRegion('EU')).toBe('eu');
+    expect(normalizeRegion('US')).toBe('us');
+    expect(normalizeRegion('India')).toBe('in');
+    expect(normalizeRegion('eSIM only')).toBe('esim_only');
+    expect(normalizeRegion('physical SIM')).toBe('sim_physical');
+
+    expect(normalizeEdition('Disc Edition')).toBe('disc');
+    expect(normalizeEdition('Digital edition')).toBe('digital');
+    expect(normalizeEdition('kit 18-55')).toBe('kit');
+    expect(normalizeEdition('body only')).toBe('body');
+
+    expect(extractNormalizedCondition('iPhone 17 refurbished')).toBe('refurbished');
+    expect(extractNormalizedAuthenticity('Аккумулятор OEM для Dyson')).toBe('oem');
+    expect(extractNormalizedRegion('iPhone 17 eSIM only')).toBe('esim_only');
+    expect(extractNormalizedEdition('PlayStation 5 Digital Edition')).toBe('digital');
   });
 });
 

@@ -69,6 +69,10 @@ export type MatchFeatureKey =
   | 'series'
   | 'gender'
   | 'material'
+  | 'condition'
+  | 'authenticity'
+  | 'region'
+  | 'edition'
   | 'connector'
   | 'title'
   | 'price';

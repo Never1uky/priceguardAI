@@ -77,6 +77,36 @@ export function extractLineageGeneration(title: string): LineageGeneration | nul
     if (flashLine) return { lineage, gen: 0, genKey: '0' };
   }
 
+  // Dyson Supersonic/Airwrap families with HD model tokens (HD07/HD08).
+  const dysonFamily = t.match(/\bdyson\s+(supersonic|airwrap)\b/i);
+  const dysonModel = t.match(/\bhd\s*([0-9]{2})\b/i);
+  if (dysonFamily && dysonModel) {
+    const family = dysonFamily[1]!.toLowerCase();
+    const gen = Number.parseInt(dysonModel[1]!, 10);
+    if (Number.isFinite(gen)) {
+      return { lineage: `dyson:${family}`, gen, genKey: `hd${dysonModel[1]}`.toLowerCase() };
+    }
+  }
+
+  // Tool model tokens like GSB 18V-50.
+  const toolModel = t.match(/\b([a-z]{2,5})\s*(\d{1,3}v(?:-\d{1,3})?)\b/i);
+  if (toolModel) {
+    const family = toolModel[1]!.toLowerCase();
+    const key = `${family}${toolModel[2]!.toLowerCase().replace(/\s+/g, '')}`;
+    const genNum = Number.parseInt((toolModel[2]!.match(/\d+/)?.[0] ?? '0'), 10);
+    if (genNum > 0) return { lineage: `tool:${family}`, gen: genNum, genKey: key };
+  }
+
+  // Robot/home appliance model tokens with family context (S8, S7 Max, etc.).
+  if (/\b(?:robot|робот|roborock|dreame|vacuum|пылесос)\b/i.test(t)) {
+    const robotModel = t.match(/\b(s\d{1,2}(?:\s*(?:max|ultra|pro))?)\b/i);
+    if (robotModel) {
+      const key = robotModel[1]!.toLowerCase().replace(/\s+/g, '');
+      const gen = Number.parseInt((key.match(/\d+/)?.[0] ?? '0'), 10);
+      if (gen > 0) return { lineage: 'robot:model', gen, genKey: key };
+    }
+  }
+
   return null;
 }
 

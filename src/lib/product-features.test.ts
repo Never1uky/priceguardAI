@@ -59,4 +59,16 @@ describe('product-features', () => {
     expect(q.toLowerCase()).not.toMatch(/google\s+google/);
     expect(q.toLowerCase()).toMatch(/pixel\s*7/);
   });
+
+  it('extracts condition/authenticity/region/edition identity fields', () => {
+    const phone = extractProductFeatures('Apple iPhone 17 Global eSIM only refurbished');
+    expect(phone.condition).toBe('refurbished');
+    expect(phone.region).toBe('global');
+
+    const acc = extractProductFeatures('Аккумулятор Dyson V11 OEM original');
+    expect(acc.authenticity).toBe('original');
+
+    const console = extractProductFeatures('Sony PlayStation 5 Digital Edition');
+    expect(console.edition).toBe('digital');
+  });
 });

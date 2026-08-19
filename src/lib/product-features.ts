@@ -4,10 +4,14 @@
  */
 
 import {
+  extractNormalizedAuthenticity,
   extractNormalizedColor,
+  extractNormalizedCondition,
   extractNormalizedConnector,
+  extractNormalizedEdition,
   extractNormalizedMaterial,
   extractNormalizedPackageCount,
+  extractNormalizedRegion,
   extractNormalizedSize,
   extractNormalizedStorage,
   extractNormalizedVolumeMl,
@@ -47,6 +51,10 @@ export interface ProductFeatures {
   material?: string;
   mpn?: string;
   connector?: string;
+  condition?: string;
+  authenticity?: string;
+  region?: string;
+  edition?: string;
 }
 
 /** Legacy default weights (generic / electronics-lite). Sum ≈ 100 */
@@ -114,6 +122,10 @@ export function extractProductFeatures(title: string, specs?: string): ProductFe
     material: extractNormalizedMaterial(title, specs),
     mpn: extractMpn(title, specs),
     connector,
+    condition: extractNormalizedCondition(title, specs),
+    authenticity: extractNormalizedAuthenticity(title, specs),
+    region: extractNormalizedRegion(title, specs),
+    edition: extractNormalizedEdition(title, specs),
   };
 }
 
@@ -157,6 +169,14 @@ function featurePresent(
       return Boolean(features.material);
     case 'connector':
       return Boolean(features.connector);
+    case 'condition':
+      return Boolean(features.condition);
+    case 'authenticity':
+      return Boolean(features.authenticity);
+    case 'region':
+      return Boolean(features.region);
+    case 'edition':
+      return Boolean(features.edition);
     case 'title':
       return Boolean(features.title);
     case 'price':
@@ -236,6 +256,22 @@ function featureEqual(
     case 'connector': {
       if (!reference.connector || !candidate.connector) return 'unknown';
       return reference.connector === candidate.connector;
+    }
+    case 'condition': {
+      if (!reference.condition || !candidate.condition) return 'unknown';
+      return reference.condition === candidate.condition;
+    }
+    case 'authenticity': {
+      if (!reference.authenticity || !candidate.authenticity) return 'unknown';
+      return reference.authenticity === candidate.authenticity;
+    }
+    case 'region': {
+      if (!reference.region || !candidate.region) return 'unknown';
+      return reference.region === candidate.region;
+    }
+    case 'edition': {
+      if (!reference.edition || !candidate.edition) return 'unknown';
+      return reference.edition === candidate.edition;
     }
     case 'title':
     case 'price':

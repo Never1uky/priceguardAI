@@ -42,4 +42,59 @@ describe('P0 matching-report golden pairs', () => {
     const cand = 'Фен для Dyson Supersonic HD08';
     expect(scoreProductMatch(ref, cand)).toBe(0);
   });
+
+  it('refurbished iPhone 17 vs new iPhone 17 is hard mismatch', () => {
+    const ref = 'Смартфон Apple iPhone 17 refurbished';
+    const cand = 'Смартфон Apple iPhone 17 new';
+    expect(scoreProductMatch(ref, cand, undefined, 'smartphones')).toBe(0);
+  });
+
+  it('original/oem vs replica/analog is hard mismatch for same model', () => {
+    const ref = 'Аккумулятор Dyson V11 OEM original';
+    const cand = 'Аккумулятор Dyson V11 реплика аналог';
+    expect(scoreProductMatch(ref, cand, undefined, 'accessories')).toBe(0);
+  });
+
+  it('global vs ru and esim-only vs physical sim are hard mismatches when explicit', () => {
+    expect(
+      scoreProductMatch('Apple iPhone 17 Global Version', 'Apple iPhone 17 RU Ростест', undefined, 'smartphones'),
+    ).toBe(0);
+    expect(
+      scoreProductMatch('Apple iPhone 17 eSIM only', 'Apple iPhone 17 physical SIM', undefined, 'smartphones'),
+    ).toBe(0);
+  });
+
+  it('disc vs digital console edition is hard mismatch', () => {
+    const ref = 'Sony PlayStation 5 Disc Edition';
+    const cand = 'Sony PlayStation 5 Digital Edition';
+    expect(scoreProductMatch(ref, cand, undefined, 'consoles')).toBe(0);
+  });
+
+  it('2 шт vs 1 шт is hard mismatch for detergents when both counts are explicit', () => {
+    const ref = 'Persil Color гель 1.3 л 2 шт';
+    const cand = 'Persil Color гель 1.3 л 1 шт';
+    expect(scoreProductMatch(ref, cand, undefined, 'detergents')).toBe(0);
+  });
+
+  it('keeps existing guardrails: DualSense vs PS5 and Pixel generation mismatch', () => {
+    expect(scoreProductMatch('Геймпад Sony DualSense', 'Sony PlayStation 5', undefined, 'accessories')).toBe(0);
+    expect(scoreProductMatch('Google Pixel 8', 'Google Pixel 7', undefined, 'smartphones')).toBe(0);
+  });
+
+  it('keeps memory-cards lineage and apparel size-soft behavior', () => {
+    expect(
+      scoreProductMatch(
+        'Карта памяти Kingston Canvas Go Plus Gen4 128GB',
+        'Карта памяти Kingston Canvas Select Plus Gen4 128GB',
+        undefined,
+        'memory_cards',
+      ),
+    ).toBe(0);
+    expect(
+      computeMatchConfidence(
+        'Футболка Nike Dri-FIT мужская чёрная размер M',
+        'Футболка Nike Dri-FIT мужская черная размер L',
+      ),
+    ).toBeGreaterThanOrEqual(AUTO_PICK_CONFIDENCE_THRESHOLD);
+  });
 });

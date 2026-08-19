@@ -21,6 +21,17 @@ export type ColorFamily =
   | 'multicolor';
 
 export type ConnectorType = 'usb-c' | 'lightning' | '3.5mm' | 'usb-a';
+export type ConditionType = 'new' | 'refurbished' | 'cpo' | 'used';
+export type AuthenticityType = 'original' | 'oem' | 'compatible' | 'analog' | 'replica';
+export type RegionType =
+  | 'global'
+  | 'ru'
+  | 'eu'
+  | 'us'
+  | 'in'
+  | 'esim_only'
+  | 'sim_physical';
+export type EditionType = 'disc' | 'digital' | 'kit' | 'body';
 
 const COLOR_ALIASES: Record<string, ColorFamily> = {
   black: 'black',
@@ -246,7 +257,7 @@ export function normalizePackageCount(raw: string | null | undefined): number | 
     const m = text.match(re);
     if (m?.[1]) {
       const n = parseInt(m[1], 10);
-      if (n >= 2 && n <= 500) return n;
+      if (n >= 1 && n <= 500) return n;
     }
   }
 
@@ -345,6 +356,94 @@ export function normalizeConnector(raw: string | null | undefined): ConnectorTyp
 export function extractNormalizedConnector(title: string, specs?: string): ConnectorType | undefined {
   const combined = `${title} ${specs ?? ''}`;
   return normalizeConnector(combined);
+}
+
+const CONDITION_ALIASES: Array<{ re: RegExp; value: ConditionType }> = [
+  { re: /(?:refurbished|recon|восстановлен[а-яёa-z]*)/i, value: 'refurbished' },
+  { re: /\b(?:cpo|certified\s+pre[\s\-]?owned)\b/i, value: 'cpo' },
+  { re: /(?:б\s*\/\s*у|бу|used|pre[\s\-]?owned)/i, value: 'used' },
+  { re: /(?:new|нов(?:ый|ая|ое|ые))/i, value: 'new' },
+];
+
+export function normalizeCondition(raw: string | null | undefined): ConditionType | undefined {
+  if (!raw) return undefined;
+  const text = raw.toLowerCase().replace(/\u00a0/g, ' ').trim();
+  if (!text) return undefined;
+  for (const alias of CONDITION_ALIASES) {
+    if (alias.re.test(text)) return alias.value;
+  }
+  return undefined;
+}
+
+export function extractNormalizedCondition(title: string, specs?: string): ConditionType | undefined {
+  return normalizeCondition(`${title} ${specs ?? ''}`);
+}
+
+const AUTHENTICITY_ALIASES: Array<{ re: RegExp; value: AuthenticityType }> = [
+  { re: /(?:original|оригинал[а-яёa-z]*|originale)/i, value: 'original' },
+  { re: /\b(?:oem)\b/i, value: 'oem' },
+  { re: /(?:compatible|совместим[а-яёa-z]*|compatible[\s\-]?copy)/i, value: 'compatible' },
+  { re: /(?:analog|аналог[а-яёa-z]*)/i, value: 'analog' },
+  { re: /(?:replica|реплик[а-яёa-z]*|копия)/i, value: 'replica' },
+];
+
+export function normalizeAuthenticity(raw: string | null | undefined): AuthenticityType | undefined {
+  if (!raw) return undefined;
+  const text = raw.toLowerCase().replace(/\u00a0/g, ' ').trim();
+  if (!text) return undefined;
+  for (const alias of AUTHENTICITY_ALIASES) {
+    if (alias.re.test(text)) return alias.value;
+  }
+  return undefined;
+}
+
+export function extractNormalizedAuthenticity(title: string, specs?: string): AuthenticityType | undefined {
+  return normalizeAuthenticity(`${title} ${specs ?? ''}`);
+}
+
+const REGION_ALIASES: Array<{ re: RegExp; value: RegionType }> = [
+  { re: /(?:global|глобал[а-яёa-z]*)/i, value: 'global' },
+  { re: /(?:\bru\b|ростест|рст|\beac\b)/i, value: 'ru' },
+  { re: /(?:eu|европ[а-яёa-z]*)/i, value: 'eu' },
+  { re: /\b(?:us|usa)\b/i, value: 'us' },
+  { re: /\b(?:in|india|индия)\b/i, value: 'in' },
+  { re: /\b(?:e[\s\-]?sim(?:\s*only)?)\b/i, value: 'esim_only' },
+  { re: /\b(?:nano[\s\-]?sim|physical\s*sim|физическ[а-яёa-z]*\s*sim)\b/i, value: 'sim_physical' },
+];
+
+export function normalizeRegion(raw: string | null | undefined): RegionType | undefined {
+  if (!raw) return undefined;
+  const text = raw.toLowerCase().replace(/\u00a0/g, ' ').trim();
+  if (!text) return undefined;
+  for (const alias of REGION_ALIASES) {
+    if (alias.re.test(text)) return alias.value;
+  }
+  return undefined;
+}
+
+export function extractNormalizedRegion(title: string, specs?: string): RegionType | undefined {
+  return normalizeRegion(`${title} ${specs ?? ''}`);
+}
+
+const EDITION_ALIASES: Array<{ re: RegExp; value: EditionType }> = [
+  { re: /\b(?:disc|дисков\w*|с\s+дисковод\w*)\b/i, value: 'disc' },
+  { re: /\b(?:digital|без\s+дисковод\w*)\b/i, value: 'digital' },
+  { re: /\b(?:kit|комплект\w*|bundle)\b/i, value: 'kit' },
+  { re: /\b(?:body|body\s*only|тушка)\b/i, value: 'body' },
+];
+
+export function normalizeEdition(raw: string | null | undefined): EditionType | undefined {
+  if (!raw) return undefined;
+  const text = raw.toLowerCase().replace(/\u00a0/g, ' ').trim();
+  if (!text) return undefined;
+  for (const alias of EDITION_ALIASES) {
+    if (alias.re.test(text)) return alias.value;
+  }
+  return undefined;
+}
+
+export function extractNormalizedEdition(title: string, specs?: string): EditionType | undefined {
+  return normalizeEdition(`${title} ${specs ?? ''}`);
 }
 
 export function storageCompatible(

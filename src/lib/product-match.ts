@@ -69,6 +69,37 @@ export type MatchWarnKind = 'category' | 'confidence';
 /** Soft title-similarity floor for confidence-only warn (0–1). */
 export const WARN_LOW_TITLE_SIMILARITY = 0.55;
 
+function isAuthenticityHardConflict(refValue: string, candValue: string): boolean {
+  const ref = refValue.toLowerCase();
+  const cand = candValue.toLowerCase();
+  const originalLike = new Set(['original', 'oem']);
+  const copyLike = new Set(['replica', 'analog', 'compatible']);
+  if (originalLike.has(ref) && copyLike.has(cand)) return true;
+  if (copyLike.has(ref) && originalLike.has(cand)) return true;
+  return false;
+}
+
+function isRegionHardConflict(refValue: string, candValue: string): boolean {
+  const ref = refValue.toLowerCase();
+  const cand = candValue.toLowerCase();
+  if (ref === cand) return false;
+  const simSet = new Set(['esim_only', 'sim_physical']);
+  if (simSet.has(ref) || simSet.has(cand)) return true;
+  return true;
+}
+
+function isEditionHardConflict(refValue: string, candValue: string): boolean {
+  const ref = refValue.toLowerCase();
+  const cand = candValue.toLowerCase();
+  const pairs = new Set(['disc|digital', 'digital|disc', 'kit|body', 'body|kit']);
+  return pairs.has(`${ref}|${cand}`);
+}
+
+function hasCompatibilityMarker(title: string): boolean {
+  if (/совместим[а-яёa-z]*/i.test(title)) return true;
+  return /(?:для|for)\s+(?:[a-z][a-z0-9\-]*|[а-яёa-z0-9\-]*\d[а-яёa-z0-9\-]*)/i.test(title);
+}
+
 export function getMatchWarnKind(
   referenceTitle: string,
   candidateTitle: string,
@@ -355,6 +386,13 @@ export function scoreProductMatch(
   if (areEntityRolesIncompatible(referenceTitle, candidateTitle, referenceSpecs)) {
     return 0;
   }
+  if (
+    hasCompatibilityMarker(referenceTitle) !== hasCompatibilityMarker(candidateTitle) &&
+    earlyCategory !== 'accessories' &&
+    candidateCategory !== 'accessories'
+  ) {
+    return 0;
+  }
 
   const genericVsSpecific =
     (earlyCategory === 'generic' && candidateCategory !== 'generic') ||
@@ -419,6 +457,44 @@ export function scoreProductMatch(
     refFeatures.connector &&
     candFeatures.connector &&
     refFeatures.connector !== candFeatures.connector
+  ) {
+    return 0;
+  }
+
+  // Hard identity gate: condition mismatch when both sides are explicit.
+  if (refFeatures.condition && candFeatures.condition && refFeatures.condition !== candFeatures.condition) {
+    return 0;
+  }
+
+  // Hard identity gate: authenticity original/oem vs replica/analog/compatible.
+  if (
+    refFeatures.authenticity &&
+    candFeatures.authenticity &&
+    isAuthenticityHardConflict(refFeatures.authenticity, candFeatures.authenticity)
+  ) {
+    return 0;
+  }
+
+  // Hard identity gate: explicit region/sim mode mismatch.
+  if (refFeatures.region && candFeatures.region && isRegionHardConflict(refFeatures.region, candFeatures.region)) {
+    return 0;
+  }
+
+  // Hard identity gate: explicit edition conflicts (disc vs digital, kit vs body).
+  if (
+    refFeatures.edition &&
+    candFeatures.edition &&
+    isEditionHardConflict(refFeatures.edition, candFeatures.edition)
+  ) {
+    return 0;
+  }
+
+  // Hard identity gate: quantity mismatch for detergents / food-like categories.
+  if (
+    (resolvedCategory === 'detergents' || resolvedCategory === 'pet_food') &&
+    refFeatures.packageCount != null &&
+    candFeatures.packageCount != null &&
+    refFeatures.packageCount !== candFeatures.packageCount
   ) {
     return 0;
   }
