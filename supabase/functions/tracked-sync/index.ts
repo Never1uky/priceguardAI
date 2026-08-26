@@ -5,13 +5,16 @@
 //   { action: 'push', items: [...] }  → upsert + возврат актуального состояния
 //
 // Изоляция: user_id берётся из JWT, клиент не может подменить чужой аккаунт.
+// Phase 13: push enforces Free/Premium/trial track caps server-side.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 import { upsertTrackedProduct } from '../_shared/tracked-upsert.ts';
+import { resolveTrackLimitForUser } from '../_shared/track-limit.ts';
 
-const VALID_MARKETPLACES = ['wildberries', 'ozon', 'yandex_market'];
+/** Cloud track sync allowlist. Mega = compare/track sync only — not Telegram monitoring. */
+const VALID_MARKETPLACES = ['wildberries', 'ozon', 'yandex_market', 'megamarket'];
 
 function serviceClient() {
   return createClient(
@@ -65,14 +68,24 @@ Deno.serve(async (req) => {
     if (action === 'push') {
       const incoming = Array.isArray(body.items) ? body.items : [];
       const nowIso = new Date().toISOString();
+      const trackCap = await resolveTrackLimitForUser(supabase, userId);
+      let rejectedLimit = 0;
 
-      for (const it of incoming) {
+      // Process tombstones first so slots free before inserts
+      const sorted = [...incoming].sort((a, b) => {
+        const ad = Boolean((a as { deleted?: boolean })?.deleted);
+        const bd = Boolean((b as { deleted?: boolean })?.deleted);
+        return Number(bd) - Number(ad);
+      });
+
+      for (const it of sorted) {
         if (!it || typeof it !== 'object') continue;
         const row = it as Record<string, unknown>;
         if (!VALID_MARKETPLACES.includes(String(row.marketplace)) || !row.productId) {
           continue;
         }
 
+        const deleted = Boolean(row.deleted);
         const saved = await upsertTrackedProduct(supabase, {
           userId,
           marketplace: String(row.marketplace),
@@ -85,13 +98,18 @@ Deno.serve(async (req) => {
             ? new Date(Number(row.lastChecked)).toISOString()
             : null,
           notes: row.notes ? String(row.notes) : null,
-          deleted: Boolean(row.deleted),
+          deleted,
           updatedAt: row.updatedAt
             ? new Date(Number(row.updatedAt)).toISOString()
             : nowIso,
+          maxActiveTracks: trackCap.limit,
         });
 
         if (saved.ok === false) {
+          if (saved.code === 'TRACK_LIMIT') {
+            rejectedLimit += 1;
+            continue;
+          }
           console.error('tracked_products upsert', saved);
           return jsonResponse({
             ok: false,
@@ -103,7 +121,13 @@ Deno.serve(async (req) => {
       }
 
       const items = await pullItems(supabase, userId);
-      return jsonResponse({ ok: true, items });
+      return jsonResponse({
+        ok: true,
+        items,
+        track_limit: trackCap.limit,
+        plan: trackCap.kind,
+        rejected_track_limit: rejectedLimit,
+      });
     }
 
     return jsonResponse({ ok: false, error: 'Unknown action' }, 400);

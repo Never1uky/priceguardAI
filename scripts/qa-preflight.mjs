@@ -85,18 +85,29 @@ async function main() {
     fail('dist/ not found — run npm run build');
   }
 
-  // Zip artifact
-  const zipName = `priceguard-ai-v${version}.zip`;
-  const zipPath = join(root, zipName);
-  if (await fileExists(zipPath)) {
-    const info = await stat(zipPath);
+  // Zip artifact — newest priceguard-ai-v{version}.zip or v{version}(N).zip (same as validate-zip)
+  const { readdirSync, statSync } = await import('node:fs');
+  const zipPrefix = `priceguard-ai-v${version}`;
+  const zipCandidates = readdirSync(root)
+    .filter(
+      (n) =>
+        n === `${zipPrefix}.zip` || (n.startsWith(`${zipPrefix}(`) && n.endsWith('.zip')),
+    )
+    .map((n) => {
+      const p = join(root, n);
+      return { p, name: n, mtime: statSync(p).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  if (zipCandidates.length) {
+    const best = zipCandidates[0];
+    const info = await stat(best.p);
     if (info.size > 100_000) {
-      pass(`${zipName} (${info.size} bytes)`);
+      pass(`${best.name} (${info.size} bytes, newest of ${zipCandidates.length})`);
     } else {
-      fail(`${zipName} too small (${info.size} bytes)`);
+      fail(`${best.name} too small (${info.size} bytes)`);
     }
   } else {
-    fail(`Missing ${zipName} — run npm run package:zip`);
+    fail(`Missing ${zipPrefix}.zip — run npm run package:zip or package:release`);
   }
 
   // Manifest MV3 checks
