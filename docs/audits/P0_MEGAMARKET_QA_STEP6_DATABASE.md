@@ -173,3 +173,14 @@ WHERE conname IN (
 | **DATABASE** overall | **FAIL** until migrate + Edge allowlist |
 
 **Blocking Mega cloud track runtime today:** yes — DB CHECK + Edge VALID list.
+
+---
+
+## Remediation (2026-08-26)
+
+| Action | Status |
+|--------|--------|
+| `apply_migration` megamarket_tracked_check on prod | **DONE** — CHECKs include megamarket |
+| `tracked-sync` VALID + deploy | **DONE** |
+| Commit/push `4d5e18d` | **DONE** |
+| Mega `monitoring_enabled` | still **false** (unchanged) |
