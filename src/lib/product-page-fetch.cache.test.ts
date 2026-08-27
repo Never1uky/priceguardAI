@@ -54,6 +54,7 @@ vi.mock('@/lib/empty-scrape-guard', () => ({
   shouldSkipTabScrape: vi.fn(() => false),
 }));
 
+import { acquireHiddenBrowser } from '@/lib/hidden-browser';
 import { fetchOzonOfferFromPage } from '@/lib/ozon-offer';
 import { fetchOfferViaPremiumUnlocker } from '@/lib/premium-unlocker-offer';
 import { fetchOfferWithFallback } from '@/lib/product-page-fetch';
@@ -179,5 +180,45 @@ describe('fetchOfferWithFallback cache hygiene', () => {
 
     expect(offer?.price).toBe(77_000);
     expect(fetchOzonOfferFromPage).not.toHaveBeenCalled();
+  });
+
+  it('megamarket fresh shared cache skips HiddenBrowser tab', async () => {
+    getSharedPriceCache.mockResolvedValue({
+      price: 45_990,
+      title: 'Mega cached phone',
+      url: 'https://megamarket.ru/catalog/details/smartfon-100067205836/',
+    });
+
+    const offer = await fetchOfferWithFallback(
+      'https://megamarket.ru/catalog/details/smartfon-100067205836/',
+      'megamarket',
+    );
+
+    expect(offer?.price).toBe(45_990);
+    expect(offer?.title).toBe('Mega cached phone');
+    expect(getSharedPriceCache).toHaveBeenCalledWith('megamarket', '100067205836');
+    expect(acquireHiddenBrowser).not.toHaveBeenCalled();
+    expect(fetchOfferViaPremiumUnlocker).not.toHaveBeenCalled();
+    expect(safeSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('ALI-4: aliexpress fresh shared cache skips HiddenBrowser tab', async () => {
+    getSharedPriceCache.mockResolvedValue({
+      price: 1_990,
+      title: 'Ali cached case',
+      url: 'https://aliexpress.ru/item/1005001234567890.html',
+    });
+
+    const offer = await fetchOfferWithFallback(
+      'https://aliexpress.ru/item/1005001234567890.html',
+      'aliexpress',
+    );
+
+    expect(offer?.price).toBe(1_990);
+    expect(offer?.title).toBe('Ali cached case');
+    expect(getSharedPriceCache).toHaveBeenCalledWith('aliexpress', '1005001234567890');
+    expect(acquireHiddenBrowser).not.toHaveBeenCalled();
+    expect(fetchOfferViaPremiumUnlocker).not.toHaveBeenCalled();
+    expect(safeSendMessage).not.toHaveBeenCalled();
   });
 });

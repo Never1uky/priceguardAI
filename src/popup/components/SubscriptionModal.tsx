@@ -175,7 +175,9 @@ export function SubscriptionModal({
     const { activateLicenseKey } = await import('@/lib/subscription');
     const result = await checkPendingPayment();
     if (result.licenseKey) {
-      const activated = await activateLicenseKey(result.licenseKey);
+      const activated = await activateLicenseKey(result.licenseKey, {
+        funnelSource: 'payment',
+      });
       if (activated.ok) {
         setMessage('Оплата подтверждена! Premium активирован.');
         onSubscribed?.();

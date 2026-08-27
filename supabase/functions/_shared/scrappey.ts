@@ -125,6 +125,11 @@ export async function fetchViaScrappey(
   const fast = await scrappeyRequest(url, apiKey, 'request', options);
   if (fast.html) return fast;
 
+  // Cap retries: at most one browser fallback, never on timeout / 5xx / auth.
+  if (fast.error === 'timeout') return fast;
+  const status = fast.status ?? 0;
+  if (status >= 500) return fast;
+
   if (fast.error !== 'still_blocked' && fast.error !== 'empty_body') {
     // Auth/billing errors — don't burn browser credits
     if (

@@ -19,6 +19,7 @@ import {
   normalizeColor,
   normalizeConnector,
   normalizeStorage,
+  storageCompatible,
 } from '@/lib/attr-normalize';
 import {
   getMatchProfile,
@@ -212,7 +213,7 @@ function featureEqual(
     }
     case 'storage': {
       if (!reference.storage || !candidate.storage) return 'unknown';
-      return reference.storage === candidate.storage;
+      return storageCompatible(reference.storage, candidate.storage) === true;
     }
     case 'color': {
       if (!reference.color || !candidate.color) return 'unknown';

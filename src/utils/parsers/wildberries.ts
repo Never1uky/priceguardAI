@@ -20,6 +20,8 @@ import {
 import { buildWbImageUrl, buildWbImageUrlAlternatives, isGenericWildberriesTitle } from '@/utils/wb-image';
 import { toCanonicalProductUrl } from '@/utils/product-url';
 import { buildOutOfStockProduct, isProductOutOfStock } from '@/lib/product-availability';
+import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
+import { extractProductFeatures } from '@/lib/product-features';
 
 const TITLE_SELECTORS = [
   'h1[class*="productTitle"]',
@@ -126,6 +128,24 @@ function resolveImage(article: string, domImage?: string, apiResult?: { imageUrl
   return buildWbImageUrl(article);
 }
 
+function cardMetaFromPage(title: string, api?: { reviewRating?: number; feedbacks?: number } | null): {
+  rating?: number | null;
+  reviewCount?: number;
+  color?: string;
+} {
+  const domRating = parseRatingFromMarketplaceText(document.body?.textContent ?? '');
+  const rating = normalizeMarketplaceRating(api?.reviewRating ?? domRating.rating);
+  const reviewCount =
+    (api?.feedbacks && api.feedbacks > 0 ? api.feedbacks : undefined) ??
+    (domRating.reviewCount && domRating.reviewCount > 0 ? domRating.reviewCount : undefined);
+  const color = extractProductFeatures(title).color;
+  return {
+    rating,
+    reviewCount,
+    color: color ? String(color) : undefined,
+  };
+}
+
 function buildProduct(
   article: string,
   data: {
@@ -135,22 +155,30 @@ function buildProduct(
     imageUrl?: string;
     imageUrlAlternatives?: string[];
     outOfStock?: boolean;
+    rating?: number | null;
+    reviewCount?: number;
+    color?: string;
   },
 ): Product {
   const authenticity: ProductAuthenticity = detectAuthenticityFromDom('wildberries');
   const url = toCanonicalProductUrl(canonicalUrl(), 'wildberries');
 
   if (data.outOfStock || !(data.price > 0)) {
-    return buildOutOfStockProduct({
-      marketplace: 'wildberries',
-      title: data.title,
-      article,
-      url,
-      imageUrl: data.imageUrl,
-      imageUrlAlternatives: data.imageUrlAlternatives,
-      oldPrice: data.oldPrice,
-      authenticity,
-    });
+    return {
+      ...buildOutOfStockProduct({
+        marketplace: 'wildberries',
+        title: data.title,
+        article,
+        url,
+        imageUrl: data.imageUrl,
+        imageUrlAlternatives: data.imageUrlAlternatives,
+        oldPrice: data.oldPrice,
+        authenticity,
+      }),
+      rating: data.rating,
+      reviewCount: data.reviewCount,
+      color: data.color,
+    };
   }
 
   return {
@@ -167,6 +195,9 @@ function buildProduct(
     scrapedAt: Date.now(),
     authenticity,
     availability: 'in_stock',
+    rating: data.rating,
+    reviewCount: data.reviewCount,
+    color: data.color,
   };
 }
 
@@ -227,6 +258,8 @@ export async function parseWildberriesProduct(): Promise<Product | null> {
 
   if (!title) return null;
 
+  const meta = cardMetaFromPage(title, fromApi);
+
   const domImage = getImageFromSelectors(IMAGE_SELECTORS);
 
   if (!prices.price || prices.outOfStock) {
@@ -238,6 +271,7 @@ export async function parseWildberriesProduct(): Promise<Product | null> {
       imageUrlAlternatives:
         fromApi?.imageUrlAlternatives ?? buildWbImageUrlAlternatives(article),
       outOfStock: true,
+      ...meta,
     });
   }
 
@@ -248,5 +282,6 @@ export async function parseWildberriesProduct(): Promise<Product | null> {
     imageUrl: resolveImage(article, domImage, fromApi ?? undefined),
     imageUrlAlternatives:
       fromApi?.imageUrlAlternatives ?? buildWbImageUrlAlternatives(article),
+    ...meta,
   });
 }

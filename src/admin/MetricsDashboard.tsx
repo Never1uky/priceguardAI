@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchMetricsDashboard, type MetricsDashboardData } from '@/lib/supabase/metrics-dashboard';
+import {
+  fetchMetricsDashboard,
+  type EconomicsDashboardBlock,
+  type MetricsDashboardData,
+} from '@/lib/supabase/metrics-dashboard';
 import { getAuthUser } from '@/lib/supabase/auth';
 import { isDeveloperEmail } from '@/lib/developer-access';
 import { Button } from '@/components/ui/button';
@@ -57,11 +61,88 @@ function MetricTable({
   );
 }
 
+function Kpi({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string | number;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-sm border border-border/60 bg-background px-2.5 py-2">
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{value}</p>
+      {hint ? <p className="mt-0.5 text-[9px] text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
+function EconomicsSection({ eco }: { eco: EconomicsDashboardBlock }) {
+  return (
+    <Card className="shadow-none">
+      <CardContent className="space-y-3 p-3">
+        <div>
+          <p className="text-xs font-semibold">Economics — monitoring (Phase 12)</p>
+          <p className="text-[10px] text-muted-foreground">
+            Период {eco.periodDays}д · Scrappey {eco.assumptions?.scrappeyRubPerThousandCalls ?? 4} ₽ /
+            1000 calls · dedup KPI
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <Kpi label="Active monitored products" value={eco.activeMonitoredProducts} />
+          <Kpi label="Unique monitoring targets" value={eco.uniqueMonitoringTargets} />
+          <Kpi
+            label="Avg subscribers / target"
+            value={eco.avgSubscribersPerTarget}
+            hint={`max ${eco.maxSubscribersPerTarget} · users ${eco.monitoringUsers}`}
+          />
+          <Kpi label="Checks / day" value={eco.checksPerDay} />
+          <Kpi label="Scrape requests / day" value={eco.scrapeRequestsPerDay} />
+          <Kpi label="Cache hit rate" value={`${eco.cacheHitRatePct}%`} />
+          <Kpi
+            label="Scrape failures"
+            value={eco.scrapeFailures}
+            hint={`${eco.scrapeFailuresPerDay}/day`}
+          />
+          <Kpi
+            label="Scrapes / active product"
+            value={eco.scrapeRequestsPerActiveMonitoredProduct}
+            hint="ниже при sharing"
+          />
+          <Kpi
+            label="Scrapes / unique target"
+            value={eco.scrapeRequestsPerUniqueTarget}
+            hint={`dedup ×${eco.dedupFactor}`}
+          />
+          <Kpi
+            label="Cost / day (₽)"
+            value={`${eco.costEstimateRubPerDay.optimistic}–${eco.costEstimateRubPerDay.pessimistic}`}
+            hint="opt–pess"
+          />
+          <Kpi
+            label="Cost / month (₽)"
+            value={`${eco.costEstimateRubPerMonth.optimistic}–${eco.costEstimateRubPerMonth.pessimistic}`}
+            hint="×30 from daily"
+          />
+          <Kpi
+            label="Scrapes saved (est.)"
+            value={eco.estimatedScrapesSaved}
+            hint="vs 1 scrape × subscriber × check"
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function MetricsDashboard() {
   const [data, setData] = useState<MetricsDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
+  const [periodDays, setPeriodDays] = useState<1 | 7 | 30>(30);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,7 +160,7 @@ export function MetricsDashboard() {
         setData(null);
         return;
       }
-      const result = await fetchMetricsDashboard();
+      const result = await fetchMetricsDashboard(periodDays);
       if (!result.ok) {
         setError(result.error ?? 'Не удалось загрузить метрики');
         return;
@@ -95,7 +176,7 @@ export function MetricsDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [periodDays]);
 
   useEffect(() => {
     void load();
@@ -104,7 +185,7 @@ export function MetricsDashboard() {
   return (
     <div className="min-h-screen bg-slate-50 p-4 dark:bg-slate-950">
       <div className="mx-auto max-w-4xl space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-5 w-5 text-indigo-600" />
             <div>
@@ -112,10 +193,22 @@ export function MetricsDashboard() {
               <p className="text-xs text-muted-foreground">{email ?? 'Не авторизован'}</p>
             </div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Обновить
-          </Button>
+          <div className="flex items-center gap-2">
+            <select
+              className="rounded-sm border bg-background px-2 py-1.5 text-xs"
+              value={periodDays}
+              aria-label="Период"
+              onChange={(e) => setPeriodDays(Number(e.target.value) as 1 | 7 | 30)}
+            >
+              <option value={1}>1 день</option>
+              <option value={7}>7 дней</option>
+              <option value={30}>30 дней</option>
+            </select>
+            <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Обновить
+            </Button>
+          </div>
         </div>
 
         {loading && (
@@ -142,6 +235,8 @@ export function MetricsDashboard() {
 
         {data && !loading && (
           <>
+            {data.economics ? <EconomicsSection eco={data.economics} /> : null}
+
             {data.wbSuccessRate24h && (
               <Card className="shadow-none">
                 <CardContent className="p-3">

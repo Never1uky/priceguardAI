@@ -12,8 +12,7 @@ import { authorizeCronOrServiceRole } from '../_shared/cron-auth.ts';
 import { parseProductKey } from '../_shared/product-id.ts';
 import type { Marketplace } from '../_shared/product-url.ts';
 import { backfillSeoCategories, batchPublishFromCacheV2, collectSeoPublishMetrics, runSeoPublish } from '../_shared/seo-publish-run.ts';
-
-const MARKETPLACES = new Set(['wildberries', 'ozon', 'yandex_market']);
+import { isSeoPublishableMp } from '../_shared/seo-marketplaces.ts';
 
 function serviceClient() {
   return createClient(
@@ -23,7 +22,7 @@ function serviceClient() {
 }
 
 function isMarketplace(v: string): v is Marketplace {
-  return MARKETPLACES.has(v);
+  return isSeoPublishableMp(v);
 }
 
 Deno.serve(async (req) => {

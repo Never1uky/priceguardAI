@@ -24,6 +24,7 @@ vi.stubGlobal('chrome', {
 vi.mock('@/lib/compare-tab-search', () => ({
   searchViaBrowserTab: (...args: unknown[]) => searchViaBrowserTab(...args),
   searchViaOpenSerpTab: (...args: unknown[]) => searchViaOpenSerpTab(...args),
+  searchViaOpenProductTab: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/cross-market-map', () => ({

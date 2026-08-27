@@ -12,6 +12,7 @@ import { isOfferWithPrice, isPendingManualChoice } from '@/lib/compare-offers';
 import { isUrlExcluded, isProductPageUrl } from '@/lib/product-match';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 import { offerIdentityFingerprint } from '@/lib/offer-identity';
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
 
 export const MAX_CANDIDATE_POOL = 3;
 export const MAX_REJECTED_URLS = 20;
@@ -243,7 +244,7 @@ export function markOfferRejectedKeepPool(
 
 /** Очистить bound + пулы на target-площадках для «Найти заново» */
 export function clearAllBoundTargets(product: CompareProduct): CompareProduct {
-  const targets: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+  const targets: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
   let next = product;
   for (const mp of targets) {
     if (mp === product.sourceMarketplace) continue;
@@ -287,7 +288,7 @@ export function findPendingChoiceForProductUrl(
   if (!trimmed) return null;
 
   for (const product of products) {
-    for (const mp of ['wildberries', 'ozon', 'yandex_market'] as ComparisonMarketplace[]) {
+    for (const mp of COMPARISON_MARKETPLACE_IDS) {
       const offer = product.marketplaceOffers?.[mp];
       if (!isPendingManualChoice(offer)) continue;
       const fromOffer = offer!.searchCandidates ?? [];
@@ -304,7 +305,7 @@ export function researchClearAutoOnly(
   product: CompareProduct,
   options?: { preservePendingChoice?: boolean },
 ): CompareProduct {
-  const targets: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+  const targets: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
   let next = product;
   for (const mp of targets) {
     if (mp === product.sourceMarketplace) continue;

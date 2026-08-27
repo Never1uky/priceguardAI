@@ -1,9 +1,27 @@
 /**
  * Shared marketplace SERP fetch used by compare-research and the shopping agent.
  * Logic moved out of compare-research/index.ts — do not fork a second search engine.
+ *
+ * Megamarket / AliExpress: no invented HTTP search API — try public SERP HTML when available;
+ * otherwise [] so the client falls back to HiddenBrowser tab (tab-or-available).
  */
 
-export type Marketplace = 'wildberries' | 'ozon' | 'yandex_market';
+export type Marketplace =
+  | 'wildberries'
+  | 'ozon'
+  | 'yandex_market'
+  | 'megamarket'
+  | 'aliexpress';
+
+export type CoreResearchMarketplace = 'wildberries' | 'ozon' | 'yandex_market';
+
+export const COMPARE_RESEARCH_VALID: Marketplace[] = [
+  'wildberries',
+  'ozon',
+  'yandex_market',
+  'megamarket',
+  'aliexpress',
+];
 
 export interface SearchCandidate {
   title: string;
@@ -20,6 +38,268 @@ export function scoreTitle(ref: string, cand: string): number {
   let hit = 0;
   for (const t of a) if (b.has(t)) hit += 1;
   return Math.round((hit / a.length) * 100);
+}
+
+/**
+ * Mega SERP confidence closer to client identity gates:
+ * drop obvious category junk / storage mismatch instead of blind token overlap.
+ */
+export function megaSerpMatchConfidence(ref: string, cand: string): number {
+  const r = ref.trim();
+  const c = cand.trim();
+  if (!r || !c) return 0;
+
+  const phoneish = /смартфон|телефон|iphone|pixel|galaxy|redmi|xiaomi|poco|realme|honor|huawei|samsung/i;
+  const accessoryJunk =
+    /чехол|стекл[оа]\s*защит|кабель|провод|адаптер|наушник|кейc|\bcase\b|плёнк|пленк/i;
+  const furnitureFoodJunk =
+    /комод|диван|кровать|шкаф|стол\b|стул|крабов|палочк|йогурт|молоко/i;
+  // Accessories / furniture / food are never a phone SKU match (even if model token overlaps).
+  if (accessoryJunk.test(c) || furnitureFoodJunk.test(c)) {
+    if (phoneish.test(r) || /смартфон|телефон/i.test(r)) return 0;
+  }
+
+  const storages = (s: string): number[] => {
+    const out: number[] = [];
+    for (const m of s.matchAll(/(\d+)\s*(?:gb|гб)/gi)) {
+      const n = Number(m[1]);
+      if (n >= 32 && n <= 2048) out.push(n);
+    }
+    return out;
+  };
+  const refS = storages(r);
+  const candS = storages(c);
+  // Both sides explicit single storage (or ROM-like) and disagree → reject
+  if (refS.length === 1 && candS.length === 1 && refS[0] !== candS[0]) {
+    return 0;
+  }
+  // RAM/ROM like 12/128 vs candidate only 256
+  const slash = r.match(/(\d{1,2})\s*\/\s*(\d{2,4})\s*(?:gb|гб)?/i);
+  if (slash && candS.length === 1) {
+    const rom = Number(slash[2]);
+    if (rom >= 32 && candS[0] !== rom && !candS.includes(rom)) {
+      return 0;
+    }
+  }
+
+  return scoreTitle(r, c);
+}
+
+export function matchConfidenceForMarketplace(
+  marketplace: Marketplace,
+  referenceTitle: string,
+  candidateTitle: string,
+): number {
+  if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+    return megaSerpMatchConfidence(referenceTitle, candidateTitle);
+  }
+  return scoreTitle(referenceTitle, candidateTitle);
+}
+
+/**
+ * VALID research MPs ∩ requested selected; empty request → all VALID except source.
+ * Never expands beyond VALID (test MPs stay client-tab only).
+ */
+export function resolveCompareResearchTargets(
+  sourceMarketplace: Marketplace,
+  requested: unknown,
+  valid: readonly Marketplace[] = COMPARE_RESEARCH_VALID,
+): Marketplace[] {
+  const base = valid.filter((m) => m !== sourceMarketplace);
+  if (!Array.isArray(requested) || requested.length === 0) {
+    return [...base];
+  }
+  const want = new Set(
+    requested.filter((x): x is string => typeof x === 'string').map((x) => x.trim()),
+  );
+  return base.filter((m) => want.has(m));
+}
+
+const SERP_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
+
+/** Parse Mega catalog HTML for details tiles (no DOM — Edge-safe regex). */
+export function parseMegamarketSerpHtml(
+  html: string,
+  referenceTitle: string,
+): SearchCandidate[] {
+  if (!html || html.length < 200) return [];
+  const out: SearchCandidate[] = [];
+  const seen = new Set<string>();
+
+  const push = (id: string, titleHint: string, price: number | null) => {
+    const digits = id.replace(/\D/g, '');
+    if (digits.length < 6) return;
+    if (seen.has(digits)) return;
+    const title = (titleHint || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (title.length < 3) return;
+    const matchConfidence = megaSerpMatchConfidence(referenceTitle, title);
+    if (matchConfidence <= 0) return;
+    seen.add(digits);
+    out.push({
+      title,
+      url: `https://megamarket.ru/catalog/details/${digits}/`,
+      price: price && price > 0 ? price : null,
+      matchConfidence,
+    });
+  };
+
+  // data-product-id / data-goods-id tiles
+  for (const m of html.matchAll(
+    /data-(?:product|goods)-id=["'](\d{6,})["'][^>]*>([\s\S]{0,1200}?)<\/(?:div|article|li|a)/gi,
+  )) {
+    const id = m[1]!;
+    const chunk = m[2] ?? '';
+    const title =
+      chunk.match(/<(?:h[23]|span|a)[^>]*>([^<]{4,180})<\/(?:h[23]|span|a)>/i)?.[1] ??
+      chunk.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const priceRaw = chunk.match(/(\d[\d\s]{2,})\s*(?:₽|руб)/i)?.[1];
+    const price = priceRaw ? Number(priceRaw.replace(/\s/g, '')) : null;
+    push(id, title, price && Number.isFinite(price) ? price : null);
+    if (out.length >= 8) return out;
+  }
+
+  // /catalog/details/… anchors
+  for (const m of html.matchAll(
+    /href=["']([^"']*\/catalog\/details\/[^"'?#]+(?:\?[^"']*)?)["'][^>]*>([\s\S]{0,400}?)<\/a>/gi,
+  )) {
+    const href = m[1] ?? '';
+    const id = href.match(/\/catalog\/details\/[^/?#]*?(\d{6,})/i)?.[1];
+    if (!id) continue;
+    const inner = (m[2] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const titleAttr = html
+      .slice(Math.max(0, (m.index ?? 0) - 200), m.index ?? 0)
+      .match(/title=["']([^"']{4,180})["']/i)?.[1];
+    push(id, titleAttr || inner, null);
+    if (out.length >= 8) break;
+  }
+
+  return out.slice(0, 8);
+}
+
+/**
+ * Mega SERP: attempt public HTML catalog page. Antibot → [] (client tab).
+ * Never calls Scrappey for search listings.
+ */
+export async function searchMegamarket(
+  query: string,
+  referenceTitle: string,
+): Promise<SearchCandidate[]> {
+  const url = `https://megamarket.ru/catalog/?q=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'ru-RU,ru;q=0.9',
+        'User-Agent': SERP_UA,
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    // Soft-block / empty shells
+    if (/captcha|access.?denied|cf-browser-verification/i.test(html) && html.length < 50_000) {
+      return [];
+    }
+    return parseMegamarketSerpHtml(html, referenceTitle || query);
+  } catch {
+    return [];
+  }
+}
+
+/** Parse AliExpress wholesale / search HTML for /item/{id} tiles (Edge-safe regex). */
+export function parseAliExpressSerpHtml(
+  html: string,
+  referenceTitle: string,
+): SearchCandidate[] {
+  if (!html || html.length < 200) return [];
+  const out: SearchCandidate[] = [];
+  const seen = new Set<string>();
+
+  const push = (id: string, titleHint: string, price: number | null) => {
+    const digits = id.replace(/\D/g, '');
+    if (digits.length < 8) return;
+    if (seen.has(digits)) return;
+    const title = (titleHint || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (title.length < 3) return;
+    const matchConfidence = megaSerpMatchConfidence(referenceTitle, title);
+    if (matchConfidence <= 0) return;
+    seen.add(digits);
+    out.push({
+      title,
+      url: `https://aliexpress.ru/item/${digits}.html`,
+      price: price && price > 0 ? price : null,
+      matchConfidence,
+    });
+  };
+
+  // href="/item/100500….html" with nearby title / price
+  for (const m of html.matchAll(
+    /href=["']([^"']*\/item\/(\d{8,})(?:\.html)?[^"']*)["'][^>]*>([\s\S]{0,500}?)<\/a>/gi,
+  )) {
+    const id = m[2]!;
+    const inner = (m[3] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const before = html.slice(Math.max(0, (m.index ?? 0) - 280), m.index ?? 0);
+    const titleAttr =
+      before.match(/title=["']([^"']{4,180})["']/i)?.[1] ||
+      before.match(/alt=["']([^"']{4,180})["']/i)?.[1];
+    const priceRaw =
+      (m[3] ?? '').match(/(\d[\d\s]{1,})\s*(?:₽|руб|RUB)/i)?.[1] ||
+      before.match(/(\d[\d\s]{1,})\s*(?:₽|руб|RUB)/i)?.[1];
+    const price = priceRaw ? Number(priceRaw.replace(/\s/g, '')) : null;
+    push(id, titleAttr || inner, price && Number.isFinite(price) ? price : null);
+    if (out.length >= 8) return out;
+  }
+
+  // Bare item links without rich inner HTML
+  for (const m of html.matchAll(/\/item\/(\d{8,})(?:\.html)?/gi)) {
+    const id = m[1]!;
+    if (seen.has(id)) continue;
+    const start = Math.max(0, (m.index ?? 0) - 120);
+    const window = html.slice(start, (m.index ?? 0) + 220);
+    const title =
+      window.match(/title=["']([^"']{4,180})["']/i)?.[1] ||
+      window.match(/alt=["']([^"']{4,180})["']/i)?.[1] ||
+      '';
+    if (title.length < 3) continue;
+    push(id, title, null);
+    if (out.length >= 8) break;
+  }
+
+  return out.slice(0, 8);
+}
+
+/**
+ * Ali SERP: attempt public wholesale HTML. Antibot → [] (client tab).
+ * Never calls Scrappey for search listings.
+ */
+export async function searchAliExpress(
+  query: string,
+  referenceTitle: string,
+): Promise<SearchCandidate[]> {
+  const url = `https://aliexpress.ru/wholesale?SearchText=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'ru-RU,ru;q=0.9',
+        'User-Agent': SERP_UA,
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    if (
+      (/captcha|access.?denied|cf-browser-verification|robot.?check/i.test(html) &&
+        html.length < 50_000) ||
+      html.length < 200
+    ) {
+      return [];
+    }
+    return parseAliExpressSerpHtml(html, referenceTitle || query);
+  } catch {
+    return [];
+  }
 }
 
 export async function searchWb(query: string, referenceTitle: string): Promise<SearchCandidate[]> {
@@ -149,4 +429,6 @@ export const MARKETPLACE_SEARCHERS: Record<
   wildberries: searchWb,
   ozon: searchOzon,
   yandex_market: searchYm,
+  megamarket: searchMegamarket,
+  aliexpress: searchAliExpress,
 };

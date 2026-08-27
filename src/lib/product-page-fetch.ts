@@ -21,8 +21,17 @@ import {
   shouldSkipTabScrape,
 } from '@/lib/empty-scrape-guard';
 import { getSharedPriceCache, putSharedPriceCache } from '@/lib/supabase/price-cache';
-import { fetchOfferViaPremiumUnlocker } from '@/lib/premium-unlocker-offer';
+import {
+  fetchOfferViaPremiumUnlocker,
+  isPremiumUnlockerMarketplace,
+} from '@/lib/premium-unlocker-offer';
 import { normalizeMarketplaceRating } from '@/lib/compare-offers';
+import { trackCompareMpAttempt } from '@/lib/telemetry/compare-mp-attempt';
+import {
+  trackScrapeCacheHit,
+  trackScrapeCacheMiss,
+  trackScrapeRequest,
+} from '@/lib/telemetry/ops';
 import { ensureContentScriptReady, safeSendMessage } from '@/lib/safe-messaging';
 
 const TAB_LOAD_TIMEOUT_MS = 45_000;
@@ -137,7 +146,11 @@ async function fetchOfferViaApi(
   if (marketplace === 'ozon') {
     return fetchOzonOfferFromPage(url);
   }
-  return fetchYandexOfferFromPage(url);
+  if (marketplace === 'yandex_market') {
+    return fetchYandexOfferFromPage(url);
+  }
+  // Tab-search MPs (Megamarket + test adapters): no HTTP API
+  return null;
 }
 
 /** Парсинг карточки через content script на фоновой вкладке */
@@ -238,9 +251,17 @@ export async function fetchOfferWithFallback(
   let deferredCache: MarketplaceOffer | null = null;
   if (!options.forceTab) {
     const fromCache = await trySharedCache(targetUrl);
-    if (fromCache) return fromCache;
+    if (fromCache) {
+      trackCompareMpAttempt({ marketplace, path: 'cache', success: true });
+      trackScrapeCacheHit({ marketplace, context: 'card' });
+      return fromCache;
+    }
+    trackScrapeCacheMiss({ marketplace, context: 'card' });
   } else {
     deferredCache = await trySharedCache(targetUrl);
+    if (!deferredCache) {
+      trackScrapeCacheMiss({ marketplace, context: 'card' });
+    }
   }
 
   if (needsUrlResolution(targetUrl)) {
@@ -271,6 +292,8 @@ export async function fetchOfferWithFallback(
     const offer = { ...fromApi, url: targetUrl, found: true };
     persistShared(offer);
     resetEmptyScrape(marketplace, 'card');
+    trackCompareMpAttempt({ marketplace, path: 'api', success: true });
+    trackScrapeRequest({ marketplace, context: 'card', source: 'api', success: true });
     return offer;
   }
 
@@ -281,20 +304,42 @@ export async function fetchOfferWithFallback(
       if (scraped?.price && scraped.price > 0) {
         // Personal/session price — do NOT write to shared cache
         resetEmptyScrape(marketplace, 'card');
+        trackCompareMpAttempt({ marketplace, path: 'tab', success: true });
+        trackScrapeRequest({ marketplace, context: 'card', source: 'tab', success: true });
         return scraped;
       }
       if (!options.forceTab) noteEmptyScrape(marketplace, 'card');
+      trackCompareMpAttempt({ marketplace, path: 'tab', success: false, reason: 'empty_card' });
+      trackScrapeRequest({
+        marketplace,
+        context: 'card',
+        source: 'tab',
+        success: false,
+        reason: 'empty_card',
+      });
     } catch (error) {
       if (!options.forceTab) noteEmptyScrape(marketplace, 'card');
+      trackCompareMpAttempt({ marketplace, path: 'tab', success: false, reason: 'tab_error' });
+      trackScrapeRequest({
+        marketplace,
+        context: 'card',
+        source: 'tab',
+        success: false,
+        reason: 'tab_error',
+      });
       console.warn('[PriceGuard] scrapeOfferViaHiddenTab:', error);
     }
+  } else {
+    trackCompareMpAttempt({
+      marketplace,
+      path: 'skip',
+      success: false,
+      reason: 'card_empty_budget',
+    });
   }
 
-  // Premium: серверный Unlocker только для карточки (не SERP)
-  if (
-    !options.skipUnlocker &&
-    (marketplace === 'ozon' || marketplace === 'yandex_market' || marketplace === 'wildberries')
-  ) {
+  // Premium: серверный Unlocker только для карточки (не SERP); assert inside unlocker
+  if (!options.skipUnlocker && isPremiumUnlockerMarketplace(marketplace)) {
     try {
       const unlocked = await fetchOfferViaPremiumUnlocker(targetUrl, marketplace);
       if (unlocked?.price && unlocked.price > 0) {
@@ -305,10 +350,18 @@ export async function fetchOfferWithFallback(
     } catch (error) {
       console.warn('[PriceGuard] premium unlocker:', error);
     }
+  } else if (options.skipUnlocker && isPremiumUnlockerMarketplace(marketplace)) {
+    trackCompareMpAttempt({
+      marketplace,
+      path: 'skip',
+      success: false,
+      reason: 'skip_unlocker',
+    });
   }
 
   // forceTab soft fallback: shared cache after live paths failed
   if (options.forceTab && deferredCache) {
+    trackCompareMpAttempt({ marketplace, path: 'cache', success: true, reason: 'force_tab_fallback' });
     return deferredCache;
   }
 

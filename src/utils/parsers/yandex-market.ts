@@ -1,5 +1,6 @@
 import { detectAuthenticityFromDom } from '@/lib/authenticity/detect-dom';
-import { parseRatingFromMarketplaceText } from '@/lib/compare-offers';
+import { parseRatingFromMarketplaceText, normalizeMarketplaceRating } from '@/lib/compare-offers';
+import { extractProductFeatures } from '@/lib/product-features';
 import { offerPricesFromYandexDomText } from '@/lib/yandex-offer';
 import {
   canonicalUrl,
@@ -225,6 +226,8 @@ export function parseYandexMarketProduct(): Product | null {
 
   const imageUrl = extractImageUrl();
   const authenticity = detectAuthenticityFromDom('yandex_market');
+  const { rating, reviewCount } = extractRating();
+  const color = extractProductFeatures(title.slice(0, 300)).color;
 
   return {
     id: `yandex-${article}`,
@@ -240,6 +243,9 @@ export function parseYandexMarketProduct(): Product | null {
     imageUrl,
     authenticity,
     scrapedAt: Date.now(),
+    rating: normalizeMarketplaceRating(rating),
+    reviewCount: reviewCount && reviewCount > 0 ? reviewCount : undefined,
+    color: color ? String(color) : undefined,
   };
 }
 

@@ -23,7 +23,11 @@ import { verifySerpOfferWithCardCascade } from '@/lib/card-cascade-verify';
 import { offerMatchStatus, resolveMatchStatus } from '@/lib/match-status';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { getEffectiveSearchQuery, buildCrossMarketplaceQueries } from '@/lib/compare-search-query';
-import { searchViaBrowserTab, searchViaOpenSerpTab } from '@/lib/compare-tab-search';
+import {
+  searchViaBrowserTab,
+  searchViaOpenProductTab,
+  searchViaOpenSerpTab,
+} from '@/lib/compare-tab-search';
 import { SEARCHING_MP_KEY, SEARCHING_MP_CROSS } from '@/lib/compare-jobs';
 import { getSerpCachedOffer, setSerpCachedOffer, clearSerpNotFoundAndExpired } from '@/lib/serp-cache';
 import {
@@ -36,7 +40,23 @@ import {
 import { attachPickHistoryBoosts } from '@/lib/pick-history';
 import { pipelineMetrics } from '@/lib/pipeline-metrics';
 import { hashQuery, telemetry } from '@/lib/telemetry';
+import { COMPARE_MARKETPLACE_CONCURRENCY, mapPool } from '@/lib/async-pool';
+import { sortCompareTargets } from '@/lib/compare-target-order';
+import { marketplaceSearchSkipReason } from '@/lib/marketplaces/search-gates';
+import {
+  compareOutcomeFromOfferStatuses,
+  trackCompareCompleted,
+  trackCompareRejected,
+  trackCompareCandidateSelected,
+  trackComparisonFailed,
+  classifyFailureReason,
+} from '@/lib/telemetry/funnel';
+import { getSelectedSearchMarketplaces, resolveCompareMarketplaces } from '@/lib/marketplaces/search-settings';
 import { reportSearchMetric } from '@/lib/telemetry/flush';
+import {
+  trackMarketplaceSearchStarted,
+  trackMarketplaceSearchFinished,
+} from '@/lib/telemetry/ops';
 import {
   MAX_CANDIDATE_POOL,
   filterPoolExcluding,
@@ -53,10 +73,12 @@ import { fetchWithRetry, apiErrorMessage, MARKETPLACE_SEARCH_RETRY } from '@/lib
 import {
   resetEmptyScrape,
   resetAllEmptyScrapes,
+  shouldSkipTabScrape,
 } from '@/lib/empty-scrape-guard';
 import { researchCompareViaEdge } from '@/lib/supabase/compare-research';
 import { getSharedPriceCache } from '@/lib/supabase/price-cache';
 import { extractArticle } from '@/utils/marketplace';
+import { trackCompareMpAttempt } from '@/lib/telemetry/compare-mp-attempt';
 
 export { fetchOfferFromUrl } from '@/lib/offer-fetch';
 
@@ -83,6 +105,7 @@ function rejectWeakMatch(
         errorCode: 'category_no_candidates',
         data: { reason: 'no_same_category_in_picker', candidateCount: offer.searchCandidates.length },
       });
+      trackCompareRejected(marketplace);
       return notFoundOffer(
         marketplace,
         query,
@@ -119,6 +142,7 @@ function rejectWeakMatch(
       errorCode: 'category',
       data: { rejectField: 'category', title: offer.title },
     });
+    trackCompareRejected(marketplace);
     return notFoundOffer(
       marketplace,
       query,
@@ -147,7 +171,7 @@ function rejectWeakMatch(
         titleSimilarity: diagnosis.titleSimilarity,
       },
     });
-    return {
+    trackCompareCandidateSelected(marketplace);    return {
       ...offer,
       matchConfidence: confidence,
       needsManualPick: false,
@@ -178,6 +202,7 @@ function rejectWeakMatch(
         rejectField: diagnosis.rejectField,
       },
     });
+    trackCompareCandidateSelected(marketplace);
     return {
       ...offer,
       matchConfidence: confidence,
@@ -205,6 +230,7 @@ function rejectWeakMatch(
       titleSimilarity: diagnosis.titleSimilarity,
     },
   });
+  trackCompareRejected(marketplace);
   return notFoundOffer(
     marketplace,
     query,
@@ -1080,6 +1106,35 @@ async function searchYandexMarket(
   );
 }
 
+async function searchMegamarket(
+  query: string,
+  _referenceTitle: string,
+  _referencePrice?: number,
+  _searchOptions: MarketplaceSearchOptions = {},
+): Promise<MarketplaceOffer> {
+  const searchUrl = buildMarketplaceSearchUrl('megamarket', query);
+  // No public search API in MVP — tab SERP only via searchMarketplaceWithFallback.
+  return notFoundOffer(
+    'megamarket',
+    query,
+    searchUrl,
+    'Мегамаркет: поиск через вкладку',
+  );
+}
+
+function searchTabOnlyMarketplace(
+  marketplace: ComparisonMarketplace,
+  query: string,
+): MarketplaceOffer {
+  const searchUrl = buildMarketplaceSearchUrl(marketplace, query);
+  return notFoundOffer(
+    marketplace,
+    query,
+    searchUrl,
+    `${marketplace}: поиск через вкладку`,
+  );
+}
+
 export async function searchMarketplace(
   marketplace: ComparisonMarketplace,
   query: string,
@@ -1096,6 +1151,10 @@ export async function searchMarketplace(
       return searchOzon(query, ref, referencePrice, searchOptions);
     case 'yandex_market':
       return searchYandexMarket(query, ref, referencePrice, searchOptions);
+    case 'megamarket':
+      return searchMegamarket(query, ref, referencePrice, searchOptions);
+    default:
+      return searchTabOnlyMarketplace(marketplace, query);
   }
 }
 
@@ -1175,6 +1234,7 @@ export async function searchMarketplaceWithFallback(
     queryHash: qHash,
     data: { hasExcluded: Boolean(searchOptions.excludedUrls?.length) },
   });
+  trackMarketplaceSearchStarted(marketplace);
   telemetry.info({
     stage: 'search',
     name: 'SEARCH_QUERY_BUILT',
@@ -1246,6 +1306,12 @@ export async function searchMarketplaceWithFallback(
         needsManualPick: Boolean(offer.needsManualPick),
         candidateCount: offer.searchCandidates?.length ?? 0,
       },
+    });
+    trackMarketplaceSearchFinished({
+      marketplace,
+      success,
+      elapsedMs,
+      reason: offer.error ? String(offer.error).slice(0, 64) : undefined,
     });
     void reportSearchMetric({
       marketplace,
@@ -1467,14 +1533,69 @@ export async function searchMarketplaceWithFallback(
     return null;
   };
 
+  // Already-open product card (user found the item) — before SERP.
+  try {
+    const fromOpenCard = await searchViaOpenProductTab(
+      marketplace,
+      query,
+      ref,
+      referenceSpecs,
+      searchOptions.excludedUrls,
+    );
+    if (fromOpenCard && isUsableTabOffer(fromOpenCard)) {
+      const finalized = await persistCache(
+        await finalizeSearchOffer(fromOpenCard, cascadeContext),
+      );
+      if (isTerminalVerified(finalized)) {
+        trackCompareMpAttempt({
+          marketplace,
+          path: 'tab',
+          success: true,
+          reason: 'open_product_verified',
+        });
+        return emitFinal(finish(finalized), 'open_product_tab');
+      }
+      if (finalized.needsManualPick && finalized.searchCandidates?.length) {
+        trackCompareMpAttempt({
+          marketplace,
+          path: 'tab',
+          success: true,
+          reason: 'open_product_choice',
+        });
+        return emitFinal(finish(finalized), 'open_product_tab');
+      }
+    }
+  } catch {
+    // fall through to SERP
+  }
+
   // Tab-only search: already-open SERP of this MP, then HiddenBrowser.
   // search.wb.ru / YM /api/v1/search are not called from SW (429 burns quota).
   // Ozon composer API is last resort after empty tabs; 429 is not stashed into offer.error.
-  const fromVisible = await runVisibleSerpSearch();
-  if (fromVisible) return emitFinal(finish(fromVisible), 'visible_tab');
+  // P1: after N empty SERPs this research, skip further SERP tabs for this MP.
+  if (shouldSkipTabScrape(marketplace, 'serp')) {
+    trackCompareMpAttempt({
+      marketplace,
+      path: 'skip',
+      success: false,
+      reason: 'serp_empty_budget',
+    });
+  } else {
+    const fromVisible = await runVisibleSerpSearch();
+    if (fromVisible) return emitFinal(finish(fromVisible), 'visible_tab');
 
-  const fromHidden = await runHiddenSerpSearch();
-  if (fromHidden) return emitFinal(finish(fromHidden), 'hidden_browser');
+    if (!shouldSkipTabScrape(marketplace, 'serp')) {
+      const fromHidden = await runHiddenSerpSearch();
+      if (fromHidden) return emitFinal(finish(fromHidden), 'hidden_browser');
+    } else {
+      trackCompareMpAttempt({
+        marketplace,
+        path: 'skip',
+        success: false,
+        reason: 'serp_empty_budget',
+      });
+    }
+  }
 
   if (marketplace === 'ozon') {
     const fromApi = await runApiSearch({ stashErrors: !tabAttempted });
@@ -1976,14 +2097,14 @@ export async function compareProductAcrossMarketplaces(
 ): Promise<MarketplaceOffer[]> {
   const allowSearch = options?.allowSearch !== false;
   const skipUnlocker = Boolean(options?.skipUnlocker);
-  const allMarketplaces: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+  const selected = await getSelectedSearchMarketplaces();
+  const allMarketplaces = resolveCompareMarketplaces({
+    selected,
+    sourceMarketplace: product.sourceMarketplace,
+    onlyMarketplaces: options?.onlyMarketplaces,
+  });
   const sourceMarketplace = product.sourceMarketplace;
-  const only = options?.onlyMarketplaces?.length
-    ? new Set(options.onlyMarketplaces)
-    : null;
-  const targetMarketplaces = allMarketplaces.filter(
-    (mp) => mp !== sourceMarketplace && (!only || only.has(mp)),
-  );
+  const targetMarketplaces = allMarketplaces.filter((mp) => mp !== sourceMarketplace);
 
   const offers: MarketplaceOffer[] = [];
   let currentProduct = product;
@@ -2051,6 +2172,7 @@ export async function compareProductAcrossMarketplaces(
         sourceMarketplace,
         referencePrice: getReferencePrice(currentProduct),
         sourceUrl: product.sourceUrl,
+        targetMarketplaces: [...pending],
       });
       if (edgeOffers) {
         const edgeTitle = getBestTitle(currentProduct);
@@ -2103,21 +2225,50 @@ export async function compareProductAcrossMarketplaces(
     }
   }
 
-  const remainingTargets = [...pending];
+  const remainingTargets = sortCompareTargets(currentProduct, [...pending]);
 
   /** Serialize apply+progress so parallel MPs don't clobber each other's snapshot. */
   let progressGate: Promise<void> = Promise.resolve();
   const applyOfferProgress = (nextOffers: MarketplaceOffer[]) => {
-    progressGate = progressGate.then(async () => {
-      currentProduct = applyOffersToCompareProduct(currentProduct, nextOffers);
-      await onProgress?.(currentProduct, offers);
-    });
+    progressGate = progressGate
+      .catch(() => undefined)
+      .then(async () => {
+        currentProduct = applyOffersToCompareProduct(currentProduct, nextOffers);
+        try {
+          await onProgress?.(currentProduct, offers);
+        } catch (err) {
+          console.warn('[PriceGuard] compare onProgress:', err);
+        }
+      });
     return progressGate;
   };
 
   const resolveTarget = async (marketplace: ComparisonMarketplace): Promise<MarketplaceOffer> => {
     const query = buildSearchQueryForMarketplace(currentProduct, marketplace);
     try {
+      const skipReason = marketplaceSearchSkipReason(
+        marketplace,
+        getBestTitle(currentProduct),
+        getReferenceSpecs(currentProduct),
+      );
+      if (skipReason) {
+        trackCompareMpAttempt({
+          marketplace,
+          path: 'skip',
+          success: false,
+          reason: 'category_gate',
+          productId: currentProduct.id,
+        });
+        return finalizeResearchOffer(
+          notFoundOffer(
+            marketplace,
+            query,
+            buildMarketplaceSearchUrl(marketplace, query),
+            skipReason,
+          ),
+        );
+      }
+
       let offer = await resolveOfferForMarketplace(currentProduct, marketplace, query, {
         allowSearch,
         freshSearch: allowSearch,
@@ -2160,31 +2311,28 @@ export async function compareProductAcrossMarketplaces(
     }
   };
 
-  // Параллельный поиск; UI обновляется по мере готовности каждой площадки (V4)
+  // Limited parallelism (HiddenBrowser); UI updates as each MP settles
   try {
-    await Promise.all(
-      remainingTargets.map(async (mp) => {
-        // Mark loading for progressive UI
-        const loadingOffer: MarketplaceOffer = {
-          marketplace: mp,
-          title: getBestTitle(currentProduct),
-          price: null,
-          delivery: null,
-          rating: null,
-          url: buildMarketplaceSearchUrl(mp, buildSearchQueryForMarketplace(currentProduct, mp)),
-          found: false,
-          matchStatus: 'loading_card',
-        };
-        offers.push(loadingOffer);
-        await applyOfferProgress([loadingOffer]);
+    await mapPool(remainingTargets, COMPARE_MARKETPLACE_CONCURRENCY, async (mp) => {
+      const loadingOffer: MarketplaceOffer = {
+        marketplace: mp,
+        title: getBestTitle(currentProduct),
+        price: null,
+        delivery: null,
+        rating: null,
+        url: buildMarketplaceSearchUrl(mp, buildSearchQueryForMarketplace(currentProduct, mp)),
+        found: false,
+        matchStatus: 'loading_card',
+      };
+      offers.push(loadingOffer);
+      await applyOfferProgress([loadingOffer]);
 
-        const offer = await resolveTarget(mp);
-        const idx = offers.findIndex((o) => o.marketplace === mp);
-        if (idx >= 0) offers[idx] = offer;
-        else offers.push(offer);
-        await applyOfferProgress([offer]);
-      }),
-    );
+      const offer = await resolveTarget(mp);
+      const idx = offers.findIndex((o) => o.marketplace === mp);
+      if (idx >= 0) offers[idx] = offer;
+      else offers.push(offer);
+      await applyOfferProgress([offer]);
+    });
     await progressGate;
   } finally {
     await chrome.storage.local.remove(SEARCHING_MP_KEY);
@@ -2217,7 +2365,8 @@ export async function compareAndUpdateProduct(
     onlyMarketplaces?: ComparisonMarketplace[];
   },
 ): Promise<{ offers: MarketplaceOffer[]; product: CompareProduct }> {
-  if (!shouldRunCompare(product, options?.force)) {
+  const selected = await getSelectedSearchMarketplaces();
+  if (!shouldRunCompare(product, options?.force, selected)) {
     telemetry.info({
       stage: 'cache',
       name: 'COMPARE_CACHE_SKIP',
@@ -2225,11 +2374,15 @@ export async function compareAndUpdateProduct(
       marketplace: product.sourceMarketplace,
       data: { force: Boolean(options?.force), comparedAt: product.comparedAt },
     });
-    return { offers: offersFromCompareProduct(product), product };
+    return {
+      offers: offersFromCompareProduct(product, { marketplaces: selected }),
+      product,
+    };
   }
 
   const mode = options?.mode ?? 'research';
   const allowSearch = mode === 'research';
+  const compareStartedAt = Date.now();
 
   if (allowSearch) {
     await clearSerpNotFoundAndExpired();
@@ -2254,57 +2407,74 @@ export async function compareAndUpdateProduct(
   }
 
   let latestProduct = product;
-  const offers = await compareProductAcrossMarketplaces(
-    product,
-    async (updated) => {
-      latestProduct = updated;
-      await options?.onProgress?.(updated);
-    },
-    {
-      refreshSource: options?.force,
-      allowSearch,
-      skipUnlocker: options?.skipUnlocker,
-      onlyMarketplaces: options?.onlyMarketplaces,
-    },
-  );
-  // Apply final offers onto last progressive snapshot (not the original shell only)
-  const updated = applyOffersToCompareProduct(latestProduct, offers);
-  const productModel = deriveProductModel(updated);
+  try {
+    const offers = await compareProductAcrossMarketplaces(
+      product,
+      async (updated) => {
+        latestProduct = updated;
+        await options?.onProgress?.(updated);
+      },
+      {
+        refreshSource: options?.force,
+        allowSearch,
+        skipUnlocker: options?.skipUnlocker,
+        onlyMarketplaces: options?.onlyMarketplaces,
+      },
+    );
+    // Apply final offers onto last progressive snapshot (not the original shell only)
+    const updated = applyOffersToCompareProduct(latestProduct, offers);
+    const productModel = deriveProductModel(updated);
 
-  telemetry.info({
-    stage: 'job',
-    name: 'COMPARE_DONE',
-    productId: product.id,
-    data: {
+    telemetry.info({
+      stage: 'job',
+      name: 'COMPARE_DONE',
+      productId: product.id,
+      data: {
+        mode,
+        offers: offers.map((o) => ({
+          marketplace: o.marketplace,
+          matchStatus: o.matchStatus ?? offerMatchStatus(o),
+          found: Boolean(o.found && isOfferWithPrice(o)),
+          confidence: o.matchConfidence,
+          error: o.error ? String(o.error).slice(0, 120) : undefined,
+        })),
+      },
+    });
+
+    trackCompareCompleted(
+      compareOutcomeFromOfferStatuses(
+        offers.map((o) => o.matchStatus ?? offerMatchStatus(o)),
+      ),
+      product.sourceMarketplace,
+      { durationMs: Date.now() - compareStartedAt },
+    );
+
+    console.info('[PriceGuard] compare done', {
+      productId: product.id,
       mode,
       offers: offers.map((o) => ({
         marketplace: o.marketplace,
         matchStatus: o.matchStatus ?? offerMatchStatus(o),
         found: Boolean(o.found && isOfferWithPrice(o)),
-        confidence: o.matchConfidence,
-        error: o.error ? String(o.error).slice(0, 120) : undefined,
+        price: isOfferWithPrice(o) ? o.price : undefined,
+        error: o.error ? String(o.error).slice(0, 160) : undefined,
       })),
-    },
-  });
+    });
 
-  console.info('[PriceGuard] compare done', {
-    productId: product.id,
-    mode,
-    offers: offers.map((o) => ({
-      marketplace: o.marketplace,
-      matchStatus: o.matchStatus ?? offerMatchStatus(o),
-      found: Boolean(o.found && isOfferWithPrice(o)),
-      price: isOfferWithPrice(o) ? o.price : undefined,
-      error: o.error ? String(o.error).slice(0, 160) : undefined,
-    })),
-  });
-
-  return {
-    offers,
-    product: productModel
-      ? { ...updated, productModel, comparedAt: Date.now() }
-      : { ...updated, comparedAt: Date.now() },
-  };
+    return {
+      offers,
+      product: productModel
+        ? { ...updated, productModel, comparedAt: Date.now() }
+        : { ...updated, comparedAt: Date.now() },
+    };
+  } catch (err) {
+    trackComparisonFailed(
+      classifyFailureReason(err),
+      product.sourceMarketplace,
+      Date.now() - compareStartedAt,
+    );
+    throw err;
+  }
 }
 
 export function findCheapestOffer(offers: MarketplaceOffer[]): MarketplaceOffer | null {

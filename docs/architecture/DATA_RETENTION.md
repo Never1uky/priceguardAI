@@ -20,7 +20,7 @@ audit — several tables and one purge mechanism were added since then.
 |---|---|
 | `telegram_ai_threads` | `expires_at < now()` |
 | `product_cache` | `last_updated < now() - 7 days` |
-| `price_scrape_cache` | `fetched_at < now() - 2 hours` |
+| `price_scrape_cache` | `fetched_at < now() - 6 hours` |
 | `ai_request_log` | `created_at < now() - 90 days` |
 | `search_metrics` | `created_at < now() - 90 days` |
 
@@ -42,7 +42,7 @@ where jobname = 'priceguard-privacy-ttl-purge';
 | Table | Data | Purpose | TTL | Physical Delete | Cleanup |
 |---|---|---|---|---|---|
 | `product_cache` | Full review text + author, AI analysis, shared across users by (marketplace, product_id) | Avoid re-scraping/re-analyzing the same product | 7 days | **Yes** | `purge_privacy_ttl_data()` |
-| `price_scrape_cache` | Scraped price/title/url, shared | Short-lived price cache to cut Scrappey calls | 2 hours | **Yes** | `purge_privacy_ttl_data()` |
+| `price_scrape_cache` | Scraped price/title/url, shared | Short-lived price cache to cut Scrappey calls | 6 hours | **Yes** | `purge_privacy_ttl_data()` |
 | `telegram_ai_threads` | Q&A turns with AI, per chat_id | Rolling Telegram bot conversation context | 48h (own `expires_at`) | **Yes** | `purge_privacy_ttl_data()` |
 | `ai_request_log` | Provider/model/duration metadata only (no prompt/response body) | AI usage metrics | 90 days | **Yes** | `purge_privacy_ttl_data()` |
 | `search_metrics` | Search/match metrics | Product analytics | 90 days | **Yes** | `purge_privacy_ttl_data()` |

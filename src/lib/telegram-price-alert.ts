@@ -7,6 +7,7 @@ import { callEdgeSafe } from '@/lib/supabase/edge';
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import { makeReferralLinkAsync } from '@/utils/referral';
 import { telemetry } from '@/lib/telemetry/log';
+import { trackTelegramAlertSent } from '@/lib/telemetry/ops';
 import type { Marketplace } from '@/types/product';
 
 export interface TelegramPriceAlertPayload {
@@ -76,6 +77,13 @@ export async function sendTelegramPriceAlert(
     marketplace: payload.marketplace,
     data: { type: payload.type ?? 'generic' },
   });
+  if (sent && payload.type) {
+    trackTelegramAlertSent({
+      marketplace: payload.marketplace,
+      alertType: payload.type,
+      context: 'client',
+    });
+  }
 
   return { sent, error: res.error };
 }

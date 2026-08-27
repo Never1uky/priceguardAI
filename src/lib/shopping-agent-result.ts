@@ -6,6 +6,7 @@
 import { EdgeError } from '@/lib/supabase/edge';
 import type { AgentSearchStatus } from '@/lib/shopping-agent-client';
 import type { Marketplace } from '@/types/product';
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
 
 export const AGENT_DAILY_CAP_USER_MESSAGE =
   'Сегодня лимит подборов исчерпан (5 в день). Повторите завтра.';
@@ -19,7 +20,7 @@ export const AGENT_STATUS_LABELS: Record<AgentSearchStatus, string> = {
   failed: 'Не удалось подобрать',
 };
 
-const MARKETPLACES: ReadonlySet<string> = new Set(['wildberries', 'ozon', 'yandex_market']);
+const MARKETPLACES: ReadonlySet<string> = new Set(COMPARISON_MARKETPLACE_IDS);
 
 export type AgentMarketplace = Marketplace;
 

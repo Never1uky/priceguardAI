@@ -35,6 +35,20 @@ export function toCanonicalProductUrl(url: string, marketplace?: Marketplace | n
       }
     }
 
+    if (mp === 'megamarket') {
+      // Prefer megamarket.ru host (sbermegamarket redirects)
+      const host = /sbermegamarket\.ru/i.test(parsed.hostname)
+        ? 'https://megamarket.ru'
+        : `${parsed.protocol}//${parsed.hostname}`;
+      return `${host}${path}`;
+    }
+
+    if (mp === 'aliexpress') {
+      const id = path.match(/\/item\/(\d{8,})/i)?.[1];
+      if (id) return `https://aliexpress.ru/item/${id}.html`;
+      return `https://aliexpress.ru${path}`;
+    }
+
     return `${parsed.origin}${path}`;
   } catch {
     return url.split('?')[0].split('#')[0];

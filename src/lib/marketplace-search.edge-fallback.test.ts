@@ -21,6 +21,7 @@ vi.stubGlobal('chrome', {
 vi.mock('@/lib/compare-tab-search', () => ({
   searchViaBrowserTab: (...args: unknown[]) => searchViaBrowserTab(...args),
   searchViaOpenSerpTab: (...args: unknown[]) => searchViaOpenSerpTab(...args),
+  searchViaOpenProductTab: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/supabase/compare-research', () => ({
@@ -173,5 +174,33 @@ describe('compareProductAcrossMarketplaces — Edge needs_choice → local SERP'
     expect(researchCompareViaEdge).toHaveBeenCalled();
     expect(verifySerpOfferWithCardCascade).toHaveBeenCalled();
     expect(searchViaBrowserTab).toHaveBeenCalled();
+  });
+
+  it('MEGA-5: Edge empty Mega (tab-or-available) → client HiddenBrowser SERP', async () => {
+    researchCompareViaEdge.mockResolvedValue({});
+    searchViaBrowserTab.mockResolvedValue({
+      marketplace: 'megamarket',
+      title: 'Pixel from tab',
+      price: 79_990,
+      delivery: null,
+      rating: null,
+      url: 'https://megamarket.ru/catalog/details/100067205836/',
+      found: true,
+      matchStatus: 'verified',
+    });
+
+    await compareProductAcrossMarketplaces(product(), undefined, {
+      allowSearch: true,
+      onlyMarketplaces: ['megamarket'],
+    });
+
+    expect(researchCompareViaEdge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceMarketplace: 'wildberries',
+        targetMarketplaces: expect.arrayContaining(['megamarket']),
+      }),
+    );
+    expect(searchViaBrowserTab).toHaveBeenCalled();
+    expect(searchViaBrowserTab.mock.calls.some((c) => c[0] === 'megamarket')).toBe(true);
   });
 });

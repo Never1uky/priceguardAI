@@ -12,8 +12,9 @@ import { MAX_CANDIDATE_POOL } from '@/lib/candidate-pool';
 import { normalizeMarketplaceRating } from '@/lib/compare-offers';
 import {
   hasLargePriceSpreadAmongClose,
-  pickCheapestAmongCloseMatches,
+  reorderPickerCandidates,
 } from '@/lib/match-status';
+import { resolveCandidateDisplayTitle } from '@/lib/serp-title';
 import { isProductPageUrl } from '@/lib/product-match';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { sanitizeCandidateTitle } from '@/lib/serp-title';
@@ -72,14 +73,24 @@ export function buildOfferFromRankedCandidates(
     confidence: r.confidence,
     price: r.offer.price,
   }));
-  const reordered = pickCheapestAmongCloseMatches(withPrice);
+  const reordered = reorderPickerCandidates(
+    withPrice,
+    refTitle,
+    (r) => r.offer.title ?? '',
+    (r) => r.confidence,
+    (r) => r.price,
+  );
   const forceChoice = hasLargePriceSpreadAmongClose(reordered);
 
   const searchCandidates: SearchCandidateOffer[] = reordered
     .slice(0, MAX_CANDIDATE_POOL)
     .filter((r) => r.offer.url && isProductPageUrl(r.offer.url))
     .map((r, i) => ({
-      title: sanitizeCandidateTitle(r.offer.title, undefined, r.offer.url),
+      title: resolveCandidateDisplayTitle({
+        serpTitle: sanitizeCandidateTitle(r.offer.title ?? '', undefined, r.offer.url),
+        cardTitle: r.offer.title,
+        url: r.offer.url,
+      }),
       url: r.offer.url,
       price: r.offer.price,
       matchConfidence: r.confidence,
@@ -97,17 +108,20 @@ export function buildOfferFromRankedCandidates(
     );
   }
 
-  const unambiguous = tryUnambiguousSerpVerified(
-    marketplace,
-    searchCandidates.map((c) => ({
-      title: c.title,
-      url: c.url,
-      price: c.price,
-      confidence: c.matchConfidence ?? 0,
-      imageUrl: c.imageUrl,
-      rating: c.rating,
-    })),
-  );
+  const unambiguous =
+    searchCandidates.length === 1
+      ? tryUnambiguousSerpVerified(
+          marketplace,
+          searchCandidates.map((c) => ({
+            title: c.title,
+            url: c.url,
+            price: c.price,
+            confidence: c.matchConfidence ?? 0,
+            imageUrl: c.imageUrl,
+            rating: c.rating,
+          })),
+        )
+      : null;
   if (unambiguous) return unambiguous;
 
   const best = searchCandidates[0]!;

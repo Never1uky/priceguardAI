@@ -1,6 +1,7 @@
 import type { ProductAuthenticity } from '@/types/authenticity';
+import type { MarketplaceId } from '@/lib/marketplaces/registry';
 
-export type Marketplace = 'wildberries' | 'ozon' | 'yandex_market';
+export type Marketplace = MarketplaceId;
 
 export interface Product {
   id: string;
@@ -27,6 +28,11 @@ export interface Product {
   authenticity?: ProductAuthenticity;
   /** Явный статус наличия; price=0 допустим только при out_of_stock */
   availability?: 'in_stock' | 'out_of_stock';
+  /** Рейтинг с карточки (если доступен) */
+  rating?: number | null;
+  reviewCount?: number;
+  /** Цвет / вариант из заголовка или характеристик */
+  color?: string;
 }
 
 export interface TrackedProduct extends Product {

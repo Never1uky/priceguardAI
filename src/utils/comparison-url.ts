@@ -1,18 +1,33 @@
 import type { ComparisonMarketplace } from '@/types/comparison';
 import { toCanonicalProductUrl } from '@/utils/product-url';
+import { getTabSearchAdapter, TAB_SEARCH_ADAPTERS } from '@/lib/marketplaces/adapter-config';
 
-const MARKETPLACE_HOSTS: Record<ComparisonMarketplace, RegExp> = {
+const CORE_HOSTS: Partial<Record<ComparisonMarketplace, RegExp>> = {
   wildberries: /wildberries\.ru/i,
   ozon: /ozon\.ru/i,
   // ya.ru — короткие ссылки Маркета (как в safe-marketplace-url)
   yandex_market: /market\.yandex\.(ru|com)|(?:^|\/\/)(?:www\.)?ya\.ru/i,
 };
 
-const MARKETPLACE_ORIGIN: Record<ComparisonMarketplace, string> = {
+const MARKETPLACE_HOSTS: Record<ComparisonMarketplace, RegExp> = {
+  wildberries: CORE_HOSTS.wildberries!,
+  ozon: CORE_HOSTS.ozon!,
+  yandex_market: CORE_HOSTS.yandex_market!,
+  ...Object.fromEntries(TAB_SEARCH_ADAPTERS.map((a) => [a.id, a.hostPattern])),
+} as Record<ComparisonMarketplace, RegExp>;
+
+const CORE_ORIGIN: Partial<Record<ComparisonMarketplace, string>> = {
   wildberries: 'https://www.wildberries.ru',
   ozon: 'https://www.ozon.ru',
   yandex_market: 'https://market.yandex.ru',
 };
+
+const MARKETPLACE_ORIGIN: Record<ComparisonMarketplace, string> = {
+  wildberries: CORE_ORIGIN.wildberries!,
+  ozon: CORE_ORIGIN.ozon!,
+  yandex_market: CORE_ORIGIN.yandex_market!,
+  ...Object.fromEntries(TAB_SEARCH_ADAPTERS.map((a) => [a.id, a.origin])),
+} as Record<ComparisonMarketplace, string>;
 
 export function detectComparisonMarketplace(url: string): ComparisonMarketplace | null {
   for (const [marketplace, pattern] of Object.entries(MARKETPLACE_HOSTS) as [
@@ -90,7 +105,7 @@ export function extractComparisonArticle(
       return productMatch?.[1] ?? '';
     }
     default:
-      return '';
+      return getTabSearchAdapter(marketplace)?.extractArticle(url) ?? '';
   }
 }
 
@@ -110,6 +125,8 @@ export function isMarketplaceSerpUrl(
         return /\/search\/?/i.test(path);
       case 'yandex_market':
         return /\/search\/?/i.test(path);
+      default:
+        return getTabSearchAdapter(marketplace)?.isSerp(url, path) ?? false;
     }
   } catch {
     return false;
@@ -126,6 +143,9 @@ export function serpSearchQueryRelated(tabUrl: string, searchQuery: string): boo
     const q = (
       parsed.searchParams.get('search') ||
       parsed.searchParams.get('text') ||
+      parsed.searchParams.get('q') ||
+      parsed.searchParams.get('SearchText') ||
+      parsed.searchParams.get('query') ||
       ''
     ).toLowerCase();
     if (!q) return true;
@@ -157,5 +177,28 @@ export function buildMarketplaceSearchUrl(
       );
     case 'yandex_market':
       return `https://market.yandex.ru/search?text=${encoded}`;
+    default: {
+      const adapter = getTabSearchAdapter(marketplace);
+      return adapter ? adapter.searchUrl(encoded) : '';
+    }
+  }
+}
+
+export function marketplaceOrigin(marketplace: ComparisonMarketplace): string {
+  return MARKETPLACE_ORIGIN[marketplace];
+}
+
+export function marketplaceUrlPlaceholder(marketplace: ComparisonMarketplace): string {
+  const adapter = getTabSearchAdapter(marketplace);
+  if (adapter) return adapter.urlPlaceholder;
+  switch (marketplace) {
+    case 'wildberries':
+      return 'https://www.wildberries.ru/catalog/...';
+    case 'ozon':
+      return 'https://www.ozon.ru/product/...';
+    case 'yandex_market':
+      return 'https://market.yandex.ru/product/...';
+    default:
+      return 'https://…';
   }
 }

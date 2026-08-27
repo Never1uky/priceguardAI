@@ -6,6 +6,7 @@ import {
 import { getAuthUser } from '@/lib/supabase/auth';
 import { AI_AUTH_REQUIRED_MESSAGE, canUseCloudFeatures } from '@/lib/supabase/auth-guard';
 import type { PremiumPlanId } from '@/types/subscription';
+import { trackCheckoutStarted } from '@/lib/telemetry/funnel';
 
 const PENDING_SESSION_KEY = 'priceguard_pending_payment';
 
@@ -66,6 +67,7 @@ export async function startCheckout(plan: PremiumPlanId): Promise<{
     });
 
     await chrome.tabs.create({ url: result.paymentUrl });
+    trackCheckoutStarted(plan);
 
     return { ok: true, sessionId: result.sessionId };
   } catch (error) {

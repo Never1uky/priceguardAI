@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   SEO_MIN_QUALITY_SCORE,
   SEO_MIN_REVIEWS,
+  SEO_MIN_WEB_OVERVIEW_LEN,
   evaluateSeoPublishGates,
+  imageUrlFromSeoAnalysis,
   normalizeQualityScoreForSeo,
   normalizeSeoImageUrl,
+  pickSeoImageUrl,
   sanitizeSeoProductTitle,
 } from './publish-gates.ts';
+import { isSeoPublishableMp } from './seo-marketplaces';
 import {
   buildSeoProductSlug,
   canonicalPathForSlug,
@@ -88,6 +92,28 @@ describe('seo publish gates', () => {
         reviewCount: SEO_MIN_REVIEWS - 1,
       }).reason,
     ).toBe('insufficient_reviews');
+  });
+
+  it('MEGA-8 / ALI-8: Mega+Ali allowlisted but gates still block thin analyses (no fake publish)', () => {
+    expect(isSeoPublishableMp('megamarket')).toBe(true);
+    expect(isSeoPublishableMp('aliexpress')).toBe(true);
+    expect(
+      evaluateSeoPublishGates({
+        analysis: goodAnalysis,
+        reviewCount: 0,
+        title: 'Смартфон Google Pixel 10 128GB',
+      }).reason,
+    ).toBe('insufficient_reviews');
+    expect(
+      evaluateSeoPublishGates({
+        analysis: {
+          ...goodAnalysis,
+          webOverview: 'x'.repeat(SEO_MIN_WEB_OVERVIEW_LEN),
+        },
+        reviewCount: 0,
+        title: 'Смартфон Google Pixel 10 128GB',
+      }),
+    ).toEqual({ ok: true });
   });
 
   it('allows few reviews when web overview is long', () => {
@@ -216,5 +242,28 @@ describe('seo slug + hash', () => {
     const b = { ...a, priceInsight: 'new', analyzedAt: 999 };
     expect(stableAnalysisPayloadForHash(a)).toEqual(stableAnalysisPayloadForHash(b));
     expect(await hashSeoAnalysis(a)).toBe(await hashSeoAnalysis(b));
+  });
+});
+
+describe('pickSeoImageUrl / imageUrlFromSeoAnalysis', () => {
+  it('keeps existing https image and ignores later invalid candidates', () => {
+    expect(
+      pickSeoImageUrl(
+        'https://priceguard-seo.vercel.app/products/x.jpg',
+        'not-a-url',
+        'https://example.com/other.jpg',
+      ),
+    ).toBe('https://priceguard-seo.vercel.app/products/x.jpg');
+  });
+
+  it('returns null when no valid candidate (does not invent)', () => {
+    expect(pickSeoImageUrl(null, '', 'broken')).toBeNull();
+  });
+
+  it('reads imageUrl from analysis snapshot', () => {
+    expect(
+      imageUrlFromSeoAnalysis({ imageUrl: 'https://cdn.example/p.webp' }),
+    ).toBe('https://cdn.example/p.webp');
+    expect(imageUrlFromSeoAnalysis({ qualityScore: 8 })).toBeNull();
   });
 });

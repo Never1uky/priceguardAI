@@ -14,6 +14,15 @@ describe('toCanonicalProductUrl', () => {
       'https://www.wildberries.ru/catalog/292619464/detail.aspx',
     );
   });
+
+  it('rewrites sbermegamarket host to megamarket.ru', () => {
+    expect(
+      toCanonicalProductUrl(
+        'https://www.sbermegamarket.ru/catalog/details/item-1234567890/?ref=1',
+        'megamarket',
+      ),
+    ).toBe('https://megamarket.ru/catalog/details/item-1234567890');
+  });
 });
 
 describe('offerLinkUrl', () => {

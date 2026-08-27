@@ -90,7 +90,7 @@ supabase functions deploy update-prices telegram-webhook fetch-product-price pro
 
 - Scrappey: `request` mode (дешевле) → fallback `browser` при captcha/block.
 - Cron `update-prices`: Ozon/YM — Scrappey **до** legacy; WB — сначала `card.wb.ru`, Scrappey только если пусто.
-- Кэш `price_scrape_cache` TTL **2 часа**, source `scrappey | legacy`.
+- Кэш `price_scrape_cache` TTL **6 часов**, source `scrappey | legacy`.
 - Без `SCRAPPEY_API_KEY` — только legacy HTTP (частые блокировки Ozon/YM).
 - Ответ cron: `scrappeyConfigured` + `stats.bySource: { cache, scrappey, legacy }`.
 - Live smoke: `SCRAPPEY_API_KEY=... npm run smoke:scrappey`

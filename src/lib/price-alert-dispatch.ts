@@ -148,6 +148,14 @@ async function shouldSkipTelegramForUrl(url: string | undefined): Promise<boolea
   return true;
 }
 
+/**
+ * Megamarket / AliExpress: Chrome/local notifications only — never client Telegram
+ * (server monitoring cron also excludes them; MEGA-6 / ALI-6).
+ */
+export function skipsTelegramAlertsForMarketplace(marketplace: string): boolean {
+  return marketplace === 'megamarket' || marketplace === 'aliexpress';
+}
+
 /** Падение цены отслеживаемого товара */
 export async function dispatchPriceDropAlert(
   product: Product,
@@ -166,6 +174,8 @@ export async function dispatchPriceDropAlert(
   }
 
   await showPriceDropNotification(alertProduct, previousPrice);
+
+  if (skipsTelegramAlertsForMarketplace(alertProduct.marketplace)) return;
 
   // Server cron owns Telegram when monitoring is on — avoid double alerts
   if (await isServerPriceMonitoringActive()) return;
@@ -198,6 +208,8 @@ export async function dispatchTargetPriceAlert(
   if (!(await areNotificationsEnabledForProduct(alertProduct.id))) return;
 
   await showTargetPriceNotification(alertProduct, targetPrice);
+
+  if (skipsTelegramAlertsForMarketplace(alertProduct.marketplace)) return;
 
   if (shouldSkipTelegramForTracked(alertProduct)) return;
 
@@ -250,6 +262,7 @@ export async function dispatchComparePriceDropAlert(
     marketplace,
   );
 
+  if (skipsTelegramAlertsForMarketplace(marketplace)) return;
   if (await shouldSkipTelegramForUrl(url)) return;
 
   if (settings.telegramEnabled && settings.telegramChatId.trim()) {
@@ -301,6 +314,13 @@ export async function dispatchCheaperElsewhereAlert(input: {
     input.url,
     input.cheaperMarketplace,
   );
+
+  if (
+    skipsTelegramAlertsForMarketplace(input.sourceMarketplace) ||
+    skipsTelegramAlertsForMarketplace(input.cheaperMarketplace)
+  ) {
+    return;
+  }
 
   if (await shouldSkipTelegramForUrl(input.url)) return;
 

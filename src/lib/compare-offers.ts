@@ -4,6 +4,8 @@ import { offerLinkUrl } from '@/utils/product-url';
 import { syncPoolOntoProduct } from '@/lib/candidate-pool';
 import { preferRealTitle } from '@/utils/wb-image';
 import { isOutOfStockError, OUT_OF_STOCK_ERROR } from '@/lib/out-of-stock';
+import { DEFAULT_SEARCH_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
+import { normalizeSearchMarketplaces } from '@/lib/marketplaces/search-settings';
 
 const DEFAULT_NOT_FOUND_ERROR =
   'Товар не найден — добавьте прямую ссылку на карточку';
@@ -473,8 +475,16 @@ export function settleCompareProductLoading(product: CompareProduct): ComparePro
   return { ...product, marketplaceOffers: nextOffers };
 }
 
-export function offersFromCompareProduct(product: CompareProduct): MarketplaceOffer[] {
-  const marketplaces: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+export function offersFromCompareProduct(
+  product: CompareProduct,
+  options?: { marketplaces?: ComparisonMarketplace[] },
+): MarketplaceOffer[] {
+  let marketplaces = options?.marketplaces?.length
+    ? normalizeSearchMarketplaces(options.marketplaces)
+    : [...DEFAULT_SEARCH_MARKETPLACE_IDS];
+  if (!marketplaces.includes(product.sourceMarketplace)) {
+    marketplaces = normalizeSearchMarketplaces([...marketplaces, product.sourceMarketplace]);
+  }
 
   return marketplaces.map((marketplace) => {
     const cached = product.marketplaceOffers?.[marketplace];

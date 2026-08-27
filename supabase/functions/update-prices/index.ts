@@ -50,6 +50,28 @@ import {
   raceWithTimeout,
   shouldStopByRuntimeBudget,
 } from '../_shared/update-prices-policy.ts';
+import {
+  DEFAULT_SCRAPPEY_CIRCUIT_OPEN_AFTER,
+  maySendPriceAlert,
+  shouldOpenScrappeyCircuit,
+  softFailureTrackedPatch,
+} from '../_shared/update-prices-failure.ts';
+import { coalesceTrackedSkuGroups } from '../_shared/update-prices-coalesce.ts';
+import {
+  loadCostGuards,
+  scraperForMarketplace,
+  trackLimitForPlan,
+} from '../_shared/cost-guards.ts';
+import {
+  isMonitoringAllowed,
+  loadMarketplaceFlags,
+  marketplaceFlagsPublicPayload,
+} from '../_shared/marketplace-flags.ts';
+import {
+  insertOpsTelemetry,
+  monitorScrapeOpsEvents,
+  type OpsTelemetryInput,
+} from '../_shared/ops-telemetry.ts';
 
 /** Match client FULL_ANALYSIS_PRICE_DELTA_* — invalidate AI cache on big moves. */
 const AI_CACHE_PRICE_DELTA_PCT = 0.1;
@@ -75,18 +97,10 @@ function isWithinTelegramGrace(createdAt: string | null | undefined, nowMs: numb
   return age >= 0 && age < TELEGRAM_ALERT_GRACE_MS;
 }
 
-/** Free: 3–5 товаров — верхняя граница плана */
-const FREE_TRACK_LIMIT = 5;
-const PREMIUM_TRACK_LIMIT = 50;
-
 /** Не спамить target-алертом чаще раза в сутки, пока цена ≤ цели */
 const TARGET_ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /** Не слать повторный drop на ту же (или близкую) цену чаще этого */
 const DROP_ALERT_COOLDOWN_MS = 8 * 60 * 60 * 1000;
-/** Skip scrape when last_checked is fresher than this (Premium / priority) */
-const PRICE_FRESH_MS_PREMIUM = 3 * 60 * 60 * 1000;
-/** Free subscribers: rarer cron scrapes */
-const PRICE_FRESH_MS_FREE = 6 * 60 * 60 * 1000;
 
 interface AlertSettingsRow {
   user_id: string;
@@ -225,10 +239,6 @@ Deno.serve(async (req) => {
     Deno.env.get('UPDATE_PRICES_RUNTIME_BUDGET_MS'),
     DEFAULT_UPDATE_PRICES_RUNTIME_BUDGET_MS,
   );
-  const maxGroupsPerRun = parsePositiveIntEnv(
-    Deno.env.get('UPDATE_PRICES_MAX_GROUPS_PER_RUN'),
-    DEFAULT_UPDATE_PRICES_MAX_GROUPS,
-  );
   const skuFetchTimeoutMs = parsePositiveIntEnv(
     Deno.env.get('UPDATE_PRICES_SKU_FETCH_TIMEOUT_MS'),
     DEFAULT_SKU_FETCH_TIMEOUT_MS,
@@ -252,6 +262,15 @@ Deno.serve(async (req) => {
   let lockHeld = false;
 
   try {
+    const costGuards = await loadCostGuards(supabase);
+    const mpFlags = await loadMarketplaceFlags(supabase);
+    const PRICE_FRESH_MS_PREMIUM = costGuards.freshMsPremium;
+    const PRICE_FRESH_MS_FREE = costGuards.freshMsFree;
+    const maxGroupsPerRun = parsePositiveIntEnv(
+      Deno.env.get('UPDATE_PRICES_MAX_GROUPS_PER_RUN'),
+      costGuards.maxGroupsPerRun || DEFAULT_UPDATE_PRICES_MAX_GROUPS,
+    );
+
     const lockTtlSeconds = Math.max(180, Math.ceil(runtimeBudgetMs / 1000) + 60);
     const { data: lockAcquired, error: lockError } = await supabase.rpc(
       'try_acquire_update_prices_lock',
@@ -306,6 +325,17 @@ Deno.serve(async (req) => {
         .map((p) => p.user_id as string),
     );
 
+    // Phase 13: active trial gets Premium track/freshness tier on cron
+    const { data: trialRows } = await supabase
+      .from('trial_claims')
+      .select('user_id')
+      .in('user_id', userIds)
+      .gt('expires_at', nowIso);
+    for (const t of trialRows ?? []) {
+      const uid = String((t as { user_id?: string }).user_id ?? '');
+      if (uid) premiumActive.add(uid);
+    }
+
     const projectScraper = projectScraperCredentials();
 
     // Priority: Premium first, then Free
@@ -343,7 +373,7 @@ Deno.serve(async (req) => {
     for (const settingsRow of eligibleSettings) {
       const isPremium = premiumActive.has(settingsRow.user_id);
       let list = byUser.get(settingsRow.user_id) ?? [];
-      list = list.slice(0, isPremium ? PREMIUM_TRACK_LIMIT : FREE_TRACK_LIMIT);
+      list = list.slice(0, trackLimitForPlan(costGuards, isPremium));
       for (const row of list) {
         workQueue.push({ row, priority: isPremium });
       }
@@ -351,40 +381,10 @@ Deno.serve(async (req) => {
 
     stats.products = workQueue.length;
 
-    // Coalesce scrapes: one fetch per (marketplace, product_id), then fan-out
-    type SkuGroup = {
-      key: string;
-      marketplace: Marketplace;
-      productId: string;
-      productUrl: string | null;
-      priority: boolean;
-      rows: Array<{ row: TrackedRow; priority: boolean }>;
-    };
-    const skuGroups = new Map<string, SkuGroup>();
-    for (const item of workQueue) {
-      const mp = item.row.marketplace as Marketplace;
-      if (!['wildberries', 'ozon', 'yandex_market'].includes(mp)) continue;
-      const key = `${mp}:${item.row.product_id}`;
-      const existing = skuGroups.get(key);
-      if (existing) {
-        existing.rows.push(item);
-        existing.priority = existing.priority || item.priority;
-        if (!existing.productUrl && item.row.product_url) {
-          existing.productUrl = item.row.product_url;
-        }
-      } else {
-        skuGroups.set(key, {
-          key,
-          marketplace: mp,
-          productId: item.row.product_id,
-          productUrl: item.row.product_url,
-          priority: item.priority,
-          rows: [item],
-        });
-      }
-    }
-
-    const groups = [...skuGroups.values()];
+    // Shared monitoring: one Scrappey/fetch per marketplace+bare product_id, fan-out alerts
+    const groups = coalesceTrackedSkuGroups(workQueue).filter((g) =>
+      isMonitoringAllowed(mpFlags, g.marketplace, costGuards.monitoringMarketplaces)
+    );
     const totalGroups = groups.length;
     const groupsForRun = groups.slice(0, maxGroupsPerRun);
     let processedGroups = 0;
@@ -400,12 +400,25 @@ Deno.serve(async (req) => {
       Deno.env.get('UPDATE_PRICES_CONCURRENCY'),
       DEFAULT_UPDATE_PRICES_CONCURRENCY,
     );
+    const circuitOpenAfter = parsePositiveIntEnv(
+      Deno.env.get('UPDATE_PRICES_SCRAPPEY_CIRCUIT_AFTER'),
+      costGuards.scrappeyCircuitAfter || DEFAULT_SCRAPPEY_CIRCUIT_OPEN_AFTER,
+    );
+    /** Soft scrape failures this run — opens circuit to stop Scrappey storm */
+    let scrapeSoftFailures = 0;
+    let scrappeyCircuitOpen = false;
+    const opsEvents: OpsTelemetryInput[] = [];
+    const pushOps = (...events: OpsTelemetryInput[]) => {
+      opsEvents.push(...events);
+    };
 
     // Extracted so groups within a batch can run concurrently via Promise.all —
     // groups are independent (unique marketplace+product_id, disjoint tracked_products
     // rows), so there is no shared mutable state at risk here besides `stats`, whose
     // increments are synchronous (no await mid-increment) and therefore race-free.
-    const processGroup = async (group: SkuGroup): Promise<void> => {
+    // scrapeSoftFailures / scrappeyCircuitOpen: best-effort circuit (may race slightly
+    // under concurrency; still bounds total Scrappey burn within a run).
+    const processGroup = async (group: (typeof groups)[number]): Promise<void> => {
       const nowMsInner = Date.now();
       const staleRows = group.rows.filter(({ row, priority }) => {
         const baseFreshMs = priority ? PRICE_FRESH_MS_PREMIUM : PRICE_FRESH_MS_FREE;
@@ -419,16 +432,24 @@ Deno.serve(async (req) => {
 
       let fetched: Awaited<ReturnType<typeof fetchMarketplacePriceDetailed>> = null;
       let fetchTimedOut = false;
+      let fetchHardError = false;
 
       // E5: scrape only if at least one subscriber is stale (tier-aware + OOS backoff)
       if (staleRows.length > 0) {
+        const useScraper = scrappeyCircuitOpen
+          ? null
+          : scraperForMarketplace(costGuards, group.marketplace, projectScraper);
         try {
           fetched = await raceWithTimeout(
             fetchMarketplacePriceDetailed(
               group.marketplace,
               group.productId,
               group.productUrl,
-              { scraper: projectScraper, supabase },
+              {
+                scraper: useScraper,
+                supabase,
+                cacheTtlMs: costGuards.priceCacheTtlMs,
+              },
             ),
             skuFetchTimeoutMs,
           );
@@ -436,34 +457,93 @@ Deno.serve(async (req) => {
           if (fetched?.source) {
             stats.bySource[fetched.source] = (stats.bySource[fetched.source] ?? 0) + 1;
           }
+          pushOps(
+            ...monitorScrapeOpsEvents({
+              marketplace: group.marketplace,
+              source: fetched?.source ?? null,
+              subscriber_count: group.rows.length,
+              stale_count: staleRows.length,
+              scrappey: Boolean(useScraper),
+            }),
+          );
+          if (isUnavailablePriceResult(fetched)) {
+            scrapeSoftFailures += 1;
+            if (shouldOpenScrappeyCircuit(scrapeSoftFailures, circuitOpenAfter)) {
+              scrappeyCircuitOpen = true;
+            }
+          } else {
+            scrapeSoftFailures = 0;
+          }
         } catch (error) {
           if (isTimeoutError(error)) {
             fetchTimedOut = true;
             console.warn('[update-prices] sku fetch timeout', group.key);
           } else {
+            fetchHardError = true;
             console.warn('[update-prices] sku fetch error', group.key, error);
           }
+          pushOps({
+            name: 'telegram_monitor_error',
+            marketplace: group.marketplace,
+            success: false,
+            stage: 'telegram',
+            error_code: isTimeoutError(error) ? 'timeout' : 'fetch_exception',
+            payload: {
+              subscriber_count: group.rows.length,
+              stale_count: staleRows.length,
+              reason: isTimeoutError(error) ? 'timeout' : 'fetch_exception',
+            },
+          });
+          scrapeSoftFailures += 1;
+          if (shouldOpenScrappeyCircuit(scrapeSoftFailures, circuitOpenAfter)) {
+            scrappeyCircuitOpen = true;
+          }
         }
+      } else {
+        pushOps(
+          ...monitorScrapeOpsEvents({
+            marketplace: group.marketplace,
+            source: null,
+            subscriber_count: group.rows.length,
+            stale_count: 0,
+          }),
+        );
       }
 
-      if (fetchTimedOut) {
-        for (const { row } of staleRows) {
+      const applySoftFailure = async (
+        rows: typeof staleRows,
+        reason: string,
+      ): Promise<void> => {
+        for (const { row } of rows) {
           const mp = group.marketplace;
           stats.errors += 1;
           stats.errorsByMarketplace[mp] = (stats.errorsByMarketplace[mp] ?? 0) + 1;
           try {
             await supabase
               .from('tracked_products')
-              .update({
-                last_fetch_ok: false,
-                last_fetch_error: FETCH_TIMEOUT_REASON,
-                updated_at: nowIso,
-              })
+              .update(
+                softFailureTrackedPatch({
+                  nowIso,
+                  consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+                  unavailableSince: row.unavailable_since,
+                  reason,
+                }),
+              )
               .eq('id', row.id);
           } catch {
             // ignore secondary write failure
           }
         }
+      };
+
+      if (fetchTimedOut) {
+        await applySoftFailure(staleRows, FETCH_TIMEOUT_REASON);
+        processedGroups += 1;
+        return;
+      }
+
+      if (fetchHardError) {
+        await applySoftFailure(staleRows, 'fetch_exception');
         processedGroups += 1;
         return;
       }
@@ -489,19 +569,23 @@ Deno.serve(async (req) => {
           if (isUnavailablePriceResult(fetched)) {
             if (!rowFresh) {
               stats.unavailable += 1;
-              const nextCount = (row.consecutive_unavailable_count ?? 0) + 1;
+              // Soft: cooldown via last_checked + counter; keep last_price (no false alert)
               await supabase
                 .from('tracked_products')
-                .update({
-                  last_fetch_ok: false,
-                  last_fetch_error: OOS_REASON,
-                  consecutive_unavailable_count: nextCount,
-                  unavailable_since: row.unavailable_since ?? nowIso,
-                  last_checked: nowIso,
-                  updated_at: nowIso,
-                })
+                .update(
+                  softFailureTrackedPatch({
+                    nowIso,
+                    consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+                    unavailableSince: row.unavailable_since,
+                    reason: OOS_REASON,
+                  }),
+                )
                 .eq('id', row.id);
             }
+            continue;
+          }
+
+          if (!maySendPriceAlert(fetched)) {
             continue;
           }
 
@@ -536,11 +620,14 @@ Deno.serve(async (req) => {
             });
             await supabase
               .from('tracked_products')
-              .update({
-                last_fetch_ok: false,
-                last_fetch_error: `identity:${identity.reason}`,
-                updated_at: nowIso,
-              })
+              .update(
+                softFailureTrackedPatch({
+                  nowIso,
+                  consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+                  unavailableSince: row.unavailable_since,
+                  reason: `identity:${identity.reason}`,
+                }),
+              )
               .eq('id', row.id);
             stats.errors += 1;
             continue;
@@ -601,6 +688,13 @@ Deno.serve(async (req) => {
             );
             if (sent) {
               stats.notified += 1;
+              pushOps({
+                name: 'telegram_alert_sent',
+                marketplace: mp,
+                success: true,
+                stage: 'telegram',
+                payload: { alert_type: 'price_drop', subscriber_count: 1 },
+              });
               patch.last_drop_notified_at = nowIso;
               patch.last_drop_notified_price = fetched.price;
             }
@@ -624,6 +718,13 @@ Deno.serve(async (req) => {
             );
             if (sent) {
               stats.notified += 1;
+              pushOps({
+                name: 'telegram_alert_sent',
+                marketplace: mp,
+                success: true,
+                stage: 'telegram',
+                payload: { alert_type: 'target_price', subscriber_count: 1 },
+              });
               patch.last_target_notified_at = nowIso;
             }
           }
@@ -641,13 +742,16 @@ Deno.serve(async (req) => {
           try {
             await supabase
               .from('tracked_products')
-              .update({
-                last_fetch_ok: false,
-                last_fetch_error: error instanceof Error
-                  ? error.message.slice(0, 200)
-                  : 'fetch_exception',
-                updated_at: nowIso,
-              })
+              .update(
+                softFailureTrackedPatch({
+                  nowIso,
+                  consecutiveUnavailableCount: row.consecutive_unavailable_count ?? 0,
+                  unavailableSince: row.unavailable_since,
+                  reason: error instanceof Error
+                    ? error.message.slice(0, 200)
+                    : 'fetch_exception',
+                }),
+              )
               .eq('id', row.id);
           } catch {
             // ignore secondary write failure
@@ -670,11 +774,31 @@ Deno.serve(async (req) => {
 
     const elapsedMs = Date.now() - startedAtMs;
     const remainingGroups = Math.max(0, totalGroups - processedGroups);
+    const opsInserted = await insertOpsTelemetry(supabase, opsEvents);
     return jsonResponse({
       ok: true,
       stats,
-      scrappeyConfigured: Boolean(projectScraper),
-      uniqueSkus: skuGroups.size,
+      ops_telemetry_inserted: opsInserted,
+      scrappeyConfigured: Boolean(projectScraper) && costGuards.scrappeyEnabled,
+      uniqueSkus: totalGroups,
+      scrappey_circuit_open: scrappeyCircuitOpen,
+      scrape_soft_failures: scrapeSoftFailures,
+      cost_guards: {
+        source: costGuards.source,
+        free_track_limit: costGuards.freeTrackLimit,
+        premium_track_limit: costGuards.premiumTrackLimit,
+        fresh_ms_free: costGuards.freshMsFree,
+        fresh_ms_premium: costGuards.freshMsPremium,
+        scrappey_enabled: costGuards.scrappeyEnabled,
+        monitoring_marketplaces: costGuards.monitoringMarketplaces,
+        scrappey_marketplaces: costGuards.scrappeyMarketplaces,
+        price_cache_ttl_ms: costGuards.priceCacheTtlMs,
+      },
+      marketplace_flags: {
+        source: mpFlags.source,
+        updated_at: mpFlags.updatedAt,
+        flags: marketplaceFlagsPublicPayload(mpFlags),
+      },
       elapsed_ms: elapsedMs,
       runtime_budget_ms: runtimeBudgetMs,
       batch: {

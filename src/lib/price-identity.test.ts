@@ -116,4 +116,72 @@ describe('price-identity', () => {
     };
     expect(isLiveProductInTrackedList(live, tracked)).toBe(true);
   });
+
+  it('megamarket uses mm- storage id and strips megamarket: / URL slug', () => {
+    expect(
+      resolveProductArticle({
+        marketplace: 'megamarket',
+        article: '',
+        url: 'https://megamarket.ru/catalog/details/smartfon-100067205836/',
+        id: 'megamarket:x',
+      }),
+    ).toBe('100067205836');
+    expect(
+      stableProductStorageId({
+        marketplace: 'megamarket',
+        article: '100067205836',
+        url: 'https://megamarket.ru/catalog/details/100067205836/',
+        id: 'megamarket:100067205836',
+      }),
+    ).toBe('mm-100067205836');
+    expect(
+      productsIdentityMatch(
+        {
+          marketplace: 'megamarket',
+          article: '100067205836',
+          url: 'https://megamarket.ru/catalog/details/smartfon-100067205836/',
+          id: 'mm-100067205836',
+        },
+        {
+          marketplace: 'megamarket',
+          article: '100067205836',
+          url: 'https://megamarket.ru/catalog/details/100067205836/?ref=1',
+          id: 'megamarket:100067205836',
+        },
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('aliexpress uses ae- storage id and strips aliexpress: / item URL', () => {
+    expect(
+      resolveProductArticle({
+        marketplace: 'aliexpress',
+        article: '',
+        url: 'https://aliexpress.ru/item/1005001234567890.html?spm=x',
+        id: 'aliexpress:x',
+      }),
+    ).toBe('1005001234567890');
+    expect(
+      stableProductStorageId({
+        marketplace: 'aliexpress',
+        article: '1005001234567890',
+        url: 'https://aliexpress.ru/item/1005001234567890.html',
+        id: 'aliexpress:1005001234567890',
+      }),
+    ).toBe('ae-1005001234567890');
+    expect(
+      productsIdentityMatch(
+        {
+          marketplace: 'aliexpress',
+          article: '1005001234567890',
+          url: 'https://aliexpress.ru/item/1005001234567890.html',
+        },
+        {
+          marketplace: 'aliexpress',
+          id: 'ae-1005001234567890',
+          url: 'https://aliexpress.ru/item/1005001234567890.html',
+        },
+      ).ok,
+    ).toBe(true);
+  });
 });

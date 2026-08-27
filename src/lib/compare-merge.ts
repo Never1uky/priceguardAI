@@ -6,6 +6,7 @@ import {
 import { areCategoriesIncompatible } from '@/lib/category-plugins';
 import { inferProductCategory } from '@/lib/match-category';
 import { areBrandsCompatible } from '@/lib/model-extract';
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
 import type {
   CompareProduct,
   ComparisonMarketplace,
@@ -15,11 +16,7 @@ import type {
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 import { isGenericProductTitle } from '@/utils/wb-image';
 
-const ALL_MARKETPLACES: ComparisonMarketplace[] = [
-  'wildberries',
-  'ozon',
-  'yandex_market',
-];
+const ALL_MARKETPLACES: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
 
 const STOP_WORDS = new Set([
   'товар',

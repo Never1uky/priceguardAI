@@ -8,6 +8,7 @@ const fetchWithRetry = vi.fn().mockRejectedValue(new Error('no network in unit t
 vi.mock('@/lib/compare-tab-search', () => ({
   searchViaBrowserTab: (...args: unknown[]) => searchViaBrowserTab(...args),
   searchViaOpenSerpTab: (...args: unknown[]) => searchViaOpenSerpTab(...args),
+  searchViaOpenProductTab: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/offer-fetch', () => ({

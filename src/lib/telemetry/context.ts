@@ -5,6 +5,13 @@ import {
   type TelemetryContextPatch,
   type TelemetrySettings,
 } from './types';
+import {
+  detectBrowserLabelFromUa,
+  readNavigatorUserAgent,
+  type BrowserLabel,
+} from '@/lib/browser-label';
+
+export type { BrowserLabel };
 
 let sessionIdMem: string | null = null;
 let settingsMem: TelemetrySettings | null = null;
@@ -22,15 +29,9 @@ export function getExtensionVersion(): string {
   }
 }
 
-export function getBrowserLabel(): string {
-  try {
-    const ua = navigator.userAgent;
-    if (/Edg\//.test(ua)) return 'edge';
-    if (/Chrome\//.test(ua)) return 'chrome';
-    return 'chromium';
-  } catch {
-    return 'unknown';
-  }
+/** Coarse browser for analytics: chrome | edge | yandex | unknown — never raw UA. */
+export function getBrowserLabel(): BrowserLabel {
+  return detectBrowserLabelFromUa(readNavigatorUserAgent());
 }
 
 export async function ensureSessionId(): Promise<string> {

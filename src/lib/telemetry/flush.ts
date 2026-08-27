@@ -59,12 +59,17 @@ export async function flushRemoteTelemetry(): Promise<{ sent: number }> {
         stage: b.event.stage,
         name: b.event.name,
         marketplace: b.event.marketplace ?? null,
-        productId: b.event.productId ?? null,
-        queryHash: b.event.queryHash ?? null,
+        productId: b.event.funnel || b.event.ops ? null : (b.event.productId ?? null),
+        queryHash: b.event.funnel || b.event.ops ? null : (b.event.queryHash ?? null),
+        funnel: Boolean(b.event.funnel),
+        ops: Boolean(b.event.ops),
         success: b.event.success ?? null,
         elapsedMs: b.event.elapsedMs ?? null,
         errorCode: b.event.errorCode ?? null,
-        errorMessage: b.event.errorMessage?.slice(0, 300) ?? null,
+        errorMessage:
+          b.event.funnel || b.event.ops
+            ? null
+            : (b.event.errorMessage?.slice(0, 300) ?? null),
         extVersion: b.event.extVersion,
         sessionId: b.event.sessionId,
         traceId: b.event.traceId ?? null,
@@ -81,6 +86,10 @@ export async function flushRemoteTelemetry(): Promise<{ sent: number }> {
     const failed: QueuedRemote[] = [];
     for (const item of batch) {
       const e = item.event;
+      if (e.funnel || e.ops) {
+        failed.push(item);
+        continue;
+      }
       if (e.marketplace === 'wildberries' || e.marketplace === 'ozon' || e.marketplace === 'yandex_market') {
         const r = await callEdgeSafe('search-metrics', {
           marketplace: e.marketplace,

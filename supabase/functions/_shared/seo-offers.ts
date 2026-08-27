@@ -14,8 +14,9 @@ import {
   SEO_MAX_OFFERS,
   type SeoOfferSnapshot,
 } from './seo-publish-core.ts';
+import { seoOffersIds } from './seo-marketplaces.ts';
 
-const OTHER_MPS: Marketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+const OTHER_MPS = seoOffersIds() as Marketplace[];
 export { SEO_MAX_OFFERS, mergeSeoOffers };
 const MAX_MAPPINGS_PER_MP = 3;
 

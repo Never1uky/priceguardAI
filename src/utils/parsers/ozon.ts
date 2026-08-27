@@ -1,4 +1,6 @@
 import { detectAuthenticityFromDom } from '@/lib/authenticity/detect-dom';
+import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
+import { extractProductFeatures } from '@/lib/product-features';
 import { ozonBreakdownToOfferPrices, parseOzonPriceBlockText } from '@/lib/ozon-prices';
 import type { Product } from '@/types/product';
 import {
@@ -132,6 +134,10 @@ export function parseOzonProduct(): Product | null {
   if (!title || !price) return null;
 
   const authenticity = detectAuthenticityFromDom('ozon');
+  const { rating, reviewCount } = parseRatingFromMarketplaceText(
+    document.body?.textContent ?? '',
+  );
+  const color = extractProductFeatures(cleanTitle(title, 'ozon')).color;
 
   return {
     id: `ozon-${article}`,
@@ -147,6 +153,9 @@ export function parseOzonProduct(): Product | null {
     imageUrl,
     scrapedAt: Date.now(),
     authenticity,
+    rating: normalizeMarketplaceRating(rating),
+    reviewCount: reviewCount && reviewCount > 0 ? reviewCount : undefined,
+    color: color ? String(color) : undefined,
   };
 }
 

@@ -1,0 +1,79 @@
+# Backup trigger for seo-refresh-offers (copies cache/mappings into offers_snapshot).
+# Primary schedule: pg_cron '30 */6 * * *' via supabase/scripts/setup-seo-refresh-offers-cron.sql
+# This workflow is staggered (+40m vs update-prices at :00, +20m vs GH update-prices at :20).
+#
+# Does NOT scrape. Seed product_ids stay empty until rebound.
+#
+# Repo secrets (same as update-prices):
+#   SUPABASE_URL
+#   UPDATE_PRICES_CRON_SECRET
+
+name: seo-refresh-offers
+
+on:
+  schedule:
+    - cron: '40 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: 'Optional single SEO slug (e.g. playstation-dualsense-white)'
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call seo-refresh-offers
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          UPDATE_PRICES_CRON_SECRET: ${{ secrets.UPDATE_PRICES_CRON_SECRET }}
+          SLUG: ${{ github.event.inputs.slug }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${UPDATE_PRICES_CRON_SECRET:-}" ]; then
+            echo "Missing SUPABASE_URL or UPDATE_PRICES_CRON_SECRET secrets"
+            exit 1
+          fi
+          BASE="${SUPABASE_URL%/}"
+          if [ -n "${SLUG:-}" ]; then
+            BODY=$(printf '{"slug":"%s"}' "$SLUG")
+          else
+            BODY='{}'
+          fi
+          HTTP_CODE="$(curl -sS -X POST "${BASE}/functions/v1/seo-refresh-offers" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${UPDATE_PRICES_CRON_SECRET}" \
+            -d "$BODY" \
+            -o /tmp/seo-refresh-offers.json \
+            -w "%{http_code}")"
+          echo "HTTP status: ${HTTP_CODE}"
+          cat /tmp/seo-refresh-offers.json || true
+          HTTP_CODE="${HTTP_CODE}" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          code_raw = os.environ.get("HTTP_CODE", "")
+          try:
+            code = int(code_raw)
+          except Exception:
+            print(f"Invalid HTTP code: {code_raw!r}")
+            sys.exit(1)
+
+          try:
+            payload = json.load(open("/tmp/seo-refresh-offers.json"))
+          except Exception as exc:
+            print(f"Invalid JSON response: {exc}")
+            sys.exit(1)
+
+          if code < 200 or code >= 300:
+            print(f"Request failed with HTTP {code}")
+            sys.exit(1)
+
+          if not payload.get("ok"):
+            print("Function returned ok=false")
+            sys.exit(1)
+
+          print("seo-refresh-offers succeeded")
+          PY

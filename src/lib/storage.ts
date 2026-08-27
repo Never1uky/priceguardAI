@@ -38,6 +38,7 @@ import { cloudTrackedProductKey, cloudTrackedRowKey } from '@/lib/tracked-cloud-
 import { addPendingTombstone } from '@/lib/tracked-pending-tombstones';
 import type { Product, TrackedProduct } from '@/types/product';
 import { toCanonicalProductUrl } from '@/utils/product-url';
+import { trackProductTrackingAdded, trackProductTrackingRemoved } from '@/lib/telemetry/funnel';
 
 export {
   getLastScrapedProduct,
@@ -142,6 +143,7 @@ export async function trackProduct(product: Product): Promise<TrackedProduct> {
   });
 
   void cloudPushTracked(tracked);
+  trackProductTrackingAdded(tracked.marketplace);
 
   return tracked;
 }
@@ -158,6 +160,7 @@ export async function untrackProduct(productId: string): Promise<void> {
   });
 
   if (removed) {
+    trackProductTrackingRemoved(removed.marketplace);
     const key = trackedKey(removed);
     await addPendingTombstone(removed.marketplace, key);
     const ok = await cloudPushTombstone(removed.marketplace, key);

@@ -23,6 +23,7 @@ import {
   Search,
   Shield,
   Sparkles,
+  Star,
   TrendingDown,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -79,7 +80,7 @@ export function CurrentPriceTab({
       <div className="space-y-2 rounded-md bg-muted/40 p-4 text-center">
         <p className="pg-subtitle">Нет открытого товара</p>
         <p className="pg-hint">
-          Откройте любой товар на Wildberries, Ozon или Яндекс Маркете — цена и сравнение появятся здесь.
+          Откройте любой товар на Wildberries, Ozon или Яндекс Маркете — цена появится здесь. Нажмите «Сравнить цены», чтобы найти тот же товар на других площадках.
         </p>
         <p className="pg-caption text-muted-foreground">Или вставьте ссылку во вкладке «Отзывы».</p>
       </div>
@@ -143,6 +144,24 @@ export function CurrentPriceTab({
             <div className="min-w-0 flex-1 space-y-2">
               <h2 className="line-clamp-3 pg-title text-[16px]">{product.title}</h2>
               <p className="pg-caption">Арт. {product.article}</p>
+              {(product.rating != null || product.color) && (
+                <div className="flex flex-wrap items-center gap-2 pg-caption text-muted-foreground">
+                  {product.rating != null && product.rating > 0 && (
+                    <span className="inline-flex items-center gap-0.5">
+                      <Star className="h-3 w-3 fill-amber-400 text-amber-400" strokeWidth={1.75} />
+                      {product.rating.toFixed(1)}
+                      {product.reviewCount != null && product.reviewCount > 0 && (
+                        <span>({product.reviewCount.toLocaleString('ru-RU')})</span>
+                      )}
+                    </span>
+                  )}
+                  {product.color && (
+                    <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px]">
+                      {product.color}
+                    </span>
+                  )}
+                </div>
+              )}
               <div>
                 <p className="inline-flex items-center gap-1 pg-caption text-muted-foreground">
                   {outOfStock ? 'Наличие' : 'Текущая цена'}
@@ -233,7 +252,7 @@ export function CurrentPriceTab({
               <Shield className="h-4 w-4 text-primary" strokeWidth={1.75} aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="pg-subtitle">Следить за ценой</p>
+              <p className="pg-subtitle">Оповещения о цене</p>
               <p className="pg-hint mt-0.5">
                 Уведомим, если товар подешевеет
               </p>
@@ -242,7 +261,7 @@ export function CurrentPriceTab({
               type="button"
               role="switch"
               aria-checked={isTracked}
-              aria-label={isTracked ? 'Отключить отслеживание' : 'Включить отслеживание'}
+              aria-label={isTracked ? 'Отключить оповещения' : 'Включить оповещения'}
               disabled={isLoading}
               onClick={() => (isTracked ? onUntrack() : onTrack())}
               className={`relative h-6 w-11 shrink-0 rounded-full pg-transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${
@@ -276,13 +295,22 @@ export function CurrentPriceTab({
                 <PackagePlus className="h-4 w-4" strokeWidth={1.75} />
               )}
               {isComparePending
-                ? 'Добавляем и ищем…'
+                ? 'Добавляем и сравниваем…'
                 : atMyProductsLimit && !isTracked
                   ? `Лимит ${myProductsLimit} товаров (Free)`
                   : isTracked
-                    ? 'Следим за ценой'
-                    : 'Следить за ценой'}
+                    ? 'Сравнить снова'
+                    : 'Сравнить цены'}
             </Button>
+            {!atMyProductsLimit || isTracked ? (
+              <p className="pg-hint text-center text-muted-foreground">
+                {isComparePending
+                  ? 'Ищем на WB · Ozon · Я.Маркет…'
+                  : isTracked
+                    ? 'Обновим сравнение на WB, Ozon и Маркете'
+                    : 'В «Мои товары» и сравнение на WB, Ozon и Маркете'}
+              </p>
+            ) : null}
             {atMyProductsLimit && !isTracked && onOpenPremium && (
               <Button variant="outline" className="w-full" onClick={onOpenPremium}>
                 Premium — до 50 товаров

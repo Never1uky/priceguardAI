@@ -27,21 +27,21 @@ Privacy Policy (публичный URL): https://priceguard-landing.vercel.app/p
 ### Русский (рекомендуется)
 
 ```
-AI-анализ отзывов, сравнение цен WB/Ozon/Маркет и алерты в Telegram — даже без открытого Chrome.
+AI-анализ отзывов, сравнение цен на маркетплейсах и алерты в Telegram — даже без открытого Chrome.
 ```
 *(109 символов)*
 
 ### Русский — альтернатива
 
 ```
-Цены, скидки и AI-отзывы на Wildberries, Ozon и Яндекс.Маркет. Сравнение и уведомления о падении цены.
+Цены, скидки и AI-отзывы на популярных маркетплейсах. Сравнение и уведомления о падении цены (по умолчанию WB, Ozon, Я.Маркет; другие — по выбору).
 ```
 *(105 символов)*
 
 ### English
 
 ```
-AI review insights, cross-store prices on WB/Ozon/Yandex Market & Telegram alerts — even without Chrome open.
+AI review insights, cross-store prices & Telegram alerts — even without Chrome open.
 ```
 *(109 characters)*
 
@@ -52,12 +52,12 @@ AI review insights, cross-store prices on WB/Ozon/Yandex Market & Telegram alert
 ### Русский
 
 ```
-PriceGuard AI — умный помощник для покупок на Wildberries, Ozon и Яндекс.Маркет.
+PriceGuard AI — умный помощник для покупок на популярных маркетплейсах и интернет-магазинах.
 
 Сравнивайте цены между площадками, читайте AI-разбор отзывов и получайте алерты о падении цены в браузере и в Telegram — в том числе когда Chrome закрыт (серверный мониторинг).
 
 🛒 ДЛЯ КОГО
-• Покупатели WB, Ozon и Яндекс.Маркет
+• Покупатели на маркетплейсах (WB, Ozon, Я.Маркет и др. по выбору)
 • Те, кто ищет, где дешевле, без ручного копирования ссылок
 • Те, кто ждёт скидку и не хочет переплачивать
 • Те, кому нужен короткий вердикт по отзывам вместо сотен комментариев
@@ -68,7 +68,7 @@ PriceGuard AI — умный помощник для покупок на Wildber
 Плюсы, минусы, риск накрутки/подделки, вердикт «покупать / подождать». Free: до 3 AI-анализов в сутки (после входа). Premium — без лимита AI + глубокий разбор с веб-контекстом.
 
 ⚖️ Сравнение на трёх площадках
-Один товар — таблица офферов WB / Ozon / Яндекс.Маркет. Сразу видно, где дешевле, переход в карточку в один клик.
+Один товар — таблица офферов по выбранным площадкам (по умолчанию WB / Ozon / Яндекс.Маркет). Сразу видно, где дешевле, переход в карточку в один клик.
 
 📉 Отслеживание и история цен
 Список «Отслеживаемое», целевая цена, график истории. Понятно, реальная ли скидка.
@@ -98,12 +98,12 @@ PriceGuard AI не аффилирован с маркетплейсами. Да�
 ### English
 
 ```
-PriceGuard AI — a smart shopping assistant for Wildberries, Ozon and Yandex Market.
+PriceGuard AI — a smart shopping assistant for popular marketplaces and online stores.
 
 Compare prices across stores, get AI review insights, and receive price-drop alerts in the browser and Telegram — including when Chrome is closed (server monitoring).
 
 🛒 WHO IT'S FOR
-• Shoppers on WB, Ozon, Yandex Market
+• Shoppers on WB, Ozon, Yandex Market and optional extra stores
 • Anyone looking for where it’s cheaper without copying links by hand
 • Deal hunters waiting for a real discount
 • Busy buyers who want a short review verdict
@@ -114,7 +114,7 @@ Compare prices across stores, get AI review insights, and receive price-drop ale
 Pros, cons, fake/manipulation risk, buy/wait verdict. Free: up to 3 full AI analyses per day (after sign-in). Premium: unlimited.
 
 ⚖️ Cross-marketplace compare
-One product — WB / Ozon / Yandex Market offers in one table. See where it’s cheaper and open the listing in one click.
+One product — offers from your selected stores (default WB / Ozon / Yandex Market) in one table. See where it’s cheaper and open the listing in one click.
 
 📉 Tracking & price history
 Watchlist, target price, history chart — spot real discounts vs fake sales.
@@ -133,7 +133,7 @@ With Telegram enabled, the server checks prices on a schedule (Free: up to 5 pro
 Free: up to 5 tracked, 3 AI/day, compare, alerts.
 Premium: unlimited AI & tracking, priority checks, full analysis pipeline.
 
-🛍️ STORES: Wildberries · Ozon · Yandex Market
+🛍️ STORES: Wildberries · Ozon · Yandex Market (default) · optional Megamarket, AliExpress, M.Video/Eldorado, DNS, Citilink, Lamoda
 
 Not affiliated with the marketplaces. Public page data at request time.
 
@@ -142,7 +142,31 @@ Install PriceGuard AI — shop smarter.
 
 ---
 
-## 2b. What's New (поле «Что нового» для 0.9.90 Early access)
+## 2b. What's New (поле «Что нового» для 0.9.95)
+
+### Русский
+
+```
+• Настройки → Telegram: исправлена вёрстка блока (статус и текст не наслаиваются)
+• «Где дешевле»: безопаснее выбор похожих товаров — порядок, названия, без ложного «дешевле»
+• Wildberries без цены: «Нет в наличии» вместо пустого экрана
+• Карточка: рейтинг и цвет; лимит 5 товаров и Premium — понятнее
+• Стабильнее сравнение и отслеживание после перезапуска расширения
+```
+
+### English
+
+```
+• Settings → Telegram: fixed section layout (status badge no longer overlaps text)
+• Compare prices: safer similar-product picker — order, titles, no false “cheaper” match
+• Wildberries out-of-stock: clear “Not in stock” instead of empty screen
+• Product card: rating and color; clearer 5-item limit and Premium UX
+• More reliable compare and tracking after extension restart
+```
+
+---
+
+## 2b (archive). What's New для 0.9.90 Early access
 
 ### Русский
 
@@ -240,10 +264,10 @@ Store icon 128×128 — `docs/store-assets/icons/store-icon-128.png` (или `pu
 ## 8. Single Purpose Description
 
 **RU:**  
-Помогает сравнивать цены, анализировать отзывы с помощью AI и получать уведомления о падении цены на Wildberries, Ozon и Яндекс.Маркет (браузер и Telegram).
+Помогает сравнивать цены на популярных маркетплейсах и интернет-магазинах, анализировать отзывы с помощью AI и получать уведомления о падении цены (браузер и Telegram). По умолчанию — Wildberries, Ozon и Яндекс.Маркет; дополнительные площадки включаются в настройках.
 
 **EN:**  
-Helps compare prices, analyze reviews with AI, and get price-drop alerts on Wildberries, Ozon, and Yandex Market (browser and Telegram).
+Helps compare prices on popular marketplaces and online stores, analyze reviews with AI, and get price-drop alerts (browser and Telegram). Defaults: Wildberries, Ozon, and Yandex Market; extra stores are opt-in in settings.
 
 ---
 
@@ -254,7 +278,7 @@ Helps compare prices, analyze reviews with AI, and get price-drop alerts on Wild
 | Permission | Обоснование (RU для формы) |
 |------------|----------------------------|
 | `storage` | Хранение списка отслеживания, истории цен, настроек алертов/темы, сессии Supabase Auth и локального кэша AI-анализа. Без синхронизации через `storage.sync` для секретов. |
-| `scripting` | Внедрение content script и вспомогательных скриптов на страницах WB/Ozon/Я.Маркет для чтения публичных данных карточки/SERP (цена, название, отзывы) и ensureContentScript при HiddenBrowser scrape. Не загружаем удалённый код. |
+| `scripting` | Внедрение content script и вспомогательных скриптов на страницах поддерживаемых магазинов для чтения публичных данных карточки/SERP (цена, название, отзывы) и ensureContentScript при HiddenBrowser scrape. Не загружаем удалённый код. |
 | `notifications` | Браузерные уведомления о падении цены и достижении целевой цены. |
 | `alarms` | Периодическая проверка цен (раз в ~6 ч), flush PendingSync и фоновые задачи при закрытом popup. |
 | `webNavigation` | Отслеживание SPA-навигации на маркетплейсах (`onCompleted` / `onHistoryStateUpdated`): переход между карточками без полной перезагрузки страницы, чтобы обновить scraped product. |
@@ -263,7 +287,14 @@ Helps compare prices, analyze reviews with AI, and get price-drop alerts on Wild
 | Host: `*.wbbasket.ru` | CDN изображений товаров WB в UI сравнения. |
 | Host: `ozon.ru` / `www.ozon.ru` | Content script на product/search + scrape/SERP. |
 | Host: `market.yandex.ru` | Content script на product/search/card + scrape. |
+| Host: `megamarket.ru` / `sbermegamarket.ru` | Opt-in сравнение: content script / HiddenBrowser на публичных catalog/details (без серверного Scrappey). |
+| Host: `aliexpress.ru` / `*.aliexpress.ru` | Opt-in сравнение: публичные item/wholesale страницы. |
+| Host: `mvideo.ru` / `eldorado.ru` | Opt-in сравнение (единый id М.Видео): публичные product/search страницы. |
+| Host: `dns-shop.ru` | Opt-in сравнение: публичные product/search. |
+| Host: `citilink.ru` | Opt-in сравнение: публичные product/search. |
+| Host: `lamoda.ru` | Opt-in сравнение (в основном fashion): публичные `/p/` и catalogsearch. |
 | Host: `ihlfvpocwobvcpxbypsd.supabase.co` | Edge Functions: AI-прокси, sync, лицензии, Telegram settings, product-intel. |
+| `externally_connectable` → `priceguard-seo.vercel.app` | Мост SEO-сайта → расширение («Открыть в сравнении»). Localhost **не** входит в production zip. |
 
 **Data use:** расширение передаёт данные о просматриваемых/отслеживаемых товарах (URL, цены, выборка отзывов, match feedback) на наш бэкенд Supabase для AI-анализа, синхронизации и алертов. При неожиданных ошибках может уйти автоматический отчёт: текст ошибки (≤800), контекст, версия, userId (`support-notify` → Telegram оператора). **Мы не продаём персональные данные третьим лицам.** Процессоры: Supabase, AI (Grok/OpenAI/Perplexity), Scrappey (URL страницы), YooKassa, Telegram — только для работы сервиса.
 

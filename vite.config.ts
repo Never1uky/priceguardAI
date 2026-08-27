@@ -113,11 +113,12 @@ function banServiceWorkerDynamicImport(): Plugin {
       'Promise.resolve(null)',
     );
     for (const match of code.matchAll(
-      /const\s+(\w+)\s*=\s*["']@opentelemetry\/api["']/g,
+      /const\s+([$\w]+)\s*=\s*["']@opentelemetry\/api["']/g,
     )) {
       const binding = match[1];
+      const escaped = binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       next = next.replace(
-        new RegExp(`\\bimport\\s*\\(\\s*${binding}\\s*\\)`, 'g'),
+        new RegExp(`\\bimport\\s*\\(\\s*${escaped}\\s*\\)`, 'g'),
         'Promise.resolve(null)',
       );
     }
@@ -185,6 +186,7 @@ type CrxManifest = {
     resources?: string[];
     use_dynamic_url?: boolean;
   }>;
+  externally_connectable?: { matches?: string[] };
 };
 
 /**
@@ -237,6 +239,17 @@ function sanitizeWebAccessibleResources(): Plugin {
           entry.matches = narrowed;
         } else if (entry.matches) {
           entry.matches = contentMatchesToWarOrigins(entry.matches);
+        }
+      }
+
+      // Production zip: SEO bridge only (no localhost externally_connectable)
+      const ext = distManifest.externally_connectable;
+      if (ext?.matches?.length) {
+        ext.matches = ext.matches.filter(
+          (m) => !/localhost|127\.0\.0\.1/i.test(m),
+        );
+        if (!ext.matches.length) {
+          delete distManifest.externally_connectable;
         }
       }
 

@@ -9,6 +9,8 @@ const PREFIX: Record<Marketplace, string> = {
   wildberries: 'wb-',
   ozon: 'ozon-',
   yandex_market: 'ym-',
+  megamarket: 'mm-',
+  aliexpress: 'ae-',
 };
 
 /** Голый артикул без префикса marketplace. */
@@ -25,6 +27,16 @@ export function stripProductIdPrefix(
   // ym- / yandex- legacy
   if (marketplace === 'yandex_market' && /^yandex[_-]?/i.test(raw)) {
     return raw.replace(/^yandex[_-]?/i, '');
+  }
+  if (marketplace === 'megamarket') {
+    const stripped = raw.replace(/^(megamarket:|mega-)/i, '');
+    const digits = stripped.replace(/\D/g, '');
+    return digits.length >= 6 ? digits : stripped;
+  }
+  if (marketplace === 'aliexpress') {
+    const stripped = raw.replace(/^(aliexpress:|ali-)/i, '');
+    const digits = stripped.replace(/\D/g, '');
+    return digits.length >= 8 ? digits : stripped;
   }
   return raw;
 }
@@ -61,7 +73,7 @@ export function productKey(marketplace: Marketplace, productId: string): string 
 export function parseProductKey(
   key: string,
 ): { marketplace: Marketplace; productId: string } | null {
-  const m = key.match(/^(wildberries|ozon|yandex_market):(.+)$/);
+  const m = key.match(/^(wildberries|ozon|yandex_market|megamarket|aliexpress):(.+)$/);
   if (!m?.[1] || !m[2]) return null;
   return {
     marketplace: m[1] as Marketplace,

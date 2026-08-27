@@ -14,8 +14,9 @@ import type { Marketplace } from './product-url.ts';
 import { inferSeoCategoryFromTitle } from './seo-category.ts';
 import {
   evaluateSeoPublishGates,
+  imageUrlFromSeoAnalysis,
   normalizeQualityScoreForSeo,
-  normalizeSeoImageUrl,
+  pickSeoImageUrl,
   sanitizeSeoProductTitle,
 } from './seo-gates.ts';
 import {
@@ -41,8 +42,9 @@ import {
   chooseSeoPrimary,
   type SeoPeerRow,
 } from './seo-canon.ts';
+import { seoPublishableIds } from './seo-marketplaces.ts';
 
-const VALID_MPS = new Set(['wildberries', 'ozon', 'yandex_market']);
+const VALID_MPS = new Set(seoPublishableIds());
 
 /** Title for storage: sanitized product name, never marketplace / SEO labels. */
 function resolveSeoTitle(raw: string | null | undefined, bareId: string): string {
@@ -52,11 +54,15 @@ function resolveSeoTitle(raw: string | null | undefined, bareId: string): string
 }
 
 /**
- * SEO pages must not depend on marketplace CDN images.
- * Only persist an explicit valid candidate; never guess WB basket URLs.
+ * SEO pages must not depend on guessed marketplace CDN images.
+ * Keep an already-published https URL; else first honest candidate from analysis.
  */
-function resolveSeoImageUrl(candidate?: string | null): string | null {
-  return normalizeSeoImageUrl(candidate);
+function resolvePublishedImageUrl(
+  existingUrl?: string | null,
+  analysis?: Record<string, unknown> | null,
+  extra?: string | null,
+): string | null {
+  return pickSeoImageUrl(existingUrl, extra, imageUrlFromSeoAnalysis(analysis));
 }
 
 async function loadCacheV2(
@@ -139,7 +145,7 @@ export async function runSeoPublish(
   const { data: existing } = await supabase
     .from('seo_product_pages')
     .select(
-      'id, slug, brand_slug, category_slug, analysis_hash, publish_status, is_primary, primary_slug, canon_id, quality_score, published_at, offers_snapshot',
+      'id, slug, brand_slug, category_slug, analysis_hash, publish_status, is_primary, primary_slug, canon_id, quality_score, published_at, offers_snapshot, image_url',
     )
     .eq('product_key', key)
     .maybeSingle();
@@ -231,7 +237,10 @@ export async function runSeoPublish(
       analyzed_at: analyzedAtToIso(analysis),
       offers_snapshot: [] as SeoOfferSnapshot[],
       price_current: null as number | null,
-      image_url: resolveSeoImageUrl(null),
+      image_url: resolvePublishedImageUrl(
+        (existing as { image_url?: string | null } | null)?.image_url,
+        analysisForStore,
+      ),
       product_url: null as string | null,
       quality_score: qualityScore,
       review_count: reviewCount,
@@ -375,7 +384,10 @@ export async function runSeoPublish(
     analyzed_at: analyzedAtToIso(analysis) ?? cache.lastUpdated,
     offers_snapshot: finalOffers,
     price_current: scrape.price,
-    image_url: resolveSeoImageUrl(null),
+    image_url: resolvePublishedImageUrl(
+      (existing as { image_url?: string | null } | null)?.image_url,
+      analysisForStore,
+    ),
     product_url: scrape.url,
     quality_score: qualityScore,
     review_count: reviewCount,

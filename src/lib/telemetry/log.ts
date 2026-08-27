@@ -35,6 +35,10 @@ export interface TelemetryLogInput {
   data?: Record<string, unknown>;
   error?: unknown;
   ctx?: TelemetryContextPatch;
+  /** Bypass INFO sampling; enqueue remotely when remoteEnabled */
+  funnel?: boolean;
+  /** Operational metrics — always store locally; remote when opt-in */
+  ops?: boolean;
 }
 
 function newEventId(): string {
@@ -56,7 +60,14 @@ async function emit(level: TelemetryLevel, input: TelemetryLogInput): Promise<vo
   try {
     await ensureSessionId();
     const settings = await loadTelemetrySettings();
-    if (!shouldStoreLevel(level, settings.mode) && !shouldConsoleLog(level, settings.mode)) {
+    const isFunnel = Boolean(input.funnel);
+    const isOps = Boolean(input.ops);
+    if (
+      !isFunnel &&
+      !isOps &&
+      !shouldStoreLevel(level, settings.mode) &&
+      !shouldConsoleLog(level, settings.mode)
+    ) {
       return;
     }
 
@@ -75,19 +86,24 @@ async function emit(level: TelemetryLevel, input: TelemetryLogInput): Promise<vo
       extVersion: getExtensionVersion(),
       browser: getBrowserLabel(),
       marketplace: input.marketplace ?? ctx.marketplace,
-      productId: input.productId ?? ctx.productId,
-      queryHash: input.queryHash ?? ctx.queryHash,
+      productId: isFunnel || isOps ? undefined : (input.productId ?? ctx.productId),
+      queryHash: isFunnel || isOps ? undefined : (input.queryHash ?? ctx.queryHash),
       success: input.success,
       elapsedMs: input.elapsedMs,
       errorCode: input.errorCode,
       errorMessage: input.errorMessage ?? messageFromError(input.error),
       data: redactData(input.data),
       stack: level === 'error' ? stackFromError(input.error) : undefined,
+      funnel: isFunnel || undefined,
+      ops: isOps || undefined,
     };
 
-    if (shouldStoreLevel(level, settings.mode)) {
+    if (isFunnel || isOps || shouldStoreLevel(level, settings.mode)) {
       appendTelemetryEvent(event);
-      if (settings.remoteEnabled && (level === 'warn' || level === 'error')) {
+      if (
+        settings.remoteEnabled &&
+        (level === 'warn' || level === 'error' || isFunnel || isOps)
+      ) {
         void enqueueRemoteTelemetryLocal(event);
       }
     }

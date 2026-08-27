@@ -3,6 +3,10 @@ import {
   parseOzonPriceFromHtml,
   parseYmPriceFromHtml,
   parseWbPriceFromHtml,
+  parseMegamarketPriceFromHtml,
+  parseAliExpressPriceFromHtml,
+  extractMegamarketProductId,
+  extractAliExpressProductId,
   effectiveServerDropThresholds,
   isSignificantDrop,
   OZON_SERVER_DROP_MARGIN_RUB,
@@ -40,6 +44,86 @@ describe('parseYmPriceFromHtml', () => {
   it('returns null on showcaptcha', () => {
     const html = '<html>showcaptcha</html>';
     expect(parseYmPriceFromHtml(html)).toBeNull();
+  });
+});
+
+describe('parseMegamarketPriceFromHtml', () => {
+  it('parses JSON-LD Product offer', () => {
+    const html = `
+      <script type="application/ld+json">
+      ${JSON.stringify({
+        '@type': 'Product',
+        name: 'Pixel 10 128GB',
+        brand: { '@type': 'Brand', name: 'Google' },
+        offers: { '@type': 'Offer', price: '79990', availability: 'InStock' },
+      })}
+      </script>`;
+    const r = parseMegamarketPriceFromHtml(
+      html,
+      'https://megamarket.ru/catalog/details/700008588462',
+    );
+    expect(r?.price).toBe(79990);
+    expect(r?.title).toMatch(/Google/i);
+  });
+
+  it('extracts goods id from details URL', () => {
+    expect(
+      extractMegamarketProductId(
+        'https://megamarket.ru/catalog/details/smartfon-700008588462/?x=1',
+      ),
+    ).toBe('700008588462');
+  });
+
+  it('returns null when OutOfStock', () => {
+    const html = `
+      <script type="application/ld+json">
+      {"@type":"Product","name":"X","offers":{"price":"100","availability":"https://schema.org/OutOfStock"}}
+      </script>`;
+    expect(
+      parseMegamarketPriceFromHtml(html, 'https://megamarket.ru/catalog/details/1'),
+    ).toBeNull();
+  });
+});
+
+describe('parseAliExpressPriceFromHtml', () => {
+  it('parses JSON-LD Product offer', () => {
+    const html = `
+      <script type="application/ld+json">
+      ${JSON.stringify({
+        '@type': 'Product',
+        name: 'Pixel 10 Case',
+        brand: { '@type': 'Brand', name: 'Baseus' },
+        offers: { '@type': 'Offer', price: '1290', availability: 'InStock' },
+      })}
+      </script>`;
+    const r = parseAliExpressPriceFromHtml(
+      html,
+      'https://aliexpress.ru/item/1005001234567890.html',
+    );
+    expect(r?.price).toBe(1290);
+    expect(r?.title).toMatch(/Baseus/i);
+  });
+
+  it('extracts item id from Ali URL', () => {
+    expect(
+      extractAliExpressProductId('https://aliexpress.ru/item/1005001234567890.html?spm=x'),
+    ).toBe('1005001234567890');
+  });
+
+  it('returns null on captcha / OutOfStock', () => {
+    expect(
+      parseAliExpressPriceFromHtml(
+        '<html>Access Denied challenge</html>',
+        'https://aliexpress.ru/item/1.html',
+      ),
+    ).toBeNull();
+    const html = `
+      <script type="application/ld+json">
+      {"@type":"Product","name":"X","offers":{"price":"100","availability":"https://schema.org/OutOfStock"}}
+      </script>`;
+    expect(
+      parseAliExpressPriceFromHtml(html, 'https://aliexpress.ru/item/1005001.html'),
+    ).toBeNull();
   });
 });
 

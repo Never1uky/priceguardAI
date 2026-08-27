@@ -3,6 +3,8 @@
  * Mirror of src/lib/seo/publish-gates.ts for Edge Deno.
  */
 
+import { seoTitleStripAlternation } from './seo-marketplaces.ts';
+
 export const SEO_MIN_REVIEWS = 5;
 export const SEO_MIN_WEB_OVERVIEW_LEN = 80;
 export const SEO_MIN_QUALITY_SCORE = 6;
@@ -75,14 +77,12 @@ export function isWeakSeoTitle(title: string | null | undefined): boolean {
 export function sanitizeSeoProductTitle(raw: string | null | undefined): string {
   let t = (raw ?? '').replace(/\s+/g, ' ').trim();
   if (!t) return '';
+  const mp = seoTitleStripAlternation();
   t = t
     .replace(/\bSEO\s*Smoke\b/gi, ' ')
     .replace(/\b(smoke\s*fixture|test\s*fixture|debug|test\s*only)\b/gi, ' ')
-    .replace(
-      /\s*[|·•\-–—]\s*(wildberries|wb|ozon|яндекс\.?\s*маркет|yandex\s*market)\s*$/i,
-      '',
-    )
-    .replace(/^\s*(wildberries|wb|ozon|яндекс\.?\s*маркет|yandex\s*market)\s*[|·•\-–—:]\s*/i, '')
+    .replace(new RegExp(`\\s*[|·•\\-–—]\\s*(${mp})\\s*$`, 'i'), '')
+    .replace(new RegExp(`^\\s*(${mp})\\s*[|·•\\-–—:]\\s*`, 'i'), '')
     .replace(/\s+/g, ' ')
     .trim();
   return t;
@@ -108,6 +108,32 @@ export function normalizeSeoImageUrl(raw: string | null | undefined): string | n
   if (!t) return null;
   if (!/^https?:\/\//i.test(t)) return null;
   return t;
+}
+
+/** First valid https image; never invents a URL. Prefer already-published image. */
+export function pickSeoImageUrl(
+  ...candidates: Array<string | null | undefined>
+): string | null {
+  for (const c of candidates) {
+    const n = normalizeSeoImageUrl(c);
+    if (n) return n;
+  }
+  return null;
+}
+
+/** Honest image hint from analysis snapshot if present. */
+export function imageUrlFromSeoAnalysis(
+  analysis: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!analysis) return null;
+  for (const key of ['imageUrl', 'image_url']) {
+    const v = analysis[key];
+    if (typeof v === 'string') {
+      const n = normalizeSeoImageUrl(v);
+      if (n) return n;
+    }
+  }
+  return null;
 }
 
 export function evaluateSeoPublishGates(input: SeoGateInput): SeoGateResult {

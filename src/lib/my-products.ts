@@ -107,7 +107,9 @@ export interface MyProductItem {
   trackedProduct: TrackedProduct | null;
 }
 
-const ALL_MP: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
+
+const ALL_MP: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
 
 function asComparisonMarketplace(mp: Marketplace | ComparisonMarketplace): ComparisonMarketplace {
   return mp as ComparisonMarketplace;

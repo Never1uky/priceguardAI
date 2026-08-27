@@ -26,6 +26,7 @@ export function CompareProductDetail({ api }: CompareProductDetailProps) {
     searchingMarketplace,
     selectingMarketplace,
     foundMarketplacesCount,
+    searchMarketplacesCount,
     hasCache,
     comparedAtLabel,
     refreshCompare,
@@ -39,6 +40,8 @@ export function CompareProductDetail({ api }: CompareProductDetailProps) {
 
   if (!selectedProduct) return null;
 
+  const totalSlots = Math.max(searchMarketplacesCount || offers.length, 1);
+
   return (
     <div className="space-y-3">
       <AuthenticityHint
@@ -49,7 +52,7 @@ export function CompareProductDetail({ api }: CompareProductDetailProps) {
         <div className="min-w-0">
           <p className="truncate pg-subtitle">{selectedProduct.title}</p>
           <p className="pg-caption mt-1 text-muted-foreground">
-            Найдено на {foundMarketplacesCount} из 3 площадок
+            Найдено на {foundMarketplacesCount} из {totalSlots} площадок
             {comparedAtLabel ? ` · данные от ${comparedAtLabel}` : ''}
             {' · '}
             {COMPARISON_MARKETPLACE_LABELS[selectedProduct.sourceMarketplace]}

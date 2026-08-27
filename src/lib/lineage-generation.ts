@@ -45,8 +45,24 @@ export function extractLineageGeneration(title: string): LineageGeneration | nul
   const airpodsGen = t.match(/\bairpods\s*(\d)\b/);
   if (airpodsGen) return { lineage: 'airpods', gen: Number(airpodsGen[1]) };
 
-  const iphone = t.match(/\biphone\s*(\d{1,2})\b/);
-  if (iphone) return { lineage: 'iphone', gen: Number(iphone[1]) };
+  // iPhone 15 ≠ 15 Pro ≠ 15 Pro Max (tier in genKey, same pattern as Pixel)
+  const iphone = t.match(/\biphone\s*(\d{1,2})\s*(pro\s*max|promax|pro|plus|mini)?\b/i);
+  if (iphone) {
+    const gen = Number(iphone[1]);
+    if (!Number.isFinite(gen)) return null;
+    const tierRaw = (iphone[2] ?? '').toLowerCase().replace(/\s+/g, '');
+    const tier =
+      tierRaw === 'promax' || tierRaw === 'pro max'
+        ? 'promax'
+        : tierRaw === 'pro'
+          ? 'pro'
+          : tierRaw === 'plus'
+            ? 'plus'
+            : tierRaw === 'mini'
+              ? 'mini'
+              : '';
+    return { lineage: 'iphone', gen, genKey: `${gen}${tier}` };
+  }
 
   // Pixel 7 / Pixel 9a / Pixel 10a / Pixel 8 Pro — digit required (bare "Pixel" ignored)
   const pixel = t.match(/\b(?:google\s+)?pixel\s*(\d{1,2}[a-z]?)(?:\s*(pro|xl))?\b/i);

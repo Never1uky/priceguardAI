@@ -25,6 +25,10 @@ import {
   getSessionIdSync,
   type TelemetryMode,
 } from '@/lib/telemetry';
+import {
+  trackTelegramConnectStarted,
+  trackTelegramDisconnected,
+} from '@/lib/telemetry/funnel';
 import { pipelineMetrics } from '@/lib/pipeline-metrics';
 import { getSupabaseConfig } from '@/lib/supabase/config';
 import {
@@ -50,9 +54,26 @@ import {
   ChevronDown,
   ExternalLink,
 } from 'lucide-react';
+import {
+  MARKETPLACES,
+  type MarketplaceId,
+} from '@/lib/marketplaces/registry';
+import {
+  getSelectedSearchMarketplaces,
+  saveSearchMarketplacesSettings,
+} from '@/lib/marketplaces/search-settings';
+import {
+  isServerCompareEnabled,
+  loadServerMarketplaceFlags,
+  type ServerMarketplaceFlagsMap,
+} from '@/lib/marketplaces/server-flags';
 import { useEffect, useState } from 'react';
 
-import { CHROME_WEB_STORE_REVIEWS_URL, TELEGRAM_CHANNEL_URL, TELEGRAM_CHANNEL_LINK_LABEL } from '@/lib/chrome-store';
+import {
+  getReviewUrlForCurrentBrowser,
+  TELEGRAM_CHANNEL_URL,
+  TELEGRAM_CHANNEL_LINK_LABEL,
+} from '@/lib/chrome-store';
 import { isPremium } from '@/lib/subscription';
 import {
   isServerPriceMonitoringActive,
@@ -158,6 +179,9 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
   const [diagSupabase, setDiagSupabase] = useState(false);
   const [diagBusy, setDiagBusy] = useState(false);
   const [diagCopyStatus, setDiagCopyStatus] = useState<string | null>(null);
+  const [searchMpSelected, setSearchMpSelected] = useState<MarketplaceId[]>([]);
+  const [searchMpBusy, setSearchMpBusy] = useState(false);
+  const [serverMpFlags, setServerMpFlags] = useState<ServerMarketplaceFlagsMap | null>(null);
 
   const load = async () => {
     const [prem, alerts, dev, monitoring, loggedIn, cloudWarn, user, runningStore] =
@@ -194,11 +218,14 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     const mp = runningStore[SEARCHING_MP_KEY];
     setDiagSearchingMp(typeof mp === 'string' ? mp : null);
 
-    const [telSettings, sessionId, counts, metrics] = await Promise.all([
+    const [telSettings, sessionId, counts, metrics, searchMpSelected, serverFlags] =
+      await Promise.all([
       loadTelemetrySettings(),
       ensureSessionId(),
       countTelemetryByLevel(),
       pipelineMetrics.get(),
+      getSelectedSearchMarketplaces(),
+      loadServerMarketplaceFlags(),
     ]);
     setDiagTelMode(telSettings.mode);
     setDiagRemote(telSettings.remoteEnabled);
@@ -208,6 +235,8 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     setDiagPipeline(
       `HB ${metrics.hiddenBrowserSuccess}/${metrics.hiddenBrowserAttempts} · API ${metrics.apiSearchSuccess} · map ${metrics.mappingHits} · AI cache ${metrics.aiCacheLocalHits + metrics.aiCacheRemoteHits}/${metrics.aiCacheMisses}`,
     );
+    setSearchMpSelected(searchMpSelected);
+    setServerMpFlags(serverFlags);
 
     // После reinstall: подтянуть привязку Telegram с аккаунта
     if (loggedIn && !alerts.telegramChatId.trim()) {
@@ -252,6 +281,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
 
   const handleConnectTelegram = async () => {
     if (!alertSettings) return;
+    trackTelegramConnectStarted();
     setTelegramBusy(true);
     setTelegramStatus(null);
 
@@ -367,11 +397,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
     <div className="space-y-4">
       <Surface variant="subtle" padding="sm" className="space-y-1">
         <p className="pg-subtitle">
-          v{typeof chrome !== 'undefined' ? chrome.runtime.getManifest().version : '0.9.0'} · Beta
-        </p>
-        <p className="pg-hint">
-          Бета: поиск и матчинг товаров будем улучшать по мере развития приложения. О неточностях
-          пишите в поддержку.
+          v{typeof chrome !== 'undefined' ? chrome.runtime.getManifest().version : '0.9.0'}
         </p>
         <p className="pg-hint">
           Если поиск пустой — отключите VPN/adblock или выберите сервер в РФ: магазины могут
@@ -414,11 +440,11 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
         size="sm"
         className="w-full justify-start gap-2 text-muted-foreground"
         onClick={() => {
-          void chrome.tabs.create({ url: CHROME_WEB_STORE_REVIEWS_URL });
+          void chrome.tabs.create({ url: getReviewUrlForCurrentBrowser() });
         }}
       >
         <Star className="h-4 w-4" strokeWidth={1.75} />
-        Оставить отзыв в Chrome Web Store
+        Оставить отзыв
       </Button>
 
       <section className="space-y-2">
@@ -450,6 +476,83 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
               Тёмная
             </button>
           </div>
+        </Surface>
+      </section>
+
+      <section className="space-y-2">
+        <SectionLabel>Где искать товары</SectionLabel>
+        <Surface className="space-y-2 p-3">
+          <p className="pg-caption text-muted-foreground">
+            Выберите площадки для сравнения цен. WB, Ozon, Я.Маркет, Мегамаркет и AliExpress — по
+            умолчанию; остальные — тестовый режим (opt-in). Больше площадок = дольше поиск
+            (вкладки). Lamoda — только одежда/обувь; М.Видео включает Эльдорадо. Мониторинг/Telegram
+            для Мегамаркета и AliExpress пока выключен.
+          </p>
+          <ul className="max-h-48 space-y-1.5 overflow-y-auto">
+            {MARKETPLACES.map((mp) => {
+              const checked = searchMpSelected.includes(mp.id);
+              const isCore = mp.enabledByDefault;
+              const serverOff =
+                serverMpFlags != null && !isServerCompareEnabled(serverMpFlags, mp.id);
+              const comingSoon = !mp.supported || !mp.capabilities.search || serverOff;
+              return (
+                <li key={mp.id}>
+                  <label
+                    className={`flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 hover:bg-muted/50 ${
+                      comingSoon ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                    }`}
+                  >
+                    <span className="pg-caption text-foreground">
+                      {mp.name}
+                      {comingSoon ? (
+                        <span className="ml-1 text-muted-foreground">
+                          {serverOff ? 'на сервере выкл' : 'скоро'}
+                        </span>
+                      ) : mp.id === 'lamoda' ? (
+                        <span className="ml-1 text-muted-foreground">(одежда/обувь)</span>
+                      ) : !isCore ? (
+                        <span className="ml-1 text-muted-foreground">(тест)</span>
+                      ) : null}
+                      {!comingSoon && mp.capabilities.costTier === 'tab' ? (
+                        <span className="ml-1 text-muted-foreground">· вкладка</span>
+                      ) : null}
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="shrink-0"
+                      checked={checked && !comingSoon}
+                      disabled={
+                        comingSoon || searchMpBusy || (checked && searchMpSelected.length <= 1)
+                      }
+                      aria-label={mp.name}
+                      onChange={() => {
+                        if (comingSoon) return;
+                        void (async () => {
+                          setSearchMpBusy(true);
+                          const next = checked
+                            ? searchMpSelected.filter((id) => id !== mp.id)
+                            : [...searchMpSelected, mp.id];
+                          const saved = await saveSearchMarketplacesSettings(next);
+                          setSearchMpSelected(saved.selected);
+                          setSearchMpBusy(false);
+                        })();
+                      }}
+                    />
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="pg-hint text-muted-foreground">
+            Сейчас: {searchMpSelected.length} площад
+            {searchMpSelected.length === 1 ? 'ка' : searchMpSelected.length < 5 ? 'ки' : 'ок'}
+          </p>
+          {searchMpSelected.length >= 5 && (
+            <p className="pg-hint text-amber-700 dark:text-amber-300" role="status">
+              Выбрано много площадок — сравнение займёт дольше (вкладки и ожидание). Для
+              быстрой проверки оставьте 3–4.
+            </p>
+          )}
         </Surface>
       </section>
 
@@ -582,31 +685,31 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
           variant="raised"
           className={`space-y-3 p-3 ${alertSettings?.notificationsEnabled === false ? 'opacity-50' : ''}`}
         >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-primary/10">
-                <Send className="h-4 w-4 text-primary" strokeWidth={1.75} aria-hidden />
-              </div>
-              <div className="min-w-0">
-                <p className="pg-title">Telegram</p>
-                <p className="pg-hint mt-0.5">
-                  Алерты о падении цены — через бота. Разборы карточек — в канале.
-                </p>
-              </div>
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-primary/10">
+              <Send className="h-4 w-4 text-primary" strokeWidth={1.75} aria-hidden />
             </div>
-            <Badge
-              variant={serverMonitoring ? 'success' : 'secondary'}
-              className="shrink-0 gap-1"
-            >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${serverMonitoring ? 'bg-success' : 'bg-muted-foreground'}`}
-                aria-hidden
-              />
-              {serverMonitoring && alertSettings?.telegramEnabled
-                ? 'Проверка цен работает даже при закрытом Chrome'
-                : 'Telegram не подключён'}
-            </Badge>
+            <div className="min-w-0 flex-1">
+              <p className="pg-title">Telegram</p>
+              <ul className="mt-1.5 space-y-0.5 pg-hint text-muted-foreground">
+                <li>— Алерты о падении цены — через бота.</li>
+                <li>— Разборы карточек — в канале.</li>
+              </ul>
+            </div>
           </div>
+
+          <Badge
+            variant={serverMonitoring ? 'success' : 'secondary'}
+            className="w-full justify-start gap-1.5 whitespace-normal px-2.5 py-1.5 text-left text-[11px] font-normal leading-snug"
+          >
+            <span
+              className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${serverMonitoring ? 'bg-success' : 'bg-muted-foreground'}`}
+              aria-hidden
+            />
+            {serverMonitoring && alertSettings?.telegramEnabled
+              ? 'Проверка цен работает даже при закрытом Chrome'
+              : 'Telegram не подключён'}
+          </Badge>
 
           <details className="rounded-sm bg-muted/35 px-2.5 py-2">
             <summary className="cursor-pointer select-none pg-caption font-medium text-foreground/80">
@@ -672,6 +775,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                   );
                   setAlertSettings(saved);
                   if (!next) {
+                    trackTelegramDisconnected();
                     setServerMonitoring(false);
                     if (saved.cloudSyncOk === false) {
                       setTelegramStatus(
@@ -738,6 +842,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
                     );
                     setAlertSettings(saved);
                     setServerMonitoring(false);
+                    trackTelegramDisconnected();
                     if (saved.cloudSyncOk === false) {
                       setTelegramStatus(
                         `Локально отключено. Сервер: ${saved.cloudSyncError ?? 'не удалось снять привязку Telegram'} — войдите в «Аккаунт» и повторите «Отключить».`,
@@ -992,7 +1097,7 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
             </div>
             <label className="flex items-center justify-between gap-2 rounded-sm bg-muted/40 px-2 py-1.5">
               <span className="pg-caption text-foreground">
-                Отправлять WARN/ERROR в облако (opt-in)
+                Облако: WARN/ERROR и анонимная воронка (та же настройка)
               </span>
               <input
                 type="checkbox"
@@ -1082,6 +1187,28 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
             <span>Политика конфиденциальности</span>
             <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.75} />
           </a>
+          <label className="flex items-start justify-between gap-3 rounded-sm bg-muted/40 px-2 py-2">
+            <span className="pg-caption text-foreground">
+              Анонимная аналитика продукта — воронка сравнений, AI и Premium без URL и названия товара.
+              Можно выключить в любой момент.
+            </span>
+            <input
+              type="checkbox"
+              className="mt-0.5 shrink-0"
+              checked={diagRemote}
+              disabled={diagBusy}
+              aria-label="Анонимная аналитика продукта"
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                void (async () => {
+                  setDiagBusy(true);
+                  const next = await saveTelemetrySettings({ remoteEnabled: enabled });
+                  setDiagRemote(next.remoteEnabled);
+                  setDiagBusy(false);
+                })();
+              }}
+            />
+          </label>
           <a
             href={ACCOUNT_DELETION_MAIL}
             className="block rounded-sm px-1 py-1 pg-caption text-muted-foreground hover:bg-muted/50 hover:text-foreground"

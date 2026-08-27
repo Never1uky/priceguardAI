@@ -76,4 +76,20 @@ describe('serp-title', () => {
       titleFromProductUrl('https://www.ozon.ru/product/krossovki-trace-low-m-99887766/'),
     ).toMatch(/Trace Low M/i);
   });
+
+  it('titleFromProductUrl decodes Yandex Market /card/ slug', () => {
+    expect(
+      titleFromProductUrl(
+        'https://market.yandex.ru/card/shampun-protiv-perkhoti-head--shoulders-old-spice/4624539067',
+      ),
+    ).toMatch(/Head Shoulders Old Spice/i);
+  });
+
+  it('titleFromProductUrl decodes Megamarket /catalog/details/ slug', () => {
+    expect(
+      titleFromProductUrl(
+        'https://megamarket.ru/catalog/details/smartfon-google-pixel-10-1002003004/',
+      ),
+    ).toMatch(/Google Pixel/i);
+  });
 });

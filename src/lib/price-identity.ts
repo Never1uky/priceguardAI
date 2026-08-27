@@ -37,6 +37,16 @@ export function bareProductArticle(
   if (marketplace === 'ozon' && /^ozon-/i.test(raw)) {
     return raw.replace(/^ozon-/i, '');
   }
+  if (marketplace === 'megamarket') {
+    const stripped = raw.replace(/^(megamarket:|mm-|mega-)/i, '');
+    const digits = stripped.replace(/\D/g, '');
+    return digits.length >= 6 ? digits : stripped;
+  }
+  if (marketplace === 'aliexpress') {
+    const stripped = raw.replace(/^(aliexpress:|ae-|ali-)/i, '');
+    const digits = stripped.replace(/\D/g, '');
+    return digits.length >= 8 ? digits : stripped;
+  }
   if (marketplace === 'yandex_market') {
     return raw.replace(/^(yandex_market|yandex|ym)-/i, '');
   }
@@ -75,12 +85,19 @@ export function resolveProductArticle(ref: PriceIdentityRef): string {
 }
 
 /** Stable storage / history key (`wb-{nmId}` …) or null if identity is weak. */
+export function prefixedStorageId(marketplace: Marketplace, article: string): string {
+  if (marketplace === 'wildberries') return `wb-${article}`;
+  if (marketplace === 'ozon') return `ozon-${article}`;
+  if (marketplace === 'megamarket') return `mm-${article}`;
+  if (marketplace === 'aliexpress') return `ae-${article}`;
+  if (marketplace === 'yandex_market') return `yandex-${article}`;
+  return `${marketplace}-${article}`;
+}
+
 export function stableProductStorageId(ref: PriceIdentityRef): string | null {
   const article = resolveProductArticle(ref);
   if (!article) return null;
-  if (ref.marketplace === 'wildberries') return `wb-${article}`;
-  if (ref.marketplace === 'ozon') return `ozon-${article}`;
-  return `yandex-${article}`;
+  return prefixedStorageId(ref.marketplace, article);
 }
 
 export function logPriceIdentityReject(

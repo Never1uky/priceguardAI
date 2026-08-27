@@ -11,7 +11,7 @@ import {
 import { stripProductIdPrefix } from '../_shared/product-id.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 import type { Marketplace } from '../_shared/product-url.ts';
-import { isPremiumRowActive, PREMIUM_ROW_SELECT } from '../_shared/premium-active.ts';
+import { resolveUserPlanAccess } from '../_shared/premium-active.ts';
 
 function serviceClient() {
   return createClient(
@@ -24,12 +24,8 @@ async function isPremiumUser(
   supabase: ReturnType<typeof serviceClient>,
   userId: string,
 ): Promise<boolean> {
-  const { data } = await supabase
-    .from('user_premium')
-    .select(PREMIUM_ROW_SELECT)
-    .eq('user_id', userId)
-    .maybeSingle();
-  return isPremiumRowActive(data);
+  const plan = await resolveUserPlanAccess(supabase, userId);
+  return plan.premiumTier;
 }
 
 Deno.serve(async (req) => {

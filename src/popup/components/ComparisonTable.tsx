@@ -5,25 +5,35 @@ import { isOfferWithPrice, normalizeMarketplaceRating } from '@/lib/compare-offe
 import { findCheapestOffer } from '@/lib/marketplace-search';
 import { isProductPageUrl, getMatchWarnKind } from '@/lib/product-match';
 import {
+  isPickerIdentityMismatch,
   matchStatusShortHint,
   offerMatchStatus,
+  PICKER_IDENTITY_MISMATCH_HINT,
   type MatchStatus,
 } from '@/lib/match-status';
 import { SEARCHING_MP_CROSS } from '@/lib/compare-jobs';
 import {
+  formatCompareSearchProgress,
+  isCompareOfferSettled,
+} from '@/lib/compare-search-progress';
+import { collapseCompareTableRows } from '@/lib/compare-table-rows';
+import {
   COMPARISON_MARKETPLACE_LABELS,
+  COMPARISON_MARKETPLACE_SHORT_LABELS,
   type ComparisonMarketplace,
   type MarketplaceOffer,
   type SearchCandidateOffer,
 } from '@/types/comparison';
+import { getMarketplaceEntry } from '@/lib/marketplaces/registry';
+import { marketplaceUrlPlaceholder } from '@/utils/comparison-url';
 import { ProductLink } from '@/popup/components/ProductLink';
 import { ProductImage } from '@/popup/components/ProductImage';
 import { safeMarketplaceHref } from '@/utils/safe-marketplace-url';
 import { ExternalLink, Link2, Loader2, Star, Trophy, XCircle, Check, Search, ChevronDown, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { VPN_SEARCH_HINT } from '@/lib/ozon-serp-dom';
 import { formatOfferErrorForDisplay } from '@/lib/offer-error-display';
-import { sanitizeCandidateTitle } from '@/lib/serp-title';
+import { resolveCandidateDisplayTitle } from '@/lib/serp-title';
 
 interface ComparisonTableProps {
   offers: MarketplaceOffer[];
@@ -51,27 +61,6 @@ interface ComparisonTableProps {
   /** Persisted rejected URLs per marketplace (visual + disable re-reject). */
   rejectedOfferUrls?: Partial<Record<ComparisonMarketplace, string[]>>;
 }
-
-const marketplaceBadgeVariant: Record<
-  ComparisonMarketplace,
-  'wildberries' | 'ozon' | 'yandex'
-> = {
-  wildberries: 'wildberries',
-  ozon: 'ozon',
-  yandex_market: 'yandex',
-};
-
-const marketplaceShortLabel: Record<ComparisonMarketplace, string> = {
-  wildberries: 'WB',
-  ozon: 'Ozon',
-  yandex_market: 'Я.Маркет',
-};
-
-const marketplaceUrlPlaceholder: Record<ComparisonMarketplace, string> = {
-  wildberries: 'https://www.wildberries.ru/catalog/...',
-  ozon: 'https://www.ozon.ru/product/...',
-  yandex_market: 'https://market.yandex.ru/product/...',
-};
 
 const MATCH_WARN_DISMISS_KEY = 'priceguard_match_warn_dismissed';
 
@@ -227,6 +216,7 @@ function RatingCell({ offer }: { offer: MarketplaceOffer }) {
 function CandidatePicker({
   marketplace,
   candidates,
+  referenceTitle,
   onSelect,
   onRejectCandidate,
   isSelecting,
@@ -236,6 +226,7 @@ function CandidatePicker({
 }: {
   marketplace: ComparisonMarketplace;
   candidates: SearchCandidateOffer[];
+  referenceTitle?: string;
   onSelect: (
     url: string,
     hint?: { title?: string; price?: number | null; rating?: number | null },
@@ -315,6 +306,14 @@ function CandidatePicker({
             {candidates.map((candidate, index) => {
               const candidateRating = normalizeMarketplaceRating(candidate.rating);
               const alreadyRejected = isRejectedUrl(candidate.url);
+              const displayTitle = resolveCandidateDisplayTitle({
+                serpTitle: candidate.title,
+                url: candidate.url,
+              });
+              const identityMismatch =
+                referenceTitle != null &&
+                referenceTitle.trim() !== '' &&
+                isPickerIdentityMismatch(referenceTitle, displayTitle);
               return (
               <li key={candidate.url}>
                 <div
@@ -329,7 +328,7 @@ function CandidatePicker({
                     disabled={isSelecting || isRejecting || alreadyRejected}
                     onClick={() =>
                       void onSelect(candidate.url, {
-                        title: candidate.title,
+                        title: displayTitle,
                         price: candidate.price,
                         rating: candidate.rating,
                       })
@@ -339,7 +338,7 @@ function CandidatePicker({
                     {candidate.imageUrl || candidate.imageUrlAlternatives?.length ? (
                       <ProductImage
                         product={{
-                          title: candidate.title,
+                          title: displayTitle,
                           imageUrl: candidate.imageUrl,
                           imageUrlAlternatives: candidate.imageUrlAlternatives,
                         }}
@@ -353,12 +352,17 @@ function CandidatePicker({
                       <p
                         className={`line-clamp-3 text-[12px] font-medium leading-snug ${
                           alreadyRejected ? 'text-muted-foreground line-through' : ''
-                        }`}
-                        title={candidate.title}
+                        } ${identityMismatch ? 'text-muted-foreground' : ''}`}
+                        title={displayTitle}
                       >
-                        {index === 0 && forceOpen && !alreadyRejected ? 'Рекомендуем: ' : ''}
-                        {sanitizeCandidateTitle(candidate.title, undefined, candidate.url)}
+                        {index === 0 && forceOpen && !alreadyRejected && !identityMismatch ? 'Рекомендуем: ' : ''}
+                        {displayTitle}
                       </p>
+                      {identityMismatch && !alreadyRejected && (
+                        <p className="mt-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                          {PICKER_IDENTITY_MISMATCH_HINT}
+                        </p>
+                      )}
                       {alreadyRejected ? (
                         <p className="mt-0.5 text-[10px] text-muted-foreground">отклонено вами</p>
                       ) : (
@@ -428,7 +432,7 @@ function CandidatePicker({
             })}
           </ul>
           <p className="text-[10px] text-muted-foreground">
-            После выбора подгрузим данные с {marketplaceShortLabel[marketplace]}
+            После выбора подгрузим данные с {COMPARISON_MARKETPLACE_SHORT_LABELS[marketplace]}
           </p>
         </>
       )}
@@ -512,7 +516,7 @@ function ManualLinkRow({
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder={marketplaceUrlPlaceholder[marketplace]}
+          placeholder={marketplaceUrlPlaceholder(marketplace)}
           disabled={isLinking}
           className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onKeyDown={(e) => {
@@ -577,15 +581,19 @@ export function ComparisonTable({
       ? offers.find((o) => o.marketplace === searchingMarketplace)
       : undefined;
   const searchingSlotSettled =
-    searchingOffer != null &&
-    searchingOffer.matchStatus !== 'loading_card' &&
-    (Boolean(searchingOffer.needsManualPick) ||
-      searchingOffer.matchStatus === 'not_found' ||
-      searchingOffer.matchStatus === 'needs_choice' ||
-      searchingOffer.matchStatus === 'blocked' ||
-      isOfferWithPrice(searchingOffer));
+    searchingOffer != null && isCompareOfferSettled(searchingOffer);
   const showSearchingHint = Boolean(isLoading) && !searchingSlotSettled;
+  const searchProgressLabel = useMemo(
+    () =>
+      formatCompareSearchProgress({
+        offers,
+        searchingMarketplace,
+        isLoading: showSearchingHint,
+      }),
+    [offers, searchingMarketplace, showSearchingHint],
+  );
   const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
+  const [marketplaceRowsExpanded, setMarketplaceRowsExpanded] = useState(false);
   const confirmedOffersCount = offers.filter((offer) => {
     if (!isOfferWithPrice(offer) || offer.needsManualPick) return false;
     const status = offerMatchStatus(offer, {
@@ -594,12 +602,25 @@ export function ComparisonTable({
     return status === 'verified' || status === 'probable';
   }).length;
 
+  const collapsedRows = useMemo(
+    () =>
+      collapseCompareTableRows(offers, {
+        sourceMarketplace,
+        expanded: marketplaceRowsExpanded,
+      }),
+    [offers, sourceMarketplace, marketplaceRowsExpanded],
+  );
+
   useEffect(() => {
     void chrome.storage.local.get(MATCH_WARN_DISMISS_KEY).then((stored) => {
       const raw = stored[MATCH_WARN_DISMISS_KEY];
       if (raw && typeof raw === 'object') setDismissed(raw as Record<string, boolean>);
     });
   }, []);
+
+  useEffect(() => {
+    setMarketplaceRowsExpanded(false);
+  }, [productId]);
 
   const dismissWarn = useCallback(
     (marketplace: ComparisonMarketplace) => {
@@ -615,16 +636,10 @@ export function ComparisonTable({
 
   return (
     <div className="relative min-w-0 overflow-hidden rounded-md bg-muted/50">
-      {showSearchingHint && (
+      {showSearchingHint && searchProgressLabel && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-primary/5 px-2.5 py-2 text-[11px] text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-          <p>
-            {searchingMarketplace === SEARCHING_MP_CROSS
-              ? 'Поиск: WB · Ozon · Я.Маркет — уже найденные строки остаются видимыми.'
-              : searchingMarketplace
-                ? `Ищем на ${marketplaceShortLabel[searchingMarketplace]} — остальные площадки уже готовы.`
-                : 'Обновляем цены на всех площадках — найденные строки остаются видимыми.'}
-          </p>
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+          <p className="font-medium text-foreground/80">{searchProgressLabel}</p>
         </div>
       )}
       <table className="w-full table-fixed text-left text-xs">
@@ -639,7 +654,7 @@ export function ComparisonTable({
           </tr>
         </thead>
         <tbody>
-          {offers.map((offer) => {
+          {collapsedRows.visible.map((offer) => {
             const hasPrice = isOfferWithPrice(offer);
             const isSource = offer.marketplace === sourceMarketplace;
             const warnKey = `${productId ?? 'x'}:${offer.marketplace}`;
@@ -687,10 +702,10 @@ export function ComparisonTable({
                   <div className="flex flex-col gap-1.5">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Badge
-                        variant={marketplaceBadgeVariant[offer.marketplace]}
+                        variant={getMarketplaceEntry(offer.marketplace)?.badgeVariant ?? 'default'}
                         className="w-fit text-[10px]"
                       >
-                        {marketplaceShortLabel[offer.marketplace]}
+                        {COMPARISON_MARKETPLACE_SHORT_LABELS[offer.marketplace]}
                       </Badge>
                       <OfferStatusBadge
                         offer={offer}
@@ -706,7 +721,7 @@ export function ComparisonTable({
                     )}
                     {isSource && hasPrice && confirmedOffersCount < 2 && (
                       <p className="text-[10px] text-muted-foreground">
-                        Эта карточка · {marketplaceShortLabel[offer.marketplace]}
+                        Эта карточка · {COMPARISON_MARKETPLACE_SHORT_LABELS[offer.marketplace]}
                       </p>
                     )}
                     {showMatchWarn && (
@@ -770,14 +785,14 @@ export function ComparisonTable({
                               className="mt-0.5 h-7 gap-1 px-2 text-[10px] font-medium"
                               title={
                                 formatted.kind === 'unavailable'
-                                  ? `Повторить попытку для ${marketplaceShortLabel[offer.marketplace]}`
-                                  : `Найти товар только на ${marketplaceShortLabel[offer.marketplace]}`
+                                  ? `Повторить попытку для ${COMPARISON_MARKETPLACE_SHORT_LABELS[offer.marketplace]}`
+                                  : `Найти товар только на ${COMPARISON_MARKETPLACE_SHORT_LABELS[offer.marketplace]}`
                               }
                             >
                               <Search className="h-3 w-3" />
                               {formatted.kind === 'unavailable'
                                 ? 'Повторить'
-                                : `Найти на ${marketplaceShortLabel[offer.marketplace]}`}
+                                : `Найти на ${COMPARISON_MARKETPLACE_SHORT_LABELS[offer.marketplace]}`}
                             </Button>
                           ) : null}
                         </div>
@@ -787,6 +802,7 @@ export function ComparisonTable({
                       <CandidatePicker
                         marketplace={offer.marketplace}
                         candidates={offer.searchCandidates!}
+                        referenceTitle={referenceTitle}
                         isSelecting={isSelecting}
                         isRejecting={isRejecting}
                         forceOpen={needsChoice}
@@ -901,6 +917,25 @@ export function ComparisonTable({
           })}
         </tbody>
       </table>
+      {collapsedRows.hiddenCount > 0 && !marketplaceRowsExpanded && (
+        <div className="border-t border-border/60 px-2.5 py-1.5">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 text-left text-[10px] font-semibold text-foreground"
+            onClick={() => setMarketplaceRowsExpanded(true)}
+          >
+            <span>
+              Ещё {collapsedRows.hiddenCount} площад
+              {collapsedRows.hiddenCount === 1
+                ? 'ка'
+                : collapsedRows.hiddenCount < 5
+                  ? 'ки'
+                  : 'ок'}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -20,8 +20,9 @@ import { getRemoteFullProductCache } from '@/lib/supabase/product-cache';
 import type { FullProductAnalysis } from '@/types/full-analysis';
 import type { Marketplace } from '@/types/product';
 import type { ComparisonMarketplace } from '@/types/comparison';
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
 
-const OTHER_MPS: ComparisonMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+const OTHER_MPS: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
 
 export interface CrossMpCacheHit {
   analysis: FullProductAnalysis;

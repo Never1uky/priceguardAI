@@ -4,6 +4,7 @@ import {
   decideMatchOutcome,
   resolveMatchStatus,
   matchStatusShortHint,
+  PICKER_IDENTITY_MISMATCH_HINT,
 } from '@/lib/match-status';
 
 describe('match-status', () => {
@@ -90,5 +91,10 @@ describe('match-status', () => {
   it('hints never include percents', () => {
     expect(matchStatusShortHint('probable', 2)).not.toMatch(/%/);
     expect(matchStatusShortHint('needs_choice', 3)).toMatch(/похожих/);
+  });
+
+  it('picker identity mismatch hint is category-agnostic', () => {
+    expect(PICKER_IDENTITY_MISMATCH_HINT).toBe('Не тот вариант товара');
+    expect(PICKER_IDENTITY_MISMATCH_HINT).not.toMatch(/аромат|модель/i);
   });
 });

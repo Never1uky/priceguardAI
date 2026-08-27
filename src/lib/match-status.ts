@@ -7,8 +7,11 @@ import {
   AUTO_PICK_CONFIDENCE_THRESHOLD,
   CLOSE_MATCH_TIE_DELTA,
   MIN_COMPARE_MATCH_CONFIDENCE,
+  computeMatchConfidence,
   isCloseMatchTie,
+  scoreProductMatch,
 } from '@/lib/product-match';
+import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
 import { resolveMatchFeatureFlags, type MatchFeatureFlags } from '@/lib/match-flags';
 import type { MarketplaceOffer, SearchCandidateOffer } from '@/types/comparison';
 
@@ -163,6 +166,87 @@ export function sortCandidatePool(pool: RankedCandidate[]): RankedCandidate[] {
     const pb = b.candidate.price ?? Number.POSITIVE_INFINITY;
     return pa - pb;
   });
+}
+
+/** Hard identity mismatch for picker ordering (scent, generation, storage…) — not auto-pick only */
+export function isPickerIdentityMismatch(
+  referenceTitle: string,
+  candidateTitle: string,
+  referenceSpecs?: string,
+): boolean {
+  if (!referenceTitle?.trim() || !candidateTitle?.trim() || candidateTitle === 'Товар') {
+    return false;
+  }
+  if (scoreProductMatch(referenceTitle, candidateTitle, referenceSpecs) === 0) return true;
+  if (!areLineageGenerationsCompatible(referenceTitle, candidateTitle)) return true;
+  if (
+    computeMatchConfidence(referenceTitle, candidateTitle, referenceSpecs) <
+    MIN_COMPARE_MATCH_CONFIDENCE
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Short picker badge when candidate fails identity vs reference (any category).
+ * UI-only — does not change match logic.
+ */
+export const PICKER_IDENTITY_MISMATCH_HINT = 'Не тот вариант товара';
+
+/**
+ * Picker order: identity-compatible first (then price tie-break among close scores),
+ * hard mismatches (XM6 for XM5, Old Spice for Menthol) last.
+ */
+export function reorderPickerCandidates<T>(
+  ranked: T[],
+  referenceTitle: string,
+  getTitle: (item: T) => string,
+  getConfidence: (item: T) => number,
+  getPrice: (item: T) => number | null | undefined,
+  referenceSpecs?: string,
+): T[] {
+  if (ranked.length < 2 || !referenceTitle.trim()) return ranked;
+
+  const compatible: T[] = [];
+  const mismatched: T[] = [];
+
+  for (const item of ranked) {
+    if (isPickerIdentityMismatch(referenceTitle, getTitle(item), referenceSpecs)) {
+      mismatched.push(item);
+    } else {
+      compatible.push(item);
+    }
+  }
+
+  const reorderedCompatible = pickCheapestAmongCloseMatches(
+    compatible.map((item) => ({
+      item,
+      confidence: getConfidence(item),
+      price: getPrice(item),
+    })),
+  ).map((row) => row.item);
+
+  mismatched.sort((a, b) => getConfidence(b) - getConfidence(a));
+
+  return [...reorderedCompatible, ...mismatched];
+}
+
+/** Reorder SearchCandidateOffer[] for needs_choice UI */
+export function reorderSearchCandidateOffers(
+  candidates: SearchCandidateOffer[],
+  referenceTitle: string,
+  referenceSpecs?: string,
+): SearchCandidateOffer[] {
+  const reordered = reorderPickerCandidates(
+    candidates,
+    referenceTitle,
+    (c) => c.title,
+    (c) => c.matchConfidence ?? 0,
+    (c) => c.price,
+    referenceSpecs,
+  );
+  return reordered.map((c, i) => ({ ...c, priority: 100 - i }));
 }
 
 /** Среди кандидатов с confidence в пределах Δ от best — предпочесть минимальную цену */

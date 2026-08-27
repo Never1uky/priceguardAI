@@ -18,6 +18,8 @@ import {
   normalizeRegion,
   normalizeStorage,
   normalizeVolumeMl,
+  storageCompatible,
+  storageRomCanonical,
 } from '@/lib/attr-normalize';
 import { inferProductCategory, MATCH_PROFILES } from '@/lib/match-category';
 import {
@@ -36,6 +38,12 @@ describe('attr-normalize', () => {
     expect(normalizeStorage('8+256')).toBe('8+256');
     expect(normalizeStorage('8/256 ГБ')).toBe('8+256');
     expect(extractNormalizedStorage('Смартфон 8 ГБ / 256 ГБ')).toBe('8+256');
+    expect(storageRomCanonical('12+128')).toBe('128gb');
+    expect(storageRomCanonical('128gb')).toBe('128gb');
+    expect(storageCompatible('128gb', '12+128')).toBe(true);
+    expect(storageCompatible('8+256', '256gb')).toBe(true);
+    expect(storageCompatible('128gb', '256gb')).toBe(false);
+    expect(storageCompatible('8+128', '12+128')).toBe(true);
   });
 
   it('normalizes color aliases to families', () => {
@@ -44,7 +52,14 @@ describe('attr-normalize', () => {
     expect(normalizeColor('Черный')).toBe('black');
     expect(normalizeColor('Чёрный')).toBe('black');
     expect(normalizeColor('Space Black')).toBe('black');
+    expect(normalizeColor('Obsidian')).toBe('black');
+    expect(normalizeColor('Porcelain')).toBe('white');
+    expect(normalizeColor('Indigo')).toBe('purple');
+    expect(normalizeColor('Hazel')).toBe('beige');
     expect(extractNormalizedColor('iPhone Space Black 256GB')).toBe('black');
+    expect(extractNormalizedColor('Смартфон Google Pixel 10 128GB Obsidian')).toBe('black');
+    expect(extractNormalizedColor('Pixel 10 128GB Porcelain')).toBe('white');
+    expect(extractNormalizedColor('Pixel 10 Indigo 128GB')).toBe('purple');
   });
 
   it('normalizes volume and package count', () => {

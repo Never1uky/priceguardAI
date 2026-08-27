@@ -11,7 +11,7 @@ import {
   type ProductCategory,
 } from '@/lib/match-category';
 import { areEntityRolesIncompatible } from '@/lib/entity-extract';
-import { extractScentVariant } from '@/lib/attr-normalize';
+import { extractScentVariant, storageCompatible } from '@/lib/attr-normalize';
 import { areBrandsCompatible, extractProductModel, variantMismatchPenalty } from '@/lib/model-extract';
 import {
   areLineageGenerationsCompatible,
@@ -19,6 +19,7 @@ import {
 } from '@/lib/lineage-generation';
 import { extractProductFeatures, scoreFeatureMatch } from '@/lib/product-features';
 import { isWildberriesFeedbacksUrl } from '@/utils/product-url';
+import { isProductPage } from '@/utils/marketplace';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 import { resolveMatchFeatureFlags, type MatchFeatureFlags } from '@/lib/match-flags';
 
@@ -165,6 +166,8 @@ const STRICT_PRICE_CATEGORIES: ProductCategory[] = [
   'laptops',
   'gpus',
   'desktops',
+  'monoblocks',
+  'pc_components',
   'smartphones',
   'consoles',
 ];
@@ -389,6 +392,25 @@ export function areModelsCompatible(refModel: string, candModel: string): boolea
     return tier(refKey) === tier(candKey);
   }
 
+  // iPhone 15 ≠ iPhone 15 Pro ≠ 15 Pro Max (same gen, different commercial tier)
+  if (refKey.includes('iphone') && candKey.includes('iphone')) {
+    const tier = (k: string): string => {
+      if (/promax|pro\s*max/.test(k) || k.includes('promax')) return 'promax';
+      if (k.includes('pro')) return 'pro';
+      if (k.includes('plus')) return 'plus';
+      if (k.includes('mini')) return 'mini';
+      return 'base';
+    };
+    const gen = (k: string): string | null => {
+      const m = k.match(/iphone(\d{1,2})/);
+      return m?.[1] ?? null;
+    };
+    const refGen = gen(refKey);
+    const candGen = gen(candKey);
+    if (refGen && candGen && refGen !== candGen) return false;
+    return tier(refKey) === tier(candKey);
+  }
+
   // Sony WH-1000XM5 ≠ WH-1000XM6
   const refSonyXm = refKey.match(/wh1000xm(\d)/);
   const candSonyXm = candKey.match(/wh1000xm(\d)/);
@@ -471,15 +493,16 @@ export function scoreProductMatch(
     candModel.model &&
     !areModelsCompatible(refModel.model, candModel.model)
   ) {
-    // Same lineage+generation (Buds 5 vs Buds 5) — skip hard model-string reject
+    // Buds same gen often differ only by marketing model string — soft skip.
+    // Do NOT skip for iPhone/Pixel/etc. (same lineage+gen, different tier).
     const refLin = extractLineageGeneration(referenceTitle);
     const candLin = extractLineageGeneration(candidateTitle);
-    const sameLineageGen =
+    const softBudsLineageSkip =
       Boolean(refLin && candLin) &&
       refLin!.gen === candLin!.gen &&
-      (refLin!.lineage === candLin!.lineage ||
-        (refLin!.lineage.startsWith('buds:') && candLin!.lineage.startsWith('buds:')));
-    if (!sameLineageGen) {
+      refLin!.lineage.startsWith('buds:') &&
+      candLin!.lineage.startsWith('buds:');
+    if (!softBudsLineageSkip) {
       return 0;
     }
   }
@@ -493,13 +516,14 @@ export function scoreProductMatch(
   }
   const resolvedCategory = refFeatures.category ?? candFeatures.category;
 
-  // Hard identity gate: storage mismatch for categories where storage defines SKU.
+  // Hard identity gate: storage / ROM mismatch for categories where storage defines SKU.
+  // RAM+ROM («12+128») is compatible with ROM-only («128gb») — same disk capacity.
   if (
     resolvedCategory &&
     shouldPenalizeStorageMismatch(resolvedCategory) &&
     refFeatures.storage &&
     candFeatures.storage &&
-    refFeatures.storage !== candFeatures.storage
+    storageCompatible(refFeatures.storage, candFeatures.storage) === false
   ) {
     return 0;
   }
@@ -592,20 +616,25 @@ export function scoreProductMatch(
 
   // Apparel/shoes: size is soft — don't apply storage-style variant penalty for size.
   // Storage penalty only for categories that care about memory.
-  // Smartphones: color is soft — do not apply color variantPenalty (model/lineage dominate).
+  // Soft-color categories: unwind bulk color penalty from variantMismatchPenalty, then apply
+  // a small post-identity soft delta so exact color ranks above other variants (never hard reject).
   let variantPenalty = variantMismatchPenalty(referenceTitle, candidateTitle, referenceSpecs);
+  const refFeaturesForColor = extractProductFeatures(referenceTitle, referenceSpecs);
+  const candFeaturesForColor = extractProductFeatures(candidateTitle);
   if (resolvedCategory && isSoftFeature(resolvedCategory, 'color')) {
-    const ref = extractProductFeatures(referenceTitle, referenceSpecs);
-    const cand = extractProductFeatures(candidateTitle);
-    if (ref.color && cand.color && ref.color !== cand.color) {
+    if (
+      refFeaturesForColor.color &&
+      candFeaturesForColor.color &&
+      refFeaturesForColor.color !== candFeaturesForColor.color
+    ) {
       // Remove color portion (~0.3) that variantMismatchPenalty added
       variantPenalty = Math.max(0, variantPenalty - 0.3);
     }
   }
   if (resolvedCategory && !shouldPenalizeStorageMismatch(resolvedCategory)) {
     // Recalculate: only color (and never size) for non-electronics
-    const ref = extractProductFeatures(referenceTitle, referenceSpecs);
-    const cand = extractProductFeatures(candidateTitle);
+    const ref = refFeaturesForColor;
+    const cand = candFeaturesForColor;
     variantPenalty = 0;
     if (
       ref.color &&
@@ -627,6 +656,20 @@ export function scoreProductMatch(
   }
   if (variantPenalty > 0) {
     score = Math.max(0, score - variantPenalty);
+  }
+
+  // Soft color preference after identity hard gates (both colors must be extracted).
+  if (
+    resolvedCategory &&
+    isSoftFeature(resolvedCategory, 'color') &&
+    refFeaturesForColor.color &&
+    candFeaturesForColor.color
+  ) {
+    if (refFeaturesForColor.color === candFeaturesForColor.color) {
+      score = Math.min(1, score + 0.04);
+    } else {
+      score = Math.max(0, score - 0.06);
+    }
   }
 
   if (resolvedCategory) {
@@ -927,12 +970,15 @@ export function pickBestMatchWithFallbackScored<T>(
 export function isProductPageUrl(url: string): boolean {
   if (isWildberriesFeedbacksUrl(url)) return false;
   if (/search\.aspx|\/catalog\/0\/|\/search\?/i.test(url)) return false;
+  if (/\/catalog\/details\//i.test(url)) return true;
 
   const catalogMatch = url.match(/\/catalog\/(\d+)/i);
   if (catalogMatch && catalogMatch[1] !== '0') return true;
 
-  return /\/product\//i.test(url) || /\/card\//i.test(url) || /\/product--/i.test(url)
-    || /\/t\/[a-zA-Z0-9]+/i.test(url) || /\/cc\/[a-zA-Z0-9]+/i.test(url);
+  return /\/product\//i.test(url) || /\/products\//i.test(url) || /\/card\//i.test(url) || /\/product--/i.test(url)
+    || /\/t\/[a-zA-Z0-9]+/i.test(url) || /\/cc\/[a-zA-Z0-9]+/i.test(url)
+    || /\/item\/\d+/i.test(url) || /\/cat\/detail\//i.test(url) || /\/p\/[a-z0-9_-]+\//i.test(url)
+    || isProductPage(url);
 }
 
 export function isSearchPageUrl(url: string): boolean {

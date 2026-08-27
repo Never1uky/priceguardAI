@@ -38,4 +38,14 @@ describe('monitoring-key', () => {
       }),
     ).toBeNull();
   });
+
+  it('aliexpress is not a monitoring key (ALI-9 / no Telegram)', () => {
+    expect(
+      resolveMonitoringKey({
+        marketplace: 'aliexpress',
+        productId: '1005001234567890',
+        productUrl: 'https://aliexpress.ru/item/1005001234567890.html',
+      }),
+    ).toBeNull();
+  });
 });

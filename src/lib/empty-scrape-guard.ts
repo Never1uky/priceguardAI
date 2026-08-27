@@ -1,21 +1,29 @@
 /**
- * Session counters for empty HiddenBrowser scrapes → fail-fast to Edge unlocker.
- * Card and SERP scrapes are tracked separately so cascade card fails do not skip SERP tabs.
+ * Session counters for empty HiddenBrowser scrapes.
+ * Card: fail-fast to Edge unlocker after N empties.
+ * SERP: after N empties in the same research, stop opening more SERP tabs for that MP
+ * (e.g. skip HiddenBrowser SERP when the visible tab already returned empty).
  */
 import type { ComparisonMarketplace } from '@/types/comparison';
+import { COMPARISON_MARKETPLACE_IDS } from '@/lib/marketplaces/registry';
 
 export type EmptyScrapeKind = 'serp' | 'card';
 
 const emptyCounts = new Map<string, number>();
 
-const ALL_MARKETPLACES: ComparisonMarketplace[] = [
-  'wildberries',
-  'ozon',
-  'yandex_market',
-];
+const ALL_MARKETPLACES: ComparisonMarketplace[] = [...COMPARISON_MARKETPLACE_IDS];
+
+/** After this many empty SERPs for an MP in the current research → skip further SERP tabs. */
+export const SERP_EMPTY_SKIP_THRESHOLD = 1;
+/** After this many empty card scrapes → skip HiddenBrowser card for that MP. */
+export const CARD_EMPTY_SKIP_THRESHOLD = 2;
 
 function key(marketplace: ComparisonMarketplace, kind: EmptyScrapeKind): string {
   return `${marketplace}:${kind}`;
+}
+
+function thresholdFor(kind: EmptyScrapeKind): number {
+  return kind === 'serp' ? SERP_EMPTY_SKIP_THRESHOLD : CARD_EMPTY_SKIP_THRESHOLD;
 }
 
 export function noteEmptyScrape(
@@ -45,14 +53,19 @@ export function resetAllEmptyScrapes(marketplace?: ComparisonMarketplace): void 
 }
 
 /**
- * Skip HiddenBrowser only for exhausted **card** scrapes.
- * SERP must always be attempted (visible tab / HiddenBrowser) — a session-wide
- * skip after 2 empty SERPs left WB/YM on dead search APIs for the rest of SW life.
+ * Skip HiddenBrowser / SERP tabs when the empty budget for this kind is exhausted.
+ * Counters reset at research start (`resetAllEmptyScrapes`).
  */
 export function shouldSkipTabScrape(
   marketplace: ComparisonMarketplace,
   kind: EmptyScrapeKind = 'serp',
 ): boolean {
-  if (kind === 'serp') return false;
-  return (emptyCounts.get(key(marketplace, kind)) ?? 0) >= 2;
+  return (emptyCounts.get(key(marketplace, kind)) ?? 0) >= thresholdFor(kind);
+}
+
+export function getEmptyScrapeCount(
+  marketplace: ComparisonMarketplace,
+  kind: EmptyScrapeKind = 'serp',
+): number {
+  return emptyCounts.get(key(marketplace, kind)) ?? 0;
 }

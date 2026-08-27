@@ -517,7 +517,8 @@ export async function runProductIntel(params: {
   const allowGenerate = params.allowGenerate !== false;
   const isPremium = Boolean(params.isPremium);
   const webResearch = Boolean(params.webResearch) && isPremium;
-  const scraper = projectScraperCredentials();
+  // Phase 13: Free product-intel = cache + legacy APIs only (no Scrappey)
+  const scraper = isPremium ? projectScraperCredentials() : null;
 
   const fetched = await fetchMarketplacePriceDetailed(
     parsed.marketplace,

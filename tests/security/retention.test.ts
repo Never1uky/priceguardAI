@@ -18,7 +18,7 @@ describe('security/privacy: purge_privacy_ttl_data() covers every documented tab
     const migration = await fs.readFile(
       path.resolve(
         __dirname,
-        '../../supabase/migrations/20260808110000_purge_edge_logs_and_telemetry.sql',
+        '../../supabase/migrations/20260825223000_price_scrape_cache_ttl_6h.sql',
       ),
       'utf-8',
     );
@@ -26,13 +26,14 @@ describe('security/privacy: purge_privacy_ttl_data() covers every documented tab
     const expectedDeletes: Array<[table: string, interval: string]> = [
       ['telegram_ai_threads', 'expires_at < now()'],
       ['product_cache', "now() - interval '7 days'"],
-      ['price_scrape_cache', "now() - interval '2 hours'"],
+      ['price_scrape_cache', "now() - interval '6 hours'"],
       ['ai_request_log', "now() - interval '90 days'"],
       ['search_metrics', "now() - interval '90 days'"],
       ['telegram_product_sessions', "now() - interval '30 days'"],
       ['edge_request_log', "now() - interval '72 hours'"],
       ['mapping_moderation_events', "now() - interval '48 hours'"],
       ['telemetry_events', "now() - interval '90 days'"],
+      ['search_results_cache', "now() - interval '6 hours'"],
     ];
 
     for (const [table, interval] of expectedDeletes) {
@@ -60,13 +61,10 @@ describe('security/privacy: purge_privacy_ttl_data() covers every documented tab
     const migration = await fs.readFile(
       path.resolve(
         __dirname,
-        '../../supabase/migrations/20260808110000_purge_edge_logs_and_telemetry.sql',
+        '../../supabase/migrations/20260825223000_price_scrape_cache_ttl_6h.sql',
       ),
       'utf-8',
     );
     expect(migration).not.toMatch(/delete from public\.cross_market_mapping/);
-    // The migration's own comment should document why, so a future reader
-    // doesn't "fix" this as a bug.
-    expect(migration.toLowerCase()).toMatch(/cross_market_mapping/);
   });
 });

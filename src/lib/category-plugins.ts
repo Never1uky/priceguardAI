@@ -72,12 +72,18 @@ export function cameraBodyMismatchPenalty(referenceTitle: string, candidateTitle
 }
 
 const LAPTOP_HINT = /ноутбук|laptop|macbook|notebook|ultrabook/i;
+const MONOBLOCK_HINT =
+  /моноблок|all[-\s]?in[-\s]?one|\baio\b|моноблочн/i;
+const MINI_PC_OR_DESKTOP_HINT =
+  /мини[-\s]?пк|mini[-\s]?pc|неттоп|\bnuc\b|системн\w*\s*блок|игровой\s+компьютер|\bdesktop\b|пк\s+игровой|игровой\s+пк\b/i;
+const PC_COMPONENT_HINT =
+  /(?:^|[\s,./])(?:оперативн\w*\s+память|модуль\s+памяти|материнск\w*\s+плат|блок\s+питания|\bpsu\b|видеокарт|\bgpu\b|процессор(?!\s+для\s+ноут)|cooler\s+master|thermal\s+paste)(?=$|[\s,./])/i;
 const GPU_OR_DESKTOP_INTRUDER =
-  /видеокарт|\bgpu\b|графическ|трафарет|наклейк|стикер|системн\w*\s*блок|игровой\s+компьютер|пк\s+сборк/i;
+  /видеокарт|\bgpu\b|графическ|трафарет|наклейк|стикер|системн\w*\s*блок|игровой\s+компьютер|пк\s+сборк|мини[-\s]?пк|mini[-\s]?pc/i;
 
 /** Primary device — do not classify as accessory when present. */
 const PRIMARY_DEVICE_HINT =
-  /смартфон|ноутбук|laptop|macbook|notebook|ultrabook|телевизор|\bsmart\s*tv\b|монитор|\bmonitor\b/i;
+  /смартфон|ноутбук|laptop|macbook|notebook|ultrabook|моноблок|телевизор|\bsmart\s*tv\b|монитор|\bmonitor\b/i;
 
 const ACCESSORY_HINT =
   /чехол|защитн\w*\s+(?:стекл|плёнк|пленк)|плёнк|пленк|кабель|зарядк|зарядн|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop)|сумка\s+для\s+ноут/i;
@@ -109,10 +115,44 @@ export function gpuCrossCategoryPenalty(_referenceTitle: string, candidateTitle:
 }
 
 export function desktopCrossCategoryPenalty(_referenceTitle: string, candidateTitle: string): number {
-  if (/игровой\s+компьютер|системн\w*\s*блок|\bdesktop\b/i.test(candidateTitle) && !LAPTOP_HINT.test(candidateTitle)) {
+  if (MONOBLOCK_HINT.test(candidateTitle)) return 0.95;
+  if (
+    MINI_PC_OR_DESKTOP_HINT.test(candidateTitle) &&
+    !LAPTOP_HINT.test(candidateTitle) &&
+    !MONOBLOCK_HINT.test(candidateTitle)
+  ) {
     return 0;
   }
   if (LAPTOP_HINT.test(candidateTitle) || /видеокарт|\bgpu\b|трафарет/i.test(candidateTitle)) {
+    return 0.95;
+  }
+  if (PC_COMPONENT_HINT.test(candidateTitle)) return 0.95;
+  return 0;
+}
+
+export function monoblockCrossCategoryPenalty(_referenceTitle: string, candidateTitle: string): number {
+  if (MONOBLOCK_HINT.test(candidateTitle)) return 0;
+  if (
+    MINI_PC_OR_DESKTOP_HINT.test(candidateTitle) ||
+    LAPTOP_HINT.test(candidateTitle) ||
+    PC_COMPONENT_HINT.test(candidateTitle) ||
+    /видеокарт|\bgpu\b/i.test(candidateTitle)
+  ) {
+    return 0.95;
+  }
+  return 0;
+}
+
+export function pcComponentsCrossCategoryPenalty(
+  _referenceTitle: string,
+  candidateTitle: string,
+): number {
+  if (PC_COMPONENT_HINT.test(candidateTitle) || /видеокарт|\bgpu\b/i.test(candidateTitle)) return 0;
+  if (
+    MONOBLOCK_HINT.test(candidateTitle) ||
+    LAPTOP_HINT.test(candidateTitle) ||
+    MINI_PC_OR_DESKTOP_HINT.test(candidateTitle)
+  ) {
     return 0.95;
   }
   return 0;
@@ -139,6 +179,20 @@ const INCOMPATIBLE_CATEGORY_PAIRS = new Set([
   'desktops|laptops',
   'gpus|desktops',
   'desktops|gpus',
+  'laptops|monoblocks',
+  'monoblocks|laptops',
+  'desktops|monoblocks',
+  'monoblocks|desktops',
+  'gpus|monoblocks',
+  'monoblocks|gpus',
+  'pc_components|laptops',
+  'laptops|pc_components',
+  'pc_components|desktops',
+  'desktops|pc_components',
+  'pc_components|monoblocks',
+  'monoblocks|pc_components',
+  'pc_components|gpus',
+  'gpus|pc_components',
   'smartphones|accessories',
   'accessories|smartphones',
   'laptops|accessories',
@@ -364,8 +418,34 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
         .trim(),
   },
   {
+    id: 'monoblocks',
+    inferPatterns: [
+      /моноблок/i,
+      /all[-\s]?in[-\s]?one/i,
+      /\baio\s*(?:pc|пк)?\b/i,
+    ],
+    profile: {
+      weights: {
+        brand: 25,
+        model: 30,
+        storage: 15,
+        color: 5,
+        price: 10,
+        title: 25,
+      },
+      required: ['brand', 'model'],
+      soft: ['color'],
+      ignore: ['size', 'volume', 'packageCount'],
+    },
+    mismatchPenalty: monoblockCrossCategoryPenalty,
+  },
+  {
     id: 'desktops',
     inferPatterns: [
+      /мини[-\s]?пк/i,
+      /mini[-\s]?pc/i,
+      /неттоп/i,
+      /\bnuc\b/i,
       /системн(ый|ого)\s*блок/i,
       /игровой\s+компьютер/i,
       /\bdesktop\b/i,
@@ -412,6 +492,35 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
       ignore: ['size', 'volume', 'packageCount'],
     },
     mismatchPenalty: laptopCrossCategoryPenalty,
+  },
+  {
+    id: 'pc_components',
+    inferPatterns: [
+      /оперативн[а-яё]*\s+память/i,
+      /модуль\s+памяти/i,
+      /материнск[а-яё]*\s+плат/i,
+      /\bmotherboard\b/i,
+      /блок\s+питания(?:\s+для\s+(?:пк|компьютер))?/i,
+      /\bpsu\b/i,
+      /накопител[а-яё]+\s+ssd/i,
+      /ssd\s+накопител/i,
+      /процессор\s+(?:intel|amd)/i,
+      /\bcpu\s+(?:intel|amd)/i,
+      /(?:^|[\s])(?:озу|dimm)(?:\s|$)/i,
+    ],
+    profile: {
+      weights: {
+        brand: 30,
+        model: 40,
+        storage: 15,
+        price: 10,
+        title: 20,
+      },
+      required: ['brand', 'model'],
+      soft: [],
+      ignore: ['color', 'size', 'volume', 'packageCount'],
+    },
+    mismatchPenalty: pcComponentsCrossCategoryPenalty,
   },
   {
     id: 'headphones',
@@ -725,6 +834,14 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
   {
     id: 'home_goods',
     inferPatterns: [
+      /комод/i,
+      /стеллаж/i,
+      /\bтумб/i,
+      /шкаф/i,
+      /кровать/i,
+      /диван/i,
+      /письменн\w*\s+стол/i,
+      /журнальн\w*\s+стол/i,
       /органайзер/i,
       /контейнер\s+для\s+хранен/i,
       /кастрюл/i,
@@ -977,6 +1094,46 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
         .trim(),
   },
   {
+    id: 'grocery',
+    roleDefault: 'supply',
+    inferPatterns: [
+      /крабов[а-яё]*\s+палоч/i,
+      /рыбн[а-яё]*\s+базар/i,
+      /колбас/i,
+      /сосис[кк]/i,
+      /йогурт/i,
+      /творог/i,
+      /молоко(?!\s+для\s+(?:кожи|ванн))/i,
+      /\bсыр\b/i,
+      /батончик/i,
+      /чипсы/i,
+      /шоколад(?!\s+цвет)/i,
+      /печенье/i,
+      /макарон/i,
+      /консерв/i,
+      /завтрак\s+сухой/i,
+      /хлопья\s+(?:кукур|овс)/i,
+      /газировк/i,
+      /минеральн[а-яё]*\s+вод/i,
+      /\bsnack\b/i,
+      /\bgrocery\b/i,
+    ],
+    profile: {
+      weights: {
+        brand: 30,
+        series: 15,
+        model: 10,
+        weight: 20,
+        packageCount: 15,
+        title: 25,
+        price: 5,
+      },
+      required: ['brand'],
+      soft: ['model', 'color'],
+      ignore: ['storage', 'size', 'connector'],
+    },
+  },
+  {
     id: 'pet_food',
     roleDefault: 'supply',
     inferPatterns: [
@@ -1063,6 +1220,7 @@ export const SOFT_MODEL_MATCH_CATEGORIES: ProductCategory[] = [
   'detergents',
   'cosmetics',
   'pet_food',
+  'grocery',
   'tvs',
   'monitors',
   'accessories',

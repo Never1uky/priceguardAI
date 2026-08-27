@@ -29,6 +29,8 @@ const BY_SLUG: Record<string, string[]> = {
   sports: ['эффективность', 'удобство', 'измерения / состав', 'вкус / переносимость'],
   pet_food: ['состав', 'усвояемость', 'для кого', 'цена за порцию'],
   desktops: ['производительность', 'охлаждение', 'шум', 'апгрейд'],
+  monoblocks: ['экран', 'производительность', 'шум', 'эргономика'],
+  pc_components: ['совместимость', 'скорость', 'нагрев', 'надёжность'],
 };
 
 export function focusAxesForCategorySlug(categorySlug: string | null | undefined): string[] {

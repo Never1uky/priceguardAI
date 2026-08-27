@@ -17,6 +17,7 @@
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { isEdgeRateLimited, logEdgeRequest } from '../_shared/edge-rate-limit.ts';
+import { sanitizeSeoProductTitle } from '../_shared/seo-gates.ts';
 
 const LIST_SELECT =
   'slug, canonical_path, title, brand, brand_slug, category, category_slug, quality_score, review_count, price_current, currency, image_url, product_url, marketplace, product_id, published_at, updated_at, analyzed_at, analysis_snapshot, is_primary, primary_slug, canon_id';
@@ -81,16 +82,7 @@ function listItem(row: Record<string, unknown>) {
   const summary =
     typeof snap?.qualitySummary === 'string' ? snap.qualitySummary.slice(0, 220) : null;
   const rawTitle = String(row.title ?? '');
-  const title = rawTitle
-    .replace(/\bSEO\s*Smoke\b/gi, ' ')
-    .replace(/\b(smoke\s*fixture|test\s*fixture|debug|test\s*only)\b/gi, ' ')
-    .replace(
-      /\s*[|·•\-–—]\s*(wildberries|wb|ozon|яндекс\.?\s*маркет|yandex\s*market)\s*$/i,
-      '',
-    )
-    .replace(/^\s*(wildberries|wb|ozon|яндекс\.?\s*маркет|yandex\s*market)\s*[|·•\-–—:]\s*/i, '')
-    .replace(/\s+/g, ' ')
-    .trim() || rawTitle;
+  const title = sanitizeSeoProductTitle(rawTitle) || rawTitle;
 
   const scoreRaw = row.quality_score;
   let qualityScore: number | null =
@@ -473,6 +465,10 @@ Deno.serve(async (req) => {
           .order('published_at', { ascending: false, nullsFirst: false })
           .limit(RELATED_FETCH);
 
+        if (useCanonColumns) {
+          query = query.eq('is_primary', true);
+        }
+
         if (brandSlug && categorySlug) {
           query = query.or(`brand_slug.eq.${brandSlug},category_slug.eq.${categorySlug}`);
         } else if (brandSlug) {
@@ -508,13 +504,14 @@ Deno.serve(async (req) => {
           const tid = m.target_product_id ? String(m.target_product_id) : '';
           if (!tmp || !tid) continue;
           const key = `${tmp}:${tid.replace(/^(wildberries|ozon|yandex_market):/i, '')}`;
-          const { data: peer } = await supabase
+          let peerQuery = supabase
             .from('seo_product_pages')
             .select(listCols())
             .eq('publish_status', 'published')
             .eq('product_key', key)
-            .neq('slug', slug)
-            .maybeSingle();
+            .neq('slug', slug);
+          if (useCanonColumns) peerQuery = peerQuery.eq('is_primary', true);
+          const { data: peer } = await peerQuery.maybeSingle();
           if (peer) {
             const item = listItem(peer as Record<string, unknown>);
             bySlug.set(String(item.slug), item);

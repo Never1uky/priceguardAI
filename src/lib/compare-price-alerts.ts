@@ -12,8 +12,9 @@ import {
 import { offerMatchStatus } from '@/lib/match-status';
 import { isOutOfStockError } from '@/lib/out-of-stock';
 import { detectComparisonMarketplace, normalizeCompareUrl } from '@/utils/comparison-url';
-import type { CompareProduct, MarketplaceOffer } from '@/types/comparison';
+import type { CompareProduct, ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 import type { Marketplace } from '@/types/product';
+import { getSelectedSearchMarketplaces } from '@/lib/marketplaces/search-settings';
 
 /** После add не слать compare-алерты (Chrome+TG) — только baseline. */
 export const COMPARE_ALERT_GRACE_MS = 45 * 60 * 1000;
@@ -211,8 +212,11 @@ export function planComparePriceAlerts(
   product: CompareProduct,
   newOffers: MarketplaceOffer[],
   settings: PriceAlertSettings,
+  options?: { marketplaces?: ComparisonMarketplace[] },
 ): CompareAlertPlan[] {
-  const oldOffers = offersFromCompareProduct(product);
+  const oldOffers = offersFromCompareProduct(product, {
+    marketplaces: options?.marketplaces,
+  });
   const sourceMarketplace = product.sourceMarketplace as Marketplace;
   const oldSourcePrice = resolveOldSourcePrice(product, oldOffers);
   const cheaperPlans: CompareAlertPlan[] = [];
@@ -385,7 +389,10 @@ export async function checkComparePriceDrops(
   }
 
   const title = product.title !== 'Товар' ? product.title : 'Товар в сравнении';
-  const plans = planComparePriceAlerts(product, newOffers, settings);
+  const selected = await getSelectedSearchMarketplaces();
+  const plans = planComparePriceAlerts(product, newOffers, settings, {
+    marketplaces: selected,
+  });
 
   try {
     console.info('[PriceGuard] compare alerts plan', {

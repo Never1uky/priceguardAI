@@ -7,6 +7,9 @@ import {
 import { formatComparedAt, hasStoredCompareOffers } from '@/lib/compare-cache';
 import { offersFromCompareProduct } from '@/lib/compare-offers';
 import { sendRuntimeMessage } from '@/lib/runtime-message';
+import { trackMatchManualSelection, trackMonitoringRefresh, classifyFailureReason } from '@/lib/telemetry/funnel';
+import { getSelectedSearchMarketplaces } from '@/lib/marketplaces/search-settings';
+import type { MarketplaceId } from '@/lib/marketplaces/registry';
 import type { CompareProduct, ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -37,6 +40,20 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
   const [rejectingMarketplace, setRejectingMarketplace] = useState<ComparisonMarketplace | null>(null);
   const [searchingMarketplace, setSearchingMarketplace] = useState<SearchingMarketplaceKey | null>(null);
   const [selectingMarketplace, setSelectingMarketplace] = useState<ComparisonMarketplace | null>(null);
+  const [selectedMarketplaces, setSelectedMarketplaces] = useState<MarketplaceId[]>([]);
+
+  useEffect(() => {
+    void getSelectedSearchMarketplaces().then(setSelectedMarketplaces);
+    const onStorage = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      area: string,
+    ) => {
+      if (area !== 'local' || !changes.priceguard_search_marketplaces_v1) return;
+      void getSelectedSearchMarketplaces().then(setSelectedMarketplaces);
+    };
+    chrome.storage.onChanged.addListener(onStorage);
+    return () => chrome.storage.onChanged.removeListener(onStorage);
+  }, []);
 
   const selectedProduct = products.find((p) => p.id === selectedId) ?? null;
 
@@ -95,14 +112,21 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
     })();
   }, [syncRunningState, focusCompareId]);
 
-  const applyProduct = useCallback((product: CompareProduct) => {
-    setProducts((prev) => {
-      const exists = prev.some((p) => p.id === product.id);
-      return exists ? prev.map((p) => (p.id === product.id ? product : p)) : [product, ...prev];
-    });
-    setSelectedId(product.id);
-    setOffers(offersFromCompareProduct(product));
-  }, []);
+  const applyProduct = useCallback(
+    (product: CompareProduct) => {
+      setProducts((prev) => {
+        const exists = prev.some((p) => p.id === product.id);
+        return exists ? prev.map((p) => (p.id === product.id ? product : p)) : [product, ...prev];
+      });
+      setSelectedId(product.id);
+      setOffers(
+        offersFromCompareProduct(product, {
+          marketplaces: selectedMarketplaces.length ? selectedMarketplaces : undefined,
+        }),
+      );
+    },
+    [selectedMarketplaces],
+  );
 
   useEffect(() => {
     if (!isActive) return;
@@ -156,8 +180,12 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
     }
     // Depend on selectedProduct identity (updates when storage reloads marketplaceOffers /
     // needs_choice), not only id+comparedAt — otherwise picker never refreshes mid-research.
-    setOffers(offersFromCompareProduct(selectedProduct));
-  }, [selectedProduct]);
+    setOffers(
+      offersFromCompareProduct(selectedProduct, {
+        marketplaces: selectedMarketplaces.length ? selectedMarketplaces : undefined,
+      }),
+    );
+  }, [selectedProduct, selectedMarketplaces]);
 
   useEffect(() => {
     const onStorageChange = (
@@ -532,6 +560,7 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
       }
 
       applyProduct(response.product);
+      trackMatchManualSelection(marketplace);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Не удалось выбрать товар';
       const network =
@@ -559,11 +588,14 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
   const refreshAllComparePrices = useCallback(async () => {
     setError(null);
     setIsRefreshing(true);
+    const started = Date.now();
     try {
       await sendRuntimeMessage({ type: 'REFRESH_ALL_COMPARE_PRICES' });
       await loadProducts();
-    } catch {
+      trackMonitoringRefresh(true, Date.now() - started);
+    } catch (error) {
       setError('Не удалось обновить цены сравнения');
+      trackMonitoringRefresh(false, Date.now() - started, classifyFailureReason(error));
     } finally {
       setIsRefreshing(false);
       if (selectedId) await syncRunningState(selectedId);
@@ -585,7 +617,13 @@ export function useCompareTab(isActive: boolean, focusCompareId?: string | null)
     searchingMarketplace,
     selectingMarketplace,
     foundMarketplacesCount,
-    hasCache: selectedProduct ? hasStoredCompareOffers(selectedProduct) : false,
+    searchMarketplacesCount: selectedMarketplaces.length || offers.length,
+    hasCache: selectedProduct
+      ? hasStoredCompareOffers(
+          selectedProduct,
+          selectedMarketplaces.length ? selectedMarketplaces : undefined,
+        )
+      : false,
     comparedAtLabel: selectedProduct?.comparedAt
       ? formatComparedAt(selectedProduct.comparedAt)
       : null,

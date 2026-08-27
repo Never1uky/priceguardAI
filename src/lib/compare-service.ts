@@ -13,6 +13,7 @@ import {
   researchClearAutoOnly,
 } from '@/lib/candidate-pool';
 import { isSameProductPage } from '@/lib/reviews/tab-resolver';
+import { getSelectedSearchMarketplaces } from '@/lib/marketplaces/search-settings';
 import type {
   CompareProduct,
   CompareProductHint,
@@ -46,10 +47,11 @@ export async function ensureCompareProduct(
   const product = await resolveAndAddCompareProduct(url, article, hint);
   await setSelectedCompareId(product.id);
 
-  if (!shouldRunCompare(product, options?.forceCompare)) {
+  const selected = await getSelectedSearchMarketplaces();
+  if (!shouldRunCompare(product, options?.forceCompare, selected)) {
     return {
       product,
-      offers: offersFromCompareProduct(product),
+      offers: offersFromCompareProduct(product, { marketplaces: selected }),
       fromCache: true,
     };
   }
@@ -71,10 +73,11 @@ export async function refreshCompareProduct(
   force = true,
   options?: RefreshCompareOptions,
 ): Promise<EnsureCompareResult> {
-  if (!shouldRunCompare(product, force)) {
+  const selected = await getSelectedSearchMarketplaces();
+  if (!shouldRunCompare(product, force, selected)) {
     return {
       product,
-      offers: offersFromCompareProduct(product),
+      offers: offersFromCompareProduct(product, { marketplaces: selected }),
       fromCache: true,
     };
   }

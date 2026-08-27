@@ -19,6 +19,7 @@ import {
   clearPendingTombstones,
   getPendingTombstones,
 } from '@/lib/tracked-pending-tombstones';
+import { prefixedStorageId } from '@/lib/price-identity';
 import { buildWildberriesUrl } from '@/utils/marketplace';
 import { toCanonicalProductUrl } from '@/utils/product-url';
 import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
@@ -39,11 +40,9 @@ interface RemoteTrackedRow {
   updated_at?: string;
 }
 
-/** Локальный id как у content-парсеров: wb- / ozon- / yandex- */
-function localProductId(marketplace: Marketplace, productId: string): string {
-  if (marketplace === 'wildberries') return `wb-${productId}`;
-  if (marketplace === 'ozon') return `ozon-${productId}`;
-  return `yandex-${productId}`;
+/** Локальный id как у content-парсеров: wb- / ozon- / yandex- / mm- / ae- */
+export function localTrackedProductId(marketplace: Marketplace, productId: string): string {
+  return prefixedStorageId(marketplace, productId);
 }
 
 function reconstructYmUrl(productId: string, productUrl?: string | null): string {
@@ -56,16 +55,27 @@ function reconstructYmUrl(productId: string, productUrl?: string | null): string
   );
 }
 
-function reconstructUrl(
+export function reconstructTrackedProductUrl(
   marketplace: Marketplace,
   productId: string,
   productUrl?: string | null,
 ): string {
+  if (productUrl && productUrl.startsWith('http')) {
+    return toCanonicalProductUrl(productUrl, marketplace);
+  }
   if (marketplace === 'wildberries') {
     return buildWildberriesUrl(productId);
   }
   if (marketplace === 'ozon') {
     return toCanonicalProductUrl(`https://www.ozon.ru/product/${productId}/`, 'ozon');
+  }
+  if (marketplace === 'megamarket') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return toCanonicalProductUrl(`https://megamarket.ru/catalog/details/${id}/`, 'megamarket');
+  }
+  if (marketplace === 'aliexpress') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return toCanonicalProductUrl(`https://aliexpress.ru/item/${id}.html`, 'aliexpress');
   }
   return reconstructYmUrl(productId, productUrl);
 }
@@ -75,15 +85,13 @@ function toLocalTracked(row: RemoteTrackedRow): TrackedProduct {
   const productId = row.product_id;
   const isWb = row.marketplace === 'wildberries';
   return {
-    id: localProductId(row.marketplace, productId),
+    id: localTrackedProductId(row.marketplace, productId),
     marketplace: row.marketplace,
     title: row.product_title ?? 'Товар',
     price,
     currency: '₽',
     article: productId,
-    url: row.product_url?.startsWith('http')
-      ? row.product_url
-      : reconstructUrl(row.marketplace, productId, row.product_url),
+    url: reconstructTrackedProductUrl(row.marketplace, productId, row.product_url),
     scrapedAt: row.last_checked ? Date.parse(row.last_checked) : Date.now(),
     trackedAt: row.created_at ? Date.parse(row.created_at) : Date.now(),
     initialPrice: price,

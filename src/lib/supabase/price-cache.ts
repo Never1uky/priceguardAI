@@ -1,5 +1,6 @@
 /**
- * Shared price scrape cache (2h TTL) via Edge price-cache.
+ * Shared price scrape cache (6h TTL) via Edge price-cache.
+ * Same table as Telegram cron (`price_scrape_cache`) — not AI product_cache.
  * Puts go through PendingSync outbox so 502 never loses data.
  */
 

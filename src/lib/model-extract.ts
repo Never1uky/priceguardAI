@@ -301,8 +301,13 @@ const COLOR_ALIASES: Record<string, string> = {
   черный: 'black',
   чёрный: 'black',
   black: 'black',
+  midnight: 'black',
+  graphite: 'black',
+  obsidian: 'black',
   белый: 'white',
   white: 'white',
+  starlight: 'white',
+  porcelain: 'white',
   синий: 'blue',
   blue: 'blue',
   серебристый: 'silver',
@@ -319,6 +324,7 @@ const COLOR_ALIASES: Record<string, string> = {
   gold: 'gold',
   фиолетовый: 'purple',
   purple: 'purple',
+  indigo: 'purple',
   розовый: 'pink',
   pink: 'pink',
   желтый: 'yellow',
@@ -327,10 +333,13 @@ const COLOR_ALIASES: Record<string, string> = {
   'светло-жёлтый': 'yellow',
   lemongrass: 'yellow',
   yellow: 'yellow',
+  beige: 'beige',
+  бежевый: 'beige',
+  hazel: 'beige',
 };
 
 const COLOR_PATTERN =
-  /\b(ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|lemongrass|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|yellow)\b/i;
+  /\b(ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|obsidian|porcelain|indigo|hazel|midnight|graphite|starlight|lemongrass|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|yellow|beige)\b/i;
 
 function normalizeColorKey(raw: string): string {
   const lower = raw.toLowerCase().trim();

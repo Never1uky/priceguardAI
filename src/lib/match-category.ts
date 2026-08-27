@@ -33,6 +33,8 @@ export type ProductCategory =
   | 'laptops'
   | 'gpus'
   | 'desktops'
+  | 'monoblocks'
+  | 'pc_components'
   | 'tvs'
   | 'monitors'
   | 'accessories'
@@ -53,6 +55,7 @@ export type ProductCategory =
   | 'detergents'
   | 'cosmetics'
   | 'pet_food'
+  | 'grocery'
   | 'memory_cards'
   | 'generic';
 
@@ -145,6 +148,7 @@ const NO_STORAGE_PENALTY_CATEGORIES: ProductCategory[] = [
   'detergents',
   'cosmetics',
   'pet_food',
+  'grocery',
   'headphones',
   'wearables',
   'cameras',

@@ -3,6 +3,8 @@ import {
   noteEmptyScrape,
   resetAllEmptyScrapes,
   shouldSkipTabScrape,
+  SERP_EMPTY_SKIP_THRESHOLD,
+  CARD_EMPTY_SKIP_THRESHOLD,
 } from '@/lib/empty-scrape-guard';
 import { isTabLoadTimeoutError } from '@/lib/tab-complete';
 
@@ -11,22 +13,29 @@ describe('empty-scrape-guard', () => {
     resetAllEmptyScrapes();
   });
 
-  it('tracks card skip separately; SERP never skips', () => {
+  it('skips card after CARD_EMPTY_SKIP_THRESHOLD empties', () => {
     noteEmptyScrape('ozon', 'card');
+    expect(shouldSkipTabScrape('ozon', 'card')).toBe(false);
     noteEmptyScrape('ozon', 'card');
+    expect(CARD_EMPTY_SKIP_THRESHOLD).toBe(2);
     expect(shouldSkipTabScrape('ozon', 'card')).toBe(true);
-    expect(shouldSkipTabScrape('ozon', 'serp')).toBe(false);
-
-    noteEmptyScrape('ozon', 'serp');
-    noteEmptyScrape('ozon', 'serp');
-    noteEmptyScrape('ozon', 'serp');
-    expect(shouldSkipTabScrape('ozon', 'serp')).toBe(false);
   });
 
-  it('resetAllEmptyScrapes clears card skip for the next compare job', () => {
+  it('skips further SERP after SERP_EMPTY_SKIP_THRESHOLD empties in the same research', () => {
+    expect(SERP_EMPTY_SKIP_THRESHOLD).toBe(1);
+    expect(shouldSkipTabScrape('ozon', 'serp')).toBe(false);
+    noteEmptyScrape('ozon', 'serp');
+    expect(shouldSkipTabScrape('ozon', 'serp')).toBe(true);
+    // card budget independent
+    expect(shouldSkipTabScrape('ozon', 'card')).toBe(false);
+  });
+
+  it('resetAllEmptyScrapes clears card and serp skip for the next compare job', () => {
     noteEmptyScrape('ozon', 'card');
     noteEmptyScrape('ozon', 'card');
+    noteEmptyScrape('ozon', 'serp');
     expect(shouldSkipTabScrape('ozon', 'card')).toBe(true);
+    expect(shouldSkipTabScrape('ozon', 'serp')).toBe(true);
 
     resetAllEmptyScrapes('ozon');
     expect(shouldSkipTabScrape('ozon', 'card')).toBe(false);
@@ -34,6 +43,6 @@ describe('empty-scrape-guard', () => {
   });
 
   it('load-timeout errors are distinguishable so callers skip noteEmptyScrape', () => {
-    expect(isTabLoadTimeoutError(new Error('Страница поиска не загрузилась'))).toBe(true);
+    expect(isTabLoadTimeoutError(new Error('Страница не загрузилась вовремя'))).toBe(true);
   });
 });

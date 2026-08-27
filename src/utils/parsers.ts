@@ -1,9 +1,13 @@
 import type { Product } from '@/types/product';
-import { isProductPage } from '@/utils/marketplace';
+import { detectMarketplace, isProductPage } from '@/utils/marketplace';
 import { parseRatingFromMarketplaceText } from '@/lib/compare-offers';
 import { parseOzonProduct } from '@/utils/parsers/ozon';
 import { parseWildberriesProduct } from '@/utils/parsers/wildberries';
 import { parseYandexMarketProduct, scrapeYandexMarketSpecs } from '@/utils/parsers/yandex-market';
+import { parseMegamarketProduct } from '@/utils/parsers/megamarket';
+import { parseAliExpressProduct } from '@/utils/parsers/aliexpress';
+import { parseGenericMarketplaceProduct } from '@/utils/parsers/generic-mp-card';
+import { isGenericCardMarketplace } from '@/lib/marketplaces/adapter-config';
 
 export { detectMarketplace, isProductPage, buildWildberriesUrl } from '@/utils/marketplace';
 
@@ -27,6 +31,19 @@ export async function scrapeCurrentPage(): Promise<Product | null> {
 
   if (/market\.yandex\.ru/i.test(url)) {
     return parseYandexMarketProduct();
+  }
+
+  if (/megamarket\.ru|sbermegamarket\.ru/i.test(url)) {
+    return parseMegamarketProduct();
+  }
+
+  if (/aliexpress\.ru/i.test(url)) {
+    return parseAliExpressProduct();
+  }
+
+  const mp = detectMarketplace(url);
+  if (mp && isGenericCardMarketplace(mp)) {
+    return parseGenericMarketplaceProduct(mp);
   }
 
   return null;

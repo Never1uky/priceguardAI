@@ -32,9 +32,11 @@ export async function writeRemoteQueue(items: QueuedRemote[]): Promise<void> {
   }
 }
 
-/** Enqueue WARN/ERROR for later network flush (storage only). */
+/** Enqueue WARN/ERROR, opt-in funnel INFO, or ops INFO for later network flush (storage only). */
 export async function enqueueRemoteTelemetryLocal(event: TelemetryEvent): Promise<void> {
-  if (event.level !== 'warn' && event.level !== 'error') return;
+  const funnelInfo = event.funnel && event.level === 'info';
+  const opsInfo = event.ops && event.level === 'info';
+  if (event.level !== 'warn' && event.level !== 'error' && !funnelInfo && !opsInfo) return;
   const q = await readRemoteQueue();
   q.unshift({
     id: event.id,

@@ -14,7 +14,7 @@
 | Offers refresh | `seo-refresh-offers` Edge | copies `price_scrape_cache` + `cross_market_mapping` → `offers_snapshot`. **No live scrape on pageview.** |
 | Cron | `pg_cron` job `priceguard-seo-refresh-offers` | **ACTIVE** `30 */6 * * *` UTC (+30m after `update-prices`) |
 | Sitemap / robots | `sitemap.xml/route.ts`, `robots.txt` | SEO app OK |
-| JSON-LD | Product + Breadcrumb + FAQ | `json-ld.ts` — Product only when `offers` or honest `aggregateRating` (GSC fix 2026-08-23) |
+| JSON-LD | Product + Breadcrumb + FAQ | `json-ld.ts` — Product only when `offers` or honest `aggregateRating`; **`image` required for Merchant** — persist via `seo-publish` `pickSeoImageUrl` (keep existing / analysis https; no MP CDN guess) |
 | Canonical | `SEO_SITE_ORIGIN + /a/{slug}` | still `*.vercel.app` |
 | CTA | `compare-cta.tsx` → `SEO_OPEN_COMPARE` | no forced MP deep-link required |
 | Extension bridge | `src/lib/seo-open-compare.ts` + manifest `externally_connectable` | |

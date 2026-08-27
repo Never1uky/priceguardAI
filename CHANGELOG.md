@@ -4,11 +4,228 @@
 
 ---
 
-## Unreleased — Matching P0 hardening
+## Unreleased — AliExpress ALI-1…ALI-9 (READY)
 
-- `scoreProductMatch`: hard identity-gates для lineage/model/storage/connector теперь не «реанимируются» title similarity fallback.
-- Добавлен connector normalization/extraction (`usb-c`, `lightning`, `3.5mm`, `usb-a`) и category-aware connector handling для `headphones`/`accessories`.
-- Добавлены P0 golden regression tests: iPhone storage mismatch, AirPods connector mismatch/unknown, Dyson host vs dependent.
+- ALI-1: dedicated Ali card + SERP parsers; junk filter parity with Mega (`ALI1_CARD_SERP.md`).
+- ALI-2: AliExpress **on by default** in «Где искать» (new/empty storage); Telegram/monitoring still OFF (`ALI2_DEFAULT_ON.md`).
+- ALI-3: Premium Scrappey unlocker **card-only** for Ali; monitoring allowlist stays trio (`ALI3_COST_RFC_UNLOCKER.md`).
+- ALI-4: shared `price_scrape_cache` for Ali (CHECK + Edge R/W + client `skipCache: false`) (`ALI4_PRICE_SCRAPE_CACHE_DEPLOY.md`).
+- ALI-5: Edge `compare-research` includes Ali (HTML SERP; Scrappey verify OFF) (`ALI5_COMPARE_RESEARCH_DEPLOY.md`).
+- ALI-6: `ae-` identity, tracked CHECK/sync, client refresh, no Telegram alerts (`ALI6_CLIENT_TRACKED.md`).
+- ALI-7: reviews feasibility **SKIP** — `capabilities.reviews` stays false (`ALI7_REVIEWS_FEASIBILITY.md`).
+- ALI-8: SEO `publishAllowed` + `offersAllowed` for Ali; DB CHECK + three mirrors (`ALI8_SEO_PUBLISH.md`).
+- ALI-9: verdict **READY**; regression pack `npm run test:ali` + `ali-core-parity.regression.test.ts` (`ALIEXPRESS_FULL_INTEGRATION_NO_TELEGRAM.md`).
+
+---
+
+## 0.9.122 — 2026-08-26
+
+### MEGA-9 CORE-parity regression (no Telegram)
+
+- Verdict **READY**: Mega integrated in extension (card/SERP/compare/track/refresh/cache/research/SEO); reviews SKIP; Telegram/monitoring OUT OF SCOPE.
+- Regression pack: `npm run test:mega` + `mega-core-parity.regression.test.ts`.
+- Doc: `docs/audits/MEGA_FULL_INTEGRATION_NO_TELEGRAM.md` (matrix + operator smoke).
+
+---
+
+## 0.9.121 — 2026-08-26
+
+### MEGA-8 SEO publishAllowed (Megamarket)
+
+- Allowlist: Mega `publishAllowed` + `offersAllowed` (extension + Edge + priceguard-seo).
+- DB: `seo_product_pages` / `product_cache` / `cross_market_mapping` CHECK include Mega.
+- Per-page `evaluateSeoPublishGates` unchanged — no publish without green gates (Mega often needs webOverview; reviews SKIP).
+- Doc: `docs/SEO_MP_ROLLOUT.md`.
+
+---
+
+## 0.9.120 — 2026-08-26
+
+### MEGA-7 Reviews — SKIP
+
+- Feasibility: no public Mega reviews API; HTML/API probes hit antibot / geo deny.
+- Scrappey reviews would exceed MEGA-3 card-only cost scope; no fake reviews.
+- Gate: `docs/audits/MEGA7_REVIEWS_FEASIBILITY.md` — `capabilities.reviews` stays false.
+
+### MEGA-6 Client tracked / My Products (no Telegram)
+
+- Cloud pull no longer maps Mega to `yandex-` / YM URLs (`mm-{goodsId}`).
+- Client always refreshes Mega prices even when CORE cron monitoring is on.
+- Local Chrome alerts for Mega; no Telegram push. Checklist: `docs/audits/MEGA6_CLIENT_TRACKED.md`.
+
+---
+
+## 0.9.119 — 2026-08-26
+
+### MEGA-5 Edge compare-research (Megamarket)
+
+- `compare-research` VALID ∩ selected includes `megamarket`; source Mega allowed.
+- Edge Mega SERP: HTML tab-or-available (no invented API); identity-ish junk/storage gates.
+- Research Scrappey verify for Mega stays OFF (MEGA-3 = card unlocker only).
+- Deploy notes: `docs/audits/MEGA5_COMPARE_RESEARCH_DEPLOY.md`.
+
+---
+
+## 0.9.118 — 2026-08-26
+
+### MEGA-4 Shared price_scrape_cache (Megamarket)
+
+- DB CHECK + Edge `price-cache` / unlocker: Mega R/W shared cache (6h TTL), bare goodsId.
+- Client: Mega uses shared cache before tab/Scrappey (`skipCache: false`); cache hit skips HiddenBrowser.
+- Telegram / monitoring cron — unchanged (Mega still excluded).
+- Deploy notes: `docs/audits/MEGA4_PRICE_SCRAPE_CACHE_DEPLOY.md`.
+
+---
+
+## 0.9.117 — 2026-08-26
+
+### MEGA-3 Premium unlocker (card only, no Telegram)
+
+- Cost RFC: `docs/audits/MEGA3_COST_RFC_UNLOCKER.md` — GO card-only.
+- Client + Edge: Mega in Scrappey unlocker allowlist; `skipCache` until MEGA-4.
+- `monitoring_marketplaces` / Telegram / cron — Mega still excluded.
+- Migration: `20260826190000_megamarket_scrappey_allowlist.sql` (apply on prod + redeploy `fetch-product-price`).
+
+---
+
+## 0.9.116 — 2026-08-26
+
+### Megamarket default + harden (no Telegram)
+
+- Мегамаркет в defaults «Где искать» (`enabledByDefault`); сохранённый trio не расширяется автоматически.
+- Card: JSON-LD + `__NEXT_DATA__`/embedded goods + meta/DOM article/price fallbacks.
+- SERP: tiles с `data-product-id` без прямой details-ссылки.
+- Unlocker/Scrappey/Telegram/`monitoring_enabled` для Mega — по-прежнему OFF.
+- Gate: `docs/audits/MEGA_FULL_INTEGRATION_NO_TELEGRAM.md`.
+
+---
+
+## 0.9.115 — 2026-08-26
+
+### Compare: open product tab + RAM/ROM storage
+
+- Если карточка MP уже открыта (напр. Я.Маркет `/card/`), compare скрейпит её до SERP и биндит / показывает picker.
+- `12/128Gb` (RAM+ROM) совместим с `128GB` — больше не hard-reject Exact Pixel на YM.
+
+---
+
+## 0.9.107 — 2026-08-25
+
+### Pre-CWS safety (Phase 2)
+
+- Privacy 2.5 + CWS listing/hosts + manifest description: opt-in multi-MP disclosure.
+- Tracked client backup: `skipUnlocker` (no Scrappey on routine price check).
+- Edge `compare-research`: Scrappey verify Premium-only; targets ∩ selected.
+- Unlocker: use shared cache (`skipCache: false`); server requires `selectedMarketplaces`.
+- Compare alerts/cache/AI overlay respect «Где искать»; onProgress cannot abort mapPool.
+- Production zip strips localhost from `externally_connectable`.
+
+---
+
+## 0.9.106 — 2026-08-25
+
+### SEO multi-MP allowlist (safe wiring)
+
+- Single allowlist `seo-marketplaces` (extension + Edge + priceguard-seo); new MPs wired (slug/strip), `publishAllowed` only WB/Ozon/YM.
+- Doc: `docs/SEO_MP_ROLLOUT.md` (adapter READY → allowlist → DB → publish).
+
+### Multi-MP cost (P1)
+
+- Registry `costTier: api|tab` + бейдж «вкладка» в Settings; порядок compare по costTier.
+- Telemetry `COMPARE_MP_ATTEMPT` (path: cache|api|tab|scrappey|skip).
+- Category skip: М.Видео/DNS/Ситилинк не для одежды/бытовой химии.
+- SERP empty budget: после пустой выдачи — не открывать ещё SERP-вкладку в том же research.
+- Scrappey assert: Premium + core MP + выбран в «Где искать» (backup/TG по-прежнему skipUnlocker).
+
+---
+
+## 0.9.104 — 2026-08-25
+
+### Multi-MP UI (P0)
+
+- Таблица сравнения: при >4 площадок — 4 приоритетных строки + «Ещё K площадок».
+- Settings «Где искать»: предупреждение при выборе ≥5 площадок.
+
+---
+## 0.9.102 — 2026-08-25
+
+### Test MP polish
+
+- Эльдорадо → единый id `mvideo` (detect/migrate); убран из Settings.
+- Скорость compare: concurrency=2, порядок URL→core→tab-only; Lamoda skip для не-fashion.
+- Generic card: фото (og/JSON-LD/data-src + rank product CDN); М.Видео `.price__main-value`, без «6 ₽» junk.
+- Матч: моноблок ≠ мини-ПК / комплектующие.
+
+---
+
+## 0.9.101 — 2026-08-25
+
+### Test marketplaces (opt-in)
+
+- AliExpress, М.Видео, DNS, Ситилинк, Эльдорадо, Lamoda: реестр + card/SERP/tab search (как Мегамаркет).
+- Дефолт «Где искать» без изменений: WB+Ozon+YM. Новые MP только opt-in, без CWS publish.
+
+---
+
+## 0.9.100 — 2026-08-25
+
+### Marketplace picker + Megamarket (test)
+
+- Settings «Где искать товары»: выбор площадок (дефолт WB+Ozon+YM; Мегамаркет opt-in).
+- Единый реестр `src/lib/marketplaces/registry.ts`; compare/refresh уважают selection.
+- Тестовый адаптер Мегамаркета (карточка + SERP tab; без отзывов/Edge API).
+
+---
+
+## 0.9.99 — 2026-08-24
+
+### Telemetry (P1.1 product funnel)
+
+- Funnel events: started, marketplace detected, compare fail reasons, AI cache/fail, tracking, refresh, Telegram, premium page.
+- Funnel INFO bypasses sampling; remote only with Settings opt-in «Анонимная аналитика продукта».
+- Ops `/ops`: PRODUCT FUNNEL section from `telemetry_events` (does not replace Reliability cards).
+- **MANUAL:** Privacy Policy + CWS Data Use draft in `docs/audits/growth/P0.1_FUNNEL_TELEMETRY_DESIGN.md` (HTML not edited).
+
+---
+
+## 0.9.97 — 2026-08-20
+
+### UX (P0.2 first comparison)
+
+- Primary CTA: **«Сравнить цены»** (в «Мои товары» + поиск на WB/Ozon/Маркете); toggle → «Оповещения о цене».
+- Progress: **«Ищем на Ozon… 2/3»** в таблице сравнения и компактный статус в списке «Мои».
+
+---
+
+## 0.9.95 — 2026-08-19
+
+### Compare & matching (Production QA)
+
+- **WB OOS:** карточка без цены → «Нет в наличии», можно добавить в «Мои товары» для алерта.
+- **«Где дешевле»:** нет ложного auto-accept на другой аромат (H&S) или поколение (XM5/XM6).
+- **Picker:** правильный порядок кандидатов; видимые названия (slug YM `/card/…`); пометка «другая модель / аромат».
+
+### UX
+
+- **Настройки → Telegram:** исправлена вёрстка — badge не наслаивается на заголовок; описание списком через «—».
+- **Лимит 5/5 (Free):** disabled CTA и баннер Premium без silent redirect.
+- **AI из кэша:** copy «повторный запуск · попытка учтена».
+- **Options:** user-страница расширения вместо admin metrics.
+- **Мои товары:** chevron раскрывает строку; «Обновить» — offline/timeout 20 с.
+- **Tracked:** корректное «следим» после перезапуска (identity match).
+- **Onboarding** на первом запуске.
+- **Карточка:** рейтинг и цвет (WB/Ozon/YM), старая цена и скидка.
+
+### Match hardening
+
+- Hard identity-gates: lineage / storage / connector / scent не «реанимируются» title fallback.
+- Golden tests: H&S Menthol≠Citrus, XM5≠XM6, iPhone storage, AirPods connector.
+
+---
+
+## Unreleased
+
+_(пусто — см. 0.9.95)_
 
 ---
 

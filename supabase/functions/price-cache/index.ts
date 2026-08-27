@@ -15,7 +15,13 @@ import {
 } from '../_shared/price-scrape-cache.ts';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 
-const VALID: CacheMarketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+const VALID: CacheMarketplace[] = [
+  'wildberries',
+  'ozon',
+  'yandex_market',
+  'megamarket',
+  'aliexpress',
+];
 
 function serviceClient() {
   return createClient(

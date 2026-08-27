@@ -9,7 +9,7 @@
  */
 
 import { productKey, stripProductIdPrefix } from './product-id.ts';
-import { extractProductId, type Marketplace } from './product-url.ts';
+import { extractProductId } from './product-url.ts';
 
 const CORE_MARKETPLACES: ReadonlySet<string> = new Set([
   'wildberries',
@@ -17,7 +17,9 @@ const CORE_MARKETPLACES: ReadonlySet<string> = new Set([
   'yandex_market',
 ]);
 
-export function isCoreMonitoringMarketplace(mp: string): mp is Marketplace {
+export function isCoreMonitoringMarketplace(
+  mp: string,
+): mp is 'wildberries' | 'ozon' | 'yandex_market' {
   return CORE_MARKETPLACES.has(mp);
 }
 
@@ -34,7 +36,7 @@ export interface MonitoringKeyInput {
 export interface ResolvedMonitoringKey {
   /** `marketplace:bareProductId` */
   key: string;
-  marketplace: Marketplace;
+  marketplace: 'wildberries' | 'ozon' | 'yandex_market';
   /** Bare article for fetch / cache */
   productId: string;
   source: MonitoringKeySource;

@@ -3,13 +3,9 @@
  * Mirror of src/lib/seo/slug.ts for Edge Deno.
  */
 
-export const SEO_SLUG_MAX_LEN = 80;
+import { seoMpShort } from './seo-marketplaces.ts';
 
-const MP_SHORT: Record<string, string> = {
-  wildberries: 'wb',
-  ozon: 'ozon',
-  yandex_market: 'ym',
-};
+export const SEO_SLUG_MAX_LEN = 80;
 
 export function slugifySeoSegment(raw: string, maxLen = SEO_SLUG_MAX_LEN): string {
   const s = raw
@@ -38,7 +34,7 @@ export function buildSeoProductSlug(parts: {
   if (tokens.length >= 2) {
     return slugifySeoSegment(tokens.join(' '));
   }
-  const short = MP_SHORT[parts.marketplace] ?? 'mp';
+  const short = seoMpShort(parts.marketplace);
   return slugifySeoSegment(`${short}-${parts.productId}`);
 }
 
@@ -50,7 +46,7 @@ export function resolveSeoSlugCollision(
   attempt = 0,
 ): string {
   if (!takenByOtherProduct && attempt === 0) return desired;
-  const short = MP_SHORT[marketplace] ?? 'mp';
+  const short = seoMpShort(marketplace);
   if (attempt === 0) {
     return slugifySeoSegment(`${desired}-${short}`);
   }

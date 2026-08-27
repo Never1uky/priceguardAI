@@ -12,6 +12,7 @@ import type { ComparisonMarketplace } from '@/types/comparison';
 import type { ContentResponse, Product } from '@/types/product';
 import { isProductPage, scrapeCurrentPage, scrapeYandexMeta } from '@/utils/parsers';
 import { scrapeModelFieldFromDom } from '@/lib/specs-model';
+import { scrapeMegamarketSellerFromDom } from '@/utils/parsers/megamarket';
 
 const RETRY_DELAYS_MS = [0, 800, 2000, 4000, 6000];
 const OBSERVER_DEBOUNCE_MS = 800;
@@ -210,8 +211,11 @@ function respondWithProduct(sendResponse: (response: ContentResponse) => void): 
       await publishProduct(product);
       const yandexMeta = scrapeYandexMeta();
       const modelField = scrapeModelFieldFromDom();
+      const megaSeller =
+        product.marketplace === 'megamarket' ? scrapeMegamarketSellerFromDom() : null;
       const specsParts = [
         modelField ? `Модель: ${modelField}` : null,
+        megaSeller ? `Продавец: ${megaSeller}` : null,
         yandexMeta?.specs ?? null,
       ].filter(Boolean) as string[];
 
@@ -236,7 +240,7 @@ function respondWithProduct(sendResponse: (response: ContentResponse) => void): 
       ok: false,
       error: isProductPage()
         ? 'Товар на странице найден, но данные ещё загружаются'
-        : 'Откройте страницу товара на Wildberries, Ozon или Яндекс.Маркет',
+        : 'Откройте страницу товара на поддерживаемом маркетплейсе',
       isProductPage: isProductPage(),
     });
   });

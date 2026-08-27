@@ -1,26 +1,42 @@
 /**
  * Server-side compare research (JWT): search target marketplaces without HiddenBrowser.
- * POST { title, sourceMarketplace, referencePrice?, sourceUrl? }
- * → { ok, results: { marketplace, candidates: [{title,url,price,matchConfidence,serverVerified?...}] }[] }
+ * POST { title, sourceMarketplace, referencePrice?, sourceUrl?, targetMarketplaces? }
+ * → { ok, results: { marketplace, candidates: [...] }[] }
+ *
+ * Scrappey top-1 verify: Premium only for CORE. Mega/Ali: OFF (card unlocker only, not research verify).
+ * Targets: VALID (trio + megamarket + aliexpress) ∩ client targetMarketplaces (fallback = VALID \ source).
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { requireAuthUser } from '../_shared/auth.ts';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
-import { fetchMarketplacePriceDetailed } from '../_shared/marketplace-prices.ts';
+import {
+  extractAliExpressProductId,
+  extractMegamarketProductId,
+  fetchMarketplacePriceDetailed,
+} from '../_shared/marketplace-prices.ts';
 import { projectScraperCredentials } from '../_shared/reviews-common.ts';
 import { extractProductId } from '../_shared/product-url.ts';
+import { resolveUserPlanAccess } from '../_shared/premium-active.ts';
 import {
-  scoreTitle,
-  searchOzon,
-  searchWb,
-  searchYm,
+  COMPARE_RESEARCH_VALID,
+  MARKETPLACE_SEARCHERS,
+  matchConfidenceForMarketplace,
+  resolveCompareResearchTargets,
   type Marketplace,
   type SearchCandidate,
 } from '../_shared/marketplace-search-core.ts';
 
-const VALID: Marketplace[] = ['wildberries', 'ozon', 'yandex_market'];
+const VALID = COMPARE_RESEARCH_VALID;
 const SERVER_VERIFY_MIN_CONFIDENCE = 70;
+
+/**
+ * MEGA-3 / ALI-3 approved = card unlocker only. Research Scrappey verify for Mega/Ali stays OFF
+ * (tab-or-available SERP; client HiddenBrowser / card unlocker handle priced cards).
+ * Set true only after an explicit cost RFC for research verify.
+ */
+const MEGA_RESEARCH_SCRAPPEY_VERIFY = false;
+const ALI_RESEARCH_SCRAPPEY_VERIFY = false;
 
 interface Candidate extends SearchCandidate {
   serverVerified?: boolean;
@@ -35,6 +51,11 @@ function serviceClient() {
   );
 }
 
+async function userHasPremium(userId: string): Promise<boolean> {
+  const plan = await resolveUserPlanAccess(serviceClient(), userId);
+  return plan.premiumTier;
+}
+
 function priceSanityOk(
   referencePrice: number | undefined,
   cardPrice: number | null | undefined,
@@ -46,19 +67,37 @@ function priceSanityOk(
   return ratio >= 0.35 && ratio <= 2.8;
 }
 
+function productIdForVerify(mp: Marketplace, url: string): string {
+  if (mp === 'megamarket') return extractMegamarketProductId(url);
+  if (mp === 'aliexpress') return extractAliExpressProductId(url);
+  return extractProductId(url, mp);
+}
+
 async function verifyTopCandidate(
   mp: Marketplace,
   candidate: Candidate,
   referenceTitle: string,
-  referencePrice?: number,
+  referencePrice: number | undefined,
+  allowScrappey: boolean,
 ): Promise<Candidate> {
-  const scraper = projectScraperCredentials();
-  // Ozon/YM need Scrappey; without it skip verify (additive fields stay false).
+  if (mp === 'megamarket' && !MEGA_RESEARCH_SCRAPPEY_VERIFY) {
+    return { ...candidate, serverVerified: false };
+  }
+  if (mp === 'aliexpress' && !ALI_RESEARCH_SCRAPPEY_VERIFY) {
+    return { ...candidate, serverVerified: false };
+  }
+
+  const scraper = allowScrappey ? projectScraperCredentials() : null;
+  // Ozon/YM/(optional Mega/Ali) need Scrappey; without it (or Free) skip verify.
   // WB card.wb.ru works without Scrappey.
   if (!scraper && mp !== 'wildberries') {
     return { ...candidate, serverVerified: false };
   }
-  const productId = extractProductId(candidate.url, mp);
+  if (!allowScrappey && mp !== 'wildberries') {
+    return { ...candidate, serverVerified: false };
+  }
+
+  const productId = productIdForVerify(mp, candidate.url);
   if (!productId) {
     return { ...candidate, serverVerified: false };
   }
@@ -74,7 +113,11 @@ async function verifyTopCandidate(
     }
 
     const serverTitle = (fetched.title || candidate.title || '').trim();
-    const serverMatchConfidence = scoreTitle(referenceTitle, serverTitle || candidate.title);
+    const serverMatchConfidence = matchConfidenceForMarketplace(
+      mp,
+      referenceTitle,
+      serverTitle || candidate.title,
+    );
     const sanity = priceSanityOk(referencePrice, fetched.price);
     const serverVerified =
       serverMatchConfidence >= SERVER_VERIFY_MIN_CONFIDENCE && sanity;
@@ -102,25 +145,28 @@ Deno.serve(async (req) => {
   }
 
   try {
-    await requireAuthUser(req, true);
+    const user = await requireAuthUser(req, true);
     const body = await req.json();
     const title = String(body.title ?? '').trim();
     const sourceMarketplace = String(body.sourceMarketplace ?? '') as Marketplace;
     const referencePrice = body.referencePrice != null ? Number(body.referencePrice) : undefined;
 
     if (!title || !VALID.includes(sourceMarketplace)) {
-      return jsonResponse({ ok: false, error: 'title и sourceMarketplace обязательны' }, 400);
+      return jsonResponse(
+        { ok: false, error: 'title и sourceMarketplace обязательны', code: 'BAD_REQUEST' },
+        400,
+      );
     }
 
-    const targets = VALID.filter((m) => m !== sourceMarketplace);
+    const premium = user?.id ? await userHasPremium(user.id) : false;
+    const targets = resolveCompareResearchTargets(sourceMarketplace, body.targetMarketplaces);
     const results: Array<{ marketplace: Marketplace; candidates: Candidate[] }> = [];
 
     for (const mp of targets) {
       let candidates: Candidate[] = [];
       try {
-        if (mp === 'wildberries') candidates = await searchWb(title, title);
-        else if (mp === 'ozon') candidates = await searchOzon(title, title);
-        else candidates = await searchYm(title, title);
+        const searcher = MARKETPLACE_SEARCHERS[mp];
+        candidates = await searcher(title, title);
       } catch (error) {
         console.warn('[compare-research]', mp, error);
       }
@@ -133,14 +179,18 @@ Deno.serve(async (req) => {
           return pa - pb;
         });
       }
+      // Mega/Ali: drop residual junk after sort (identity gate already in searcher)
+      if (mp === 'megamarket' || mp === 'aliexpress') {
+        candidates = candidates.filter((c) => c.matchConfidence > 0);
+      }
       const top = candidates.slice(0, 5);
       if (top[0]) {
-        top[0] = await verifyTopCandidate(mp, top[0], title, referencePrice);
+        top[0] = await verifyTopCandidate(mp, top[0], title, referencePrice, premium);
       }
       results.push({ marketplace: mp, candidates: top });
     }
 
-    return jsonResponse({ ok: true, results });
+    return jsonResponse({ ok: true, results, premiumVerify: premium });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (msg === 'auth_required' || msg === 'invalid_token') {

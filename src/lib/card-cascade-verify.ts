@@ -13,7 +13,8 @@ import { fetchOfferFromUrl } from '@/lib/offer-fetch';
 import { isOutOfStockError } from '@/lib/out-of-stock';
 import {
   hasLargePriceSpreadAmongClose,
-  pickCheapestAmongCloseMatches,
+  reorderPickerCandidates,
+  reorderSearchCandidateOffers,
   resolveMatchStatus,
 } from '@/lib/match-status';
 import {
@@ -450,8 +451,10 @@ export async function verifySerpOfferWithCardCascade(
       );
     }
 
-    const searchCandidates: SearchCandidateOffer[] = choiceRows.map((row, i) =>
-      buildChoiceCandidate(row, i),
+    const searchCandidates = reorderSearchCandidateOffers(
+      choiceRows.map((row, i) => buildChoiceCandidate(row, i)),
+      referenceTitle,
+      referenceSpecs,
     );
     return needsChoiceShell(
       marketplace,
@@ -463,7 +466,14 @@ export async function verifySerpOfferWithCardCascade(
     );
   }
 
-  const reordered = pickCheapestAmongCloseMatches(verified);
+  const reordered = reorderPickerCandidates(
+    verified,
+    referenceTitle,
+    (r) => r.offer.title ?? '',
+    (r) => r.confidence,
+    (r) => r.price,
+    referenceSpecs,
+  );
   const forceChoice = hasLargePriceSpreadAmongClose(reordered);
 
   const aboveCardThreshold = reordered.filter(

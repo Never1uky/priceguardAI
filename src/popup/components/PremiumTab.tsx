@@ -40,6 +40,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { trackPremiumPageOpened } from '@/lib/telemetry/funnel';
 
 const PREMIUM_FEATURES = [
   'Неограниченный AI-анализ товаров',
@@ -57,6 +58,10 @@ interface PremiumTabProps {
 }
 
 export function PremiumTab({ onClose, onOpenAuth, reason }: PremiumTabProps) {
+  useEffect(() => {
+    trackPremiumPageOpened();
+  }, []);
+
   const [sub, setSub] = useState<SubscriptionState>({ tier: 'free' });
   const [licenseKey, setLicenseKey] = useState('');
   const [licenseError, setLicenseError] = useState<string | null>(null);
@@ -164,7 +169,9 @@ export function PremiumTab({ onClose, onOpenAuth, reason }: PremiumTabProps) {
     setPaymentMessage(null);
     const result = await checkPendingPayment();
     if (result.licenseKey) {
-      const activated = await activateLicenseKey(result.licenseKey);
+      const activated = await activateLicenseKey(result.licenseKey, {
+        funnelSource: 'payment',
+      });
       if (activated.ok) {
         setLicenseSuccess(true);
         setPaymentMessage('Оплата подтверждена! Premium активирован.');

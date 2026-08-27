@@ -1,12 +1,13 @@
 import type { ProductAuthenticity } from '@/types/authenticity';
+import type { MarketplaceId } from '@/lib/marketplaces/registry';
 
-export type ComparisonMarketplace = 'wildberries' | 'ozon' | 'yandex_market';
+export type ComparisonMarketplace = MarketplaceId;
 
-export const COMPARISON_MARKETPLACE_LABELS: Record<ComparisonMarketplace, string> = {
-  wildberries: 'Wildberries',
-  ozon: 'Ozon',
-  yandex_market: 'Яндекс.Маркет',
-};
+export {
+  COMPARISON_MARKETPLACE_LABELS,
+  COMPARISON_MARKETPLACE_SHORT_LABELS,
+  COMPARISON_MARKETPLACE_IDS,
+} from '@/lib/marketplaces/registry';
 
 /** Товар, добавленный по ссылке для сравнения цен */
 export interface CompareProduct {

@@ -14,6 +14,7 @@ import {
   mergeAlertSettingsFromCloud,
   type CloudAlertSettings,
 } from '@/lib/supabase/alert-settings-merge';
+import { trackTelegramLinked } from '@/lib/telemetry/funnel';
 
 const SERVER_MONITORING_KEY = 'priceguard_server_price_monitoring';
 
@@ -182,6 +183,14 @@ export async function syncAlertSettingsToCloud(options?: {
   // Сервер говорит Premium, локально Free → восстановить (не после clearPremium)
   if (res.ok && res.premiumActive && !premium) {
     void restorePremiumFromAccount();
+  }
+
+  const telegramLinked = Boolean(
+    !options?.clearTelegram &&
+      (settings.telegramChatId.trim() || res.telegramChatId?.trim()),
+  );
+  if (telegramLinked) {
+    trackTelegramLinked(Boolean(res.ok));
   }
 
   return {

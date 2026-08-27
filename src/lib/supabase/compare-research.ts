@@ -26,6 +26,8 @@ export async function researchCompareViaEdge(input: {
   sourceMarketplace: ComparisonMarketplace;
   referencePrice?: number;
   sourceUrl?: string;
+  /** Selected / pending MPs — server intersects with VALID (trio + megamarket + aliexpress) */
+  targetMarketplaces?: ComparisonMarketplace[];
 }): Promise<Partial<Record<ComparisonMarketplace, MarketplaceOffer>> | null> {
   if (!getSupabaseConfig().configured) return null;
   if (!(await canUseCloudFeatures())) return null;
@@ -35,6 +37,7 @@ export async function researchCompareViaEdge(input: {
     sourceMarketplace: input.sourceMarketplace,
     referencePrice: input.referencePrice,
     sourceUrl: input.sourceUrl,
+    targetMarketplaces: input.targetMarketplaces,
   });
 
   if (!res?.ok || !Array.isArray(res.results)) return null;
@@ -43,7 +46,7 @@ export async function researchCompareViaEdge(input: {
   for (const row of res.results) {
     if (!row.candidates?.length) continue;
     const searchUrl = buildMarketplaceSearchUrl(row.marketplace, input.title);
-    const ranked = row.candidates.map((c) => ({
+    let ranked = row.candidates.map((c) => ({
       offer: {
         marketplace: row.marketplace,
         title: c.title,
@@ -56,11 +59,17 @@ export async function researchCompareViaEdge(input: {
       } satisfies MarketplaceOffer,
       confidence: c.matchConfidence,
     }));
+    // Mega/Ali: Edge already gates junk; drop residual score≤0 so client falls back to tab
+    if (row.marketplace === 'megamarket' || row.marketplace === 'aliexpress') {
+      ranked = ranked.filter((r) => r.confidence > 0);
+      if (!ranked.length) continue;
+    }
     out[row.marketplace] = buildOfferFromRankedCandidates(
       row.marketplace,
       input.title,
       searchUrl,
       ranked,
+      input.title,
     );
   }
 

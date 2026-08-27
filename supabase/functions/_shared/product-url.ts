@@ -2,7 +2,12 @@
  * Парсинг ссылок WB / Ozon / Яндекс.Маркет для Telegram-бота.
  */
 
-export type Marketplace = 'wildberries' | 'ozon' | 'yandex_market';
+export type Marketplace =
+  | 'wildberries'
+  | 'ozon'
+  | 'yandex_market'
+  | 'megamarket'
+  | 'aliexpress';
 
 export interface ParsedProductLink {
   marketplace: Marketplace;
@@ -24,6 +29,8 @@ export function detectMarketplace(url: string): Marketplace | null {
   if (/wildberries\.ru/i.test(url)) return 'wildberries';
   if (/ozon\.ru/i.test(url)) return 'ozon';
   if (/market\.yandex\.ru/i.test(url)) return 'yandex_market';
+  if (/megamarket\.ru|sbermegamarket\.ru/i.test(url)) return 'megamarket';
+  if (/aliexpress\.ru/i.test(url)) return 'aliexpress';
   return null;
 }
 
@@ -51,6 +58,14 @@ export function extractProductId(url: string, marketplace: Marketplace): string 
       if (card?.[1]) return card[1];
       const product = url.match(/\/product(?:--[^/]+)?\/(\d+)/i);
       return product?.[1] ?? '';
+    }
+    case 'megamarket': {
+      const fromSlug = url.match(/\/catalog\/details\/[^/?#]*?(\d{6,})\/?(?:[?#]|$)/i)?.[1];
+      if (fromSlug) return fromSlug;
+      return url.match(/\/catalog\/details\/(\d{6,})\/?/i)?.[1] ?? '';
+    }
+    case 'aliexpress': {
+      return url.match(/\/item\/(\d{8,})(?:\.html)?/i)?.[1] ?? '';
     }
     default:
       return '';
@@ -114,6 +129,23 @@ export function normalizeStoredProductUrl(
       return `https://www.ozon.ru/product/${productId}/`;
     }
 
+    if (marketplace === 'megamarket') {
+      u.search = '';
+      const path = u.pathname.replace(/\/$/, '');
+      const host = /sbermegamarket\.ru/i.test(u.hostname)
+        ? 'https://megamarket.ru'
+        : `${u.protocol}//${u.hostname}`;
+      if (/\/catalog\/details\//i.test(path)) {
+        return `${host}${path}`;
+      }
+      return `${host}/catalog/details/${productId}`;
+    }
+
+    if (marketplace === 'aliexpress') {
+      const id = productId.replace(/\D/g, '') || productId;
+      return `https://aliexpress.ru/item/${id}.html`;
+    }
+
     // yandex_market
     u.search = '';
     const path = u.pathname.replace(/\/$/, '');
@@ -135,6 +167,14 @@ export function reconstructFallbackUrl(marketplace: Marketplace, productId: stri
   }
   if (marketplace === 'ozon') {
     return `https://www.ozon.ru/product/${productId}/`;
+  }
+  if (marketplace === 'megamarket') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return `https://megamarket.ru/catalog/details/${id}`;
+  }
+  if (marketplace === 'aliexpress') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return `https://aliexpress.ru/item/${id}.html`;
   }
   // Без slug карточки /product/{id} часто бесполезен — оставляем как last resort
   return `https://market.yandex.ru/product/${productId}`;

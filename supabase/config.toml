@@ -71,6 +71,9 @@ verify_jwt = false
 [functions.compare-research]
 verify_jwt = false
 
+[functions.marketplace-flags]
+verify_jwt = false
+
 [functions.price-cache]
 verify_jwt = false
 

@@ -5,10 +5,16 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { fetchViaScrappey, type ScraperCredentials } from './scrappey.ts';
-import { getCachedPrice, setCachedPrice } from './price-scrape-cache.ts';
+import {
+  getCachedPrice,
+  setCachedPrice,
+} from './price-scrape-cache.ts';
 import { fetchedPriceMatchesTracked, logPriceIdentityReject } from './price-identity.ts';
+import { stripProductIdPrefix } from './product-id.ts';
+import type { Marketplace as CoreMarketplace } from './product-url.ts';
 
-export type Marketplace = 'wildberries' | 'ozon' | 'yandex_market';
+/** Price fetch MPs — Mega/Ali = Scrappey card unlocker only (no Telegram type). */
+export type Marketplace = CoreMarketplace | 'megamarket' | 'aliexpress';
 export type PriceSource = 'cache' | 'scrappey' | 'legacy';
 
 export interface FetchedPrice {
@@ -27,6 +33,8 @@ export interface FetchMarketplacePriceOptions {
   scraper?: ScraperCredentials | null;
   supabase?: SupabaseClient | null;
   skipCacheRead?: boolean;
+  /** Soft TTL for price_scrape_cache (from cost guards) */
+  cacheTtlMs?: number;
 }
 
 const UA =
@@ -39,13 +47,164 @@ function normalizeKopecks(value: number | undefined): number {
 }
 
 export function reconstructUrl(marketplace: Marketplace, productId: string): string {
+  if (marketplace === 'megamarket') {
+    const id = productId.replace(/\D/g, '') || productId.trim();
+    return `https://megamarket.ru/catalog/details/${id}`;
+  }
+  if (marketplace === 'aliexpress') {
+    const id = productId.replace(/\D/g, '') || productId.trim();
+    return `https://aliexpress.ru/item/${id}.html`;
+  }
+  const id = stripProductIdPrefix(marketplace, productId) || productId;
   if (marketplace === 'wildberries') {
-    return `https://www.wildberries.ru/catalog/${productId}/detail.aspx`;
+    return `https://www.wildberries.ru/catalog/${id}/detail.aspx`;
   }
   if (marketplace === 'ozon') {
-    return `https://www.ozon.ru/product/${productId}/`;
+    return `https://www.ozon.ru/product/${id}/`;
   }
-  return `https://market.yandex.ru/product/${productId}`;
+  return `https://market.yandex.ru/product/${id}`;
+}
+
+/** Extract Mega goods id from /catalog/details/… URL. */
+export function extractMegamarketProductId(url: string): string {
+  const fromSlug = url.match(/\/catalog\/details\/[^/?#]*?(\d{6,})\/?(?:[?#]|$)/i)?.[1];
+  if (fromSlug) return fromSlug;
+  return url.match(/\/catalog\/details\/(\d{6,})\/?/i)?.[1] ?? '';
+}
+
+/** Extract AliExpress item id from /item/{id} URL. */
+export function extractAliExpressProductId(url: string): string {
+  return url.match(/\/item\/(\d{8,})(?:\.html)?/i)?.[1] ?? '';
+}
+
+/**
+ * Parse Mega card HTML from Scrappey (JSON-LD Product + light meta fallbacks).
+ * Does not invent prices — returns null when no positive price found.
+ */
+export function parseMegamarketPriceFromHtml(
+  html: string,
+  productUrl: string,
+): FetchedPrice | null {
+  const scripts = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of scripts) {
+    try {
+      const raw = JSON.parse(m[1]!.trim());
+      const nodes = Array.isArray(raw) ? raw : [raw];
+      for (const node of nodes) {
+        const graph = Array.isArray(node?.['@graph']) ? node['@graph'] : [node];
+        for (const item of graph) {
+          const type = String(item?.['@type'] ?? '');
+          if (!/Product/i.test(type)) continue;
+          const offers = item.offers;
+          const offer = Array.isArray(offers) ? offers[0] : offers;
+          const priceRaw = offer?.price ?? offer?.lowPrice ?? item.price;
+          const priceNum = Number(String(priceRaw ?? '').replace(/\s/g, '').replace(',', '.'));
+          if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+          const availability = String(offer?.availability ?? '');
+          if (/OutOfStock|SoldOut|Discontinued/i.test(availability)) continue;
+          const brand =
+            typeof item.brand === 'string'
+              ? item.brand
+              : item.brand && typeof item.brand === 'object'
+                ? String(item.brand.name ?? '')
+                : '';
+          const name = typeof item.name === 'string' ? item.name.trim() : '';
+          const title = [brand, name].filter(Boolean).join(' ').trim();
+          return {
+            price: Math.round(priceNum),
+            title: title || undefined,
+            url: productUrl,
+          };
+        }
+      }
+    } catch {
+      // next script
+    }
+  }
+
+  const metaPrice =
+    html.match(/itemprop=["']price["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1] ||
+    html.match(/content=["'](\d+(?:[.,]\d+)?)["'][^>]*itemprop=["']price["']/i)?.[1] ||
+    html.match(/property=["']product:price:amount["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1];
+  if (metaPrice) {
+    const priceNum = Number(metaPrice.replace(',', '.'));
+    if (Number.isFinite(priceNum) && priceNum > 0) {
+      const ogTitle = html.match(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i)?.[1];
+      return {
+        price: Math.round(priceNum),
+        title: ogTitle?.trim() || undefined,
+        url: productUrl,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse AliExpress.ru card HTML from Scrappey (JSON-LD Product + light meta fallbacks).
+ * Does not invent prices — returns null when no positive price found.
+ */
+export function parseAliExpressPriceFromHtml(
+  html: string,
+  productUrl: string,
+): FetchedPrice | null {
+  if (/captcha|access.?denied|challenge|robot.?check/i.test(html.slice(0, 8000))) {
+    return null;
+  }
+
+  const scripts = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of scripts) {
+    try {
+      const raw = JSON.parse(m[1]!.trim());
+      const nodes = Array.isArray(raw) ? raw : [raw];
+      for (const node of nodes) {
+        const graph = Array.isArray(node?.['@graph']) ? node['@graph'] : [node];
+        for (const item of graph) {
+          const type = String(item?.['@type'] ?? '');
+          if (!/Product/i.test(type)) continue;
+          const offers = item.offers;
+          const offer = Array.isArray(offers) ? offers[0] : offers;
+          const priceRaw = offer?.price ?? offer?.lowPrice ?? item.price;
+          const priceNum = Number(String(priceRaw ?? '').replace(/\s/g, '').replace(',', '.'));
+          if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+          const availability = String(offer?.availability ?? '');
+          if (/OutOfStock|SoldOut|Discontinued/i.test(availability)) continue;
+          const brand =
+            typeof item.brand === 'string'
+              ? item.brand
+              : item.brand && typeof item.brand === 'object'
+                ? String(item.brand.name ?? '')
+                : '';
+          const name = typeof item.name === 'string' ? item.name.trim() : '';
+          const title = [brand, name].filter(Boolean).join(' ').trim();
+          return {
+            price: Math.round(priceNum),
+            title: title || undefined,
+            url: productUrl,
+          };
+        }
+      }
+    } catch {
+      // next script
+    }
+  }
+
+  const metaPrice =
+    html.match(/itemprop=["']price["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1] ||
+    html.match(/content=["'](\d+(?:[.,]\d+)?)["'][^>]*itemprop=["']price["']/i)?.[1] ||
+    html.match(/property=["']product:price:amount["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1];
+  if (metaPrice) {
+    const priceNum = Number(metaPrice.replace(',', '.'));
+    if (Number.isFinite(priceNum) && priceNum > 0) {
+      const ogTitle = html.match(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i)?.[1];
+      return {
+        price: Math.round(priceNum),
+        title: ogTitle?.trim() || undefined,
+        url: productUrl,
+      };
+    }
+  }
+  return null;
 }
 
 function pickWbPrice(product: Record<string, unknown>): number {
@@ -633,6 +792,12 @@ async function fetchViaUnlocker(
     } else if (marketplace === 'yandex_market') {
       const parsed = parseYmPriceFromHtml(unlocked.html);
       if (parsed) return { ...parsed, url: candidate };
+    } else if (marketplace === 'megamarket') {
+      const parsed = parseMegamarketPriceFromHtml(unlocked.html, candidate);
+      if (parsed) return parsed;
+    } else if (marketplace === 'aliexpress') {
+      const parsed = parseAliExpressPriceFromHtml(unlocked.html, candidate);
+      if (parsed) return parsed;
     } else {
       const parsed = parseWbPriceFromHtml(unlocked.html, candidate);
       if (parsed) return parsed;
@@ -646,6 +811,7 @@ async function fetchLegacy(
   productId: string,
   url: string,
 ): Promise<FetchedPrice | null> {
+  if (marketplace === 'megamarket' || marketplace === 'aliexpress') return null;
   if (marketplace === 'wildberries') return fetchWb(productId);
   if (marketplace === 'ozon') return fetchOzon(url);
   return fetchYandex(url);
@@ -664,30 +830,74 @@ export async function fetchMarketplacePriceDetailed(
   const supabase = options?.supabase ?? null;
   const scraper = options?.scraper?.apiKey ? options.scraper : null;
 
+  // Shared price_scrape_cache: trio + Mega (MEGA-4) + Ali (ALI-4).
   if (supabase && !options?.skipCacheRead) {
-    const cached = await getCachedPrice(supabase, marketplace, productId);
+    const cached = await getCachedPrice(
+      supabase,
+      marketplace,
+      productId,
+      options?.cacheTtlMs,
+    );
     if (cached?.price) {
-      const identity = fetchedPriceMatchesTracked({
-        marketplace,
-        productId,
-        productUrl: url,
-        fetchedUrl: cached.url || url,
-        fetchedTitle: cached.title,
-      });
-      if (identity.ok === false) {
-        logPriceIdentityReject({
-          reason: identity.reason,
-          marketplace,
-          productId,
-          cachedUrl: cached.url,
-        });
+      if (marketplace === 'megamarket') {
+        const expected = productId.replace(/\D/g, '') || productId.trim();
+        const fromUrl = extractMegamarketProductId(cached.url || url);
+        if (expected && fromUrl && fromUrl !== expected) {
+          logPriceIdentityReject({
+            reason: 'url_product_id_mismatch',
+            marketplace,
+            productId,
+            cachedUrl: cached.url,
+          });
+        } else {
+          return {
+            price: cached.price,
+            title: cached.title,
+            url: cached.url || url,
+            source: 'cache',
+          };
+        }
+      } else if (marketplace === 'aliexpress') {
+        const expected = productId.replace(/\D/g, '') || productId.trim();
+        const fromUrl = extractAliExpressProductId(cached.url || url);
+        if (expected && fromUrl && fromUrl !== expected) {
+          logPriceIdentityReject({
+            reason: 'url_product_id_mismatch',
+            marketplace,
+            productId,
+            cachedUrl: cached.url,
+          });
+        } else {
+          return {
+            price: cached.price,
+            title: cached.title,
+            url: cached.url || url,
+            source: 'cache',
+          };
+        }
       } else {
-        return {
-          price: cached.price,
-          title: cached.title,
-          url: cached.url || url,
-          source: 'cache',
-        };
+        const identity = fetchedPriceMatchesTracked({
+          marketplace: marketplace as CoreMarketplace,
+          productId,
+          productUrl: url,
+          fetchedUrl: cached.url || url,
+          fetchedTitle: cached.title,
+        });
+        if (identity.ok === false) {
+          logPriceIdentityReject({
+            reason: identity.reason,
+            marketplace,
+            productId,
+            cachedUrl: cached.url,
+          });
+        } else {
+          return {
+            price: cached.price,
+            title: cached.title,
+            url: cached.url || url,
+            source: 'cache',
+          };
+        }
       }
     }
   }
@@ -698,6 +908,12 @@ export async function fetchMarketplacePriceDetailed(
   if (marketplace === 'wildberries') {
     result = await fetchWb(productId);
     if (!result && scraper) {
+      result = await fetchViaUnlocker(marketplace, url, scraper);
+      if (result) source = 'scrappey';
+    }
+  } else if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+    // Mega / Ali: Scrappey only (no legacy HTTP API)
+    if (scraper) {
       result = await fetchViaUnlocker(marketplace, url, scraper);
       if (result) source = 'scrappey';
     }
@@ -722,26 +938,60 @@ export async function fetchMarketplacePriceDetailed(
     source,
   };
 
-  const identity = fetchedPriceMatchesTracked({
-    marketplace,
-    productId,
-    productUrl: url,
-    fetchedUrl: fetched.url,
-    fetchedTitle: fetched.title,
-  });
-  if (identity.ok === false) {
-    logPriceIdentityReject({
-      reason: identity.reason,
-      marketplace,
+  if (marketplace === 'megamarket') {
+    const expected = productId.replace(/\D/g, '') || productId.trim();
+    const fromUrl = extractMegamarketProductId(fetched.url || url);
+    if (expected && fromUrl && fromUrl !== expected) {
+      logPriceIdentityReject({
+        reason: 'url_product_id_mismatch',
+        marketplace,
+        productId,
+        fetchedUrl: fetched.url,
+        fetchedTitle: fetched.title?.slice(0, 80),
+      });
+      return null;
+    }
+  } else if (marketplace === 'aliexpress') {
+    const expected = productId.replace(/\D/g, '') || productId.trim();
+    const fromUrl = extractAliExpressProductId(fetched.url || url);
+    if (expected && fromUrl && fromUrl !== expected) {
+      logPriceIdentityReject({
+        reason: 'url_product_id_mismatch',
+        marketplace,
+        productId,
+        fetchedUrl: fetched.url,
+        fetchedTitle: fetched.title?.slice(0, 80),
+      });
+      return null;
+    }
+  } else {
+    const identity = fetchedPriceMatchesTracked({
+      marketplace: marketplace as CoreMarketplace,
       productId,
+      productUrl: url,
       fetchedUrl: fetched.url,
-      fetchedTitle: fetched.title?.slice(0, 80),
+      fetchedTitle: fetched.title,
     });
-    return null;
+    if (identity.ok === false) {
+      logPriceIdentityReject({
+        reason: identity.reason,
+        marketplace,
+        productId,
+        fetchedUrl: fetched.url,
+        fetchedTitle: fetched.title?.slice(0, 80),
+      });
+      return null;
+    }
   }
 
   if (supabase) {
-    await setCachedPrice(supabase, marketplace, productId, fetched, source);
+    await setCachedPrice(
+      supabase,
+      marketplace,
+      productId,
+      fetched,
+      source,
+    );
   }
 
   return fetched;

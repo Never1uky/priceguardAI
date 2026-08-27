@@ -7,6 +7,6 @@ dist/
 .vscode/*
 !.vscode/extensions.json
 
-# Packaged extension artifacts
-priceguard-ai-v*.zip
-priceguard-ai-v*/
+# Packaged extension artifacts (repo root only — keep release/ tracked)
+/priceguard-ai-v*.zip
+/priceguard-ai-v*/

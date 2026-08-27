@@ -24,6 +24,7 @@ import {
   getMyProductsLimit,
   loadMyProductItems,
 } from '@/lib/my-products';
+import { trackPremiumActive, trackTrialClaimed } from '@/lib/telemetry/funnel';
 
 const STORAGE_KEY = 'priceguard_subscription';
 const TRIAL_USED_KEY = 'priceguard_trial_used';
@@ -173,6 +174,7 @@ export async function startTrial(): Promise<{ ok: boolean; error?: string; expir
     if (remote.code === 'trial_already_used') {
       await chrome.storage.local.set({ [TRIAL_USED_KEY]: true });
     }
+    trackTrialClaimed(false);
     if (remote.code === 'telegram_required') {
       return {
         ok: false,
@@ -201,12 +203,17 @@ export async function startTrial(): Promise<{ ok: boolean; error?: string; expir
     source: 'trial',
   });
   await chrome.storage.local.set({ [TRIAL_USED_KEY]: true });
+  trackTrialClaimed(true);
+  trackPremiumActive('trial');
 
   return { ok: true, expiresAt: remote.expiresAt };
 }
 
 /** Активация Premium — через Supabase validate-license (ключ после оплаты ЮKassa). Требует вход в аккаунт. */
-export async function activateLicenseKey(key: string): Promise<{ ok: boolean; error?: string }> {
+export async function activateLicenseKey(
+  key: string,
+  opts?: { funnelSource?: 'license' | 'payment' },
+): Promise<{ ok: boolean; error?: string }> {
   const normalized = normalizeKey(key);
 
   agentLog(
@@ -247,6 +254,7 @@ export async function activateLicenseKey(key: string): Promise<{ ok: boolean; er
       const state = applyPremiumState(normalized, plan, remote.expiresAt, 'supabase');
       await writeSubscription(state);
       void syncAlertSettingsToCloud();
+      trackPremiumActive(opts?.funnelSource ?? 'license');
       return { ok: true };
     }
     return { ok: false, error: remote.error ?? 'Ключ недействителен или лимит устройств исчерпан' };

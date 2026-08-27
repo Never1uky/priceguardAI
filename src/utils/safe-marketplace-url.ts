@@ -3,19 +3,22 @@
  */
 
 import type { Marketplace } from '@/types/product';
+import { TAB_SEARCH_ADAPTERS } from '@/lib/marketplaces/adapter-config';
 
-const HOST_BY_MARKETPLACE: Record<Marketplace, string[]> = {
+const CORE_HOSTS: Partial<Record<Marketplace, string[]>> = {
   wildberries: ['wildberries.ru'],
   ozon: ['ozon.ru'],
   yandex_market: ['market.yandex.ru', 'ya.ru'],
 };
 
-const ALL_SUFFIXES = [
-  'wildberries.ru',
-  'ozon.ru',
-  'market.yandex.ru',
-  'ya.ru',
-];
+const HOST_BY_MARKETPLACE: Record<Marketplace, string[]> = {
+  wildberries: CORE_HOSTS.wildberries!,
+  ozon: CORE_HOSTS.ozon!,
+  yandex_market: CORE_HOSTS.yandex_market!,
+  ...Object.fromEntries(TAB_SEARCH_ADAPTERS.map((a) => [a.id, a.hostSuffixes])),
+} as Record<Marketplace, string[]>;
+
+const ALL_SUFFIXES = [...new Set(Object.values(HOST_BY_MARKETPLACE).flat())];
 
 function hostAllowed(host: string, suffixes: string[]): boolean {
   const h = host.toLowerCase();

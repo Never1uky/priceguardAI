@@ -6,6 +6,17 @@ describe('safe-marketplace-url', () => {
     expect(isSafeMarketplaceUrl('https://www.wildberries.ru/catalog/1/detail.aspx')).toBe(true);
     expect(isSafeMarketplaceUrl('https://www.ozon.ru/product/x-1/', 'ozon')).toBe(true);
     expect(isSafeMarketplaceUrl('https://market.yandex.ru/product/1', 'yandex_market')).toBe(true);
+    expect(
+      isSafeMarketplaceUrl(
+        'https://megamarket.ru/catalog/details/smartfon-100067205836/',
+        'megamarket',
+      ),
+    ).toBe(true);
+    expect(isSafeMarketplaceUrl('https://aliexpress.ru/item/1005001.html', 'aliexpress')).toBe(
+      true,
+    );
+    expect(isSafeMarketplaceUrl('https://www.dns-shop.ru/product/abc/x/', 'dns')).toBe(true);
+    expect(isSafeMarketplaceUrl('https://www.lamoda.ru/p/ab123/x/', 'lamoda')).toBe(true);
   });
 
   it('rejects javascript and http', () => {

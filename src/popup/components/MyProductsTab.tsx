@@ -26,11 +26,14 @@ import {
   trackProduct,
 } from '@/lib/storage';
 import { canUseCloudFeatures } from '@/lib/supabase/auth-guard';
-import { RUNNING_IDS_KEY, RUNNING_KEY, SEARCHING_MP_KEY } from '@/lib/compare-jobs';
+import { RUNNING_IDS_KEY, RUNNING_KEY, SEARCHING_MP_KEY, type SearchingMarketplaceKey } from '@/lib/compare-jobs';
+import { formatSearchingMpCompact } from '@/lib/compare-search-progress';
 import { normalizeRunningIds } from '@/lib/compare-running-state';
 import { isPremium } from '@/lib/subscription';
 import { FREE_LIMITS, PREMIUM_LIMITS } from '@/types/subscription';
-import { COMPARISON_MARKETPLACE_LABELS, type ComparisonMarketplace } from '@/types/comparison';
+import { COMPARISON_MARKETPLACE_LABELS } from '@/types/comparison';
+import { getMarketplaceEntry } from '@/lib/marketplaces/registry';
+import { stableProductStorageId } from '@/lib/price-identity';
 import type { Product } from '@/types/product';
 import { toastError, toastSuccess } from '@/popup/lib/toast';
 import {
@@ -49,12 +52,6 @@ const SORT_LABELS: Record<MyProductsSortMode, string> = {
   addedAt: 'По дате',
   title: 'По названию',
   price: 'По цене',
-};
-
-const marketplaceBadge: Record<ComparisonMarketplace, 'wildberries' | 'ozon' | 'yandex'> = {
-  wildberries: 'wildberries',
-  ozon: 'ozon',
-  yandex_market: 'yandex',
 };
 
 interface MyProductsTabProps {
@@ -87,6 +84,7 @@ export function MyProductsTab({
   const [expandingId, setExpandingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchingCompareIds, setSearchingCompareIds] = useState<Set<string>>(() => new Set());
+  const [searchingMp, setSearchingMp] = useState<SearchingMarketplaceKey | null>(null);
   const [sortMode, setSortMode] = useState<MyProductsSortMode>('addedAt');
   const deletingIdRef = useRef<string | null>(null);
   const expandingIdRef = useRef<string | null>(null);
@@ -151,8 +149,9 @@ export function MyProductsTab({
         .then((stored) => {
           const fromIds = normalizeRunningIds(stored[RUNNING_IDS_KEY]);
           const ids = fromIds.length ? fromIds : normalizeRunningIds(stored[RUNNING_KEY]);
-          const searchingMp = stored[SEARCHING_MP_KEY];
+          const searchingMp = stored[SEARCHING_MP_KEY] as SearchingMarketplaceKey | undefined;
           // Show row spinner while SERP/search progress is marked, for every running id.
+          setSearchingMp(searchingMp ?? null);
           setSearchingCompareIds(
             searchingMp != null && ids.length ? new Set(ids) : new Set(),
           );
@@ -255,11 +254,12 @@ export function MyProductsTab({
         const cmp = item.compareProduct;
         const product: Product = {
           id:
-            cmp.sourceMarketplace === 'wildberries'
-              ? `wb-${cmp.article || 'x'}`
-              : cmp.sourceMarketplace === 'ozon'
-                ? `ozon-${cmp.article || 'x'}`
-                : `yandex-${cmp.article || 'x'}`,
+            stableProductStorageId({
+              marketplace: cmp.sourceMarketplace,
+              article: cmp.article,
+              url: cmp.sourceUrl,
+              id: '',
+            }) ?? `${cmp.sourceMarketplace}-${cmp.article || 'x'}`,
           marketplace: cmp.sourceMarketplace,
           title: cmp.title,
           price: cmp.sourceOffer?.price ?? 0,
@@ -363,7 +363,7 @@ export function MyProductsTab({
         <EmptyState
           icon={PackageSearch}
           title="Пока ничего не отслеживаете"
-          description="Откройте карточку на Wildberries и нажмите «Следить за ценой». Сообщим, если подешевеет."
+          description="Откройте карточку на WB, Ozon или Маркете и нажмите «Сравнить цены». Добавим в список и найдём тот же товар на других площадках."
         >
           {liveProduct && onAddLiveProduct && (
             <Button size="sm" className="mt-2" onClick={() => void onAddLiveProduct()}>
@@ -416,7 +416,7 @@ export function MyProductsTab({
                       {item.linkedMarketplaces.map((mp) => (
                         <Badge
                           key={mp}
-                          variant={marketplaceBadge[mp]}
+                          variant={getMarketplaceEntry(mp)?.badgeVariant ?? 'default'}
                           className="px-1.5 py-0 text-[9px]"
                         >
                           {COMPARISON_MARKETPLACE_LABELS[mp].split(' ')[0]}
@@ -430,7 +430,7 @@ export function MyProductsTab({
                       {item.compareId && searchingCompareIds.has(item.compareId) && (
                         <span className="inline-flex items-center gap-1 pg-caption text-primary">
                           <Loader2 className="h-3 w-3 animate-spin" />
-                          Ищем…
+                          {formatSearchingMpCompact(searchingMp)}
                         </span>
                       )}
                     </div>

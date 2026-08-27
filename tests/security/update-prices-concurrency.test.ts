@@ -37,4 +37,13 @@ describe('performance: update-prices processes SKU groups concurrently', () => {
     );
     expect(source).toMatch(/groupsForRun\.slice\(batchStart, batchStart \+ CONCURRENCY\)/);
   });
+
+  it('coalesces scrapes via coalesceTrackedSkuGroups (shared monitoring)', async () => {
+    const source = await fs.readFile(
+      path.resolve(__dirname, '../../supabase/functions/update-prices/index.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/coalesceTrackedSkuGroups\(workQueue\)/);
+    expect(source).not.toMatch(/const key = `\$\{mp\}:\$\{item\.row\.product_id\}`/);
+  });
 });

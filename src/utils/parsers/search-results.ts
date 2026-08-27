@@ -3,7 +3,16 @@ import type {
   MarketplaceOffer,
   SearchCandidateOffer,
 } from '@/types/comparison';
-import { buildMarketplaceSearchUrl, extractComparisonArticle } from '@/utils/comparison-url';
+import {
+  buildMarketplaceSearchUrl,
+  extractComparisonArticle,
+  marketplaceOrigin,
+} from '@/utils/comparison-url';
+import { parseImageFromDomRoot, normalizeImageCandidate } from '@/utils/parsers/generic-mp-card';
+import {
+  getTabSearchAdapter,
+  isGenericCardMarketplace,
+} from '@/lib/marketplaces/adapter-config';
 import {
   MIN_COMPARE_MATCH_CONFIDENCE,
   isProductPageUrl,
@@ -15,18 +24,20 @@ import { matchConfidencePercent } from '@/lib/fuzzy-match';
 import {
   computeCandidatePriority,
   hasLargePriceSpreadAmongClose,
-  pickCheapestAmongCloseMatches,
+  reorderPickerCandidates,
 } from '@/lib/match-status';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
 import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
 import { parsePrice } from '@/utils/dom';
+import { parseListingRubNumbers } from '@/lib/listing-rub-prices';
 import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
 import { isSafeMarketplaceUrl } from '@/utils/safe-marketplace-url';
-import { pickSerpTitleFromTile } from '@/lib/serp-title';
+import { isPlaceholderSerpTitle, pickSerpTitleFromTile } from '@/lib/serp-title';
 import { buildWbImageUrl, buildWbImageUrlAlternatives } from '@/utils/wb-image';
 import type { Marketplace } from '@/types/product';
 import { isIdentityExcluded } from '@/lib/offer-identity';
+import { toCanonicalProductUrl } from '@/utils/product-url';
 /** Dedupe by product article; keep the cheaper SERP price (YM "from" vs default offer). */
 function upsertSerpCandidate(
   results: SearchCandidate[],
@@ -56,17 +67,6 @@ function upsertSerpCandidate(
   }
   seenIndex.set(key, results.length);
   results.push(candidate);
-}
-
-function marketplaceOrigin(marketplace: ComparisonMarketplace): string {
-  switch (marketplace) {
-    case 'wildberries':
-      return 'https://www.wildberries.ru';
-    case 'ozon':
-      return 'https://www.ozon.ru';
-    case 'yandex_market':
-      return 'https://market.yandex.ru';
-  }
 }
 
 function sanitizeCandidateUrl(
@@ -316,12 +316,36 @@ export function pickSearchFromCandidates(
     };
   }
 
-  const ranked = pickCheapestAmongCloseMatches(
-    rankedRaw.map((r) => ({
-      ...r,
-      price: r.candidate.price,
-    })),
-    12,
+  // Mega + Ali: minScore:0 fallback otherwise promotes score===0 junk (furniture/food/wrong storage)
+  // into needs_choice. CORE marketplaces keep the shared soft path unchanged.
+  if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+    rankedRaw = rankedRaw.filter((r) => {
+      const title = r.candidate.title ?? '';
+      if (!isTitleCategoryCompatible(ref, title, pickOpts.referenceSpecs)) return false;
+      return scoreProductMatch(ref, title, pickOpts.referenceSpecs) > 0;
+    });
+    if (!rankedRaw.length) {
+      return {
+        offer: {
+          ...buildSearchNotFoundOffer(
+            marketplace,
+            query,
+            'Точного совпадения нет. Проверьте похожие варианты: название, цвет и память.',
+          ),
+          matchStatus: 'not_found',
+        },
+        ranked: [],
+      };
+    }
+  }
+
+  const ranked = reorderPickerCandidates(
+    rankedRaw,
+    ref,
+    (r) => r.candidate.title ?? '',
+    (r) => r.confidence,
+    (r) => r.candidate.price,
+    pickOpts.referenceSpecs,
   );
   const forceChoice = hasLargePriceSpreadAmongClose(ranked);
   const top3 = ranked.slice(0, 3).filter((r) => {
@@ -625,6 +649,232 @@ function scrapeYandexMarketCandidates(query: string): SearchCandidate[] {
   return results;
 }
 
+export function scrapeMegamarketCandidates(_query: string): SearchCandidate[] {
+  const results: SearchCandidate[] = [];
+  const seenIndex = new Map<string, number>();
+
+  const pushFromTile = (hrefRaw: string, tile: HTMLElement) => {
+    let href = hrefRaw;
+    if (!/\/catalog\/details\//i.test(href) && /^\d{6,}$/.test(href.replace(/\D/g, ''))) {
+      const id = href.replace(/\D/g, '');
+      href = `https://megamarket.ru/catalog/details/${id}/`;
+    }
+    if (!/\/catalog\/details\//i.test(href)) return;
+
+    const safeHref = sanitizeCandidateUrl(href, 'megamarket');
+    if (!safeHref) return;
+    const url = toCanonicalProductUrl(safeHref, 'megamarket');
+    if (!/\/catalog\/details\//i.test(url)) return;
+    if (!extractComparisonArticle(url, 'megamarket')) return;
+
+    const title = pickSerpTitleFromTile({
+      linkTitle: tile.getAttribute('title'),
+      ariaLabel: tile.getAttribute('aria-label'),
+      headline: tile.querySelector('h2, h3, [class*="title"], [class*="Title"]')?.textContent?.trim(),
+      linkText: tile.matches?.('a') ? tile.textContent?.trim() : tile.querySelector('a')?.textContent?.trim(),
+      containerText: tile.innerText?.slice(0, 800),
+      fallback: '',
+      url,
+    });
+    if (!title || title.length < 3 || isPlaceholderSerpTitle(title)) return;
+
+    const priceText = tile.innerText?.slice(0, 500) ?? '';
+    const priceNums = parseRubPrices(priceText);
+    const pricePool = priceNums.filter((p) => p >= 50);
+    const price = pricePool.length ? Math.min(...pricePool) : null;
+
+    const img = tile.querySelector('img') as HTMLImageElement | null;
+
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title,
+        url,
+        price: price && price > 0 ? price : null,
+        imageUrl: img?.src || undefined,
+        rating: null,
+        reviewCount: undefined,
+      },
+      'megamarket',
+    );
+  };
+
+  const roots = document.querySelectorAll(
+    'a[href*="/catalog/details/"], [data-product-id] a[href*="/catalog/details/"]',
+  );
+  for (const link of roots) {
+    const hrefRaw = (link as HTMLAnchorElement).href || link.getAttribute('href') || '';
+    if (!/\/catalog\/details\//i.test(hrefRaw)) continue;
+    const tile =
+      (link.closest('[data-product-id], [class*="product"], [class*="Product"], li, article') as
+        | HTMLElement
+        | null) ?? (link as HTMLElement);
+    pushFromTile(hrefRaw, tile);
+    if (results.length >= 24) return results;
+  }
+
+  // Tiles with data-product-id but no direct details link yet
+  for (const node of document.querySelectorAll('[data-product-id], [data-goods-id]')) {
+    if (results.length >= 24) break;
+    const id =
+      node.getAttribute('data-product-id') || node.getAttribute('data-goods-id') || '';
+    if (!/^\d{6,}$/.test(id)) continue;
+    const existingLink = node.querySelector('a[href*="/catalog/details/"]') as HTMLAnchorElement | null;
+    const href =
+      existingLink?.href ||
+      existingLink?.getAttribute('href') ||
+      `https://megamarket.ru/catalog/details/${id}/`;
+    pushFromTile(href, node as HTMLElement);
+  }
+
+  return results;
+}
+
+export function scrapeGenericTabSearchCandidates(
+  marketplace: ComparisonMarketplace,
+  query: string,
+): SearchCandidate[] {
+  const cfg = getTabSearchAdapter(marketplace);
+  if (!cfg || !isGenericCardMarketplace(marketplace)) return [];
+
+  const results: SearchCandidate[] = [];
+  const seenIndex = new Map<string, number>();
+  const links = document.querySelectorAll('a[href]');
+
+  for (const link of links) {
+    const hrefRaw = (link as HTMLAnchorElement).href || link.getAttribute('href') || '';
+    if (!cfg.serpProductHref.test(hrefRaw)) continue;
+    const href = sanitizeCandidateUrl(hrefRaw, marketplace);
+    if (!href) continue;
+    if (!cfg.isProductPage(href)) continue;
+
+    const tile =
+      (link.closest('[data-product-id], [class*="product"], [class*="Product"], li, article') as
+        | HTMLElement
+        | null) ?? (link as HTMLElement);
+    const title = pickSerpTitleFromTile({
+      linkTitle: link.getAttribute('title'),
+      ariaLabel: link.getAttribute('aria-label'),
+      headline: tile.querySelector('h2, h3, [class*="title"], [class*="Title"]')?.textContent?.trim(),
+      linkText: link.textContent?.trim(),
+      containerText: tile.innerText?.slice(0, 800),
+      fallback: query,
+      url: href,
+    });
+    if (!title || title.length < 3) continue;
+
+    const priceText = tile.innerText?.slice(0, 500) ?? '';
+    const priceNums = priceText.match(/(\d[\d\s]*)\s*(?:₽|руб)/i);
+    const price = priceNums
+      ? parseInt(priceNums[1]!.replace(/\s/g, ''), 10)
+      : parsePrice(priceText) || null;
+
+    const img = tile.querySelector('img') as HTMLImageElement | null;
+    const imageUrl =
+      normalizeImageCandidate(img?.currentSrc || img?.src) ||
+      normalizeImageCandidate(img?.getAttribute('data-src')) ||
+      normalizeImageCandidate(img?.getAttribute('data-original')) ||
+      parseImageFromDomRoot(tile) ||
+      undefined;
+
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title,
+        url: href.split('?')[0]!,
+        price: price && price > 0 ? price : null,
+        imageUrl,
+        rating: null,
+        reviewCount: undefined,
+      },
+      marketplace,
+    );
+    if (results.length >= 24) break;
+  }
+
+  return results;
+}
+
+/**
+ * AliExpress wholesale / search SERP — only /item/{id} tiles (ALI-1).
+ * Dedupes by article; canonical URL without query.
+ */
+export function scrapeAliExpressCandidates(query: string): SearchCandidate[] {
+  const results: SearchCandidate[] = [];
+  const seenIndex = new Map<string, number>();
+
+  const pushFromTile = (hrefRaw: string, tile: HTMLElement) => {
+    if (!/\/item\/\d{8,}/i.test(hrefRaw)) return;
+    const href = sanitizeCandidateUrl(hrefRaw, 'aliexpress');
+    if (!href) return;
+    const url = toCanonicalProductUrl(href, 'aliexpress');
+    if (!extractComparisonArticle(url, 'aliexpress')) return;
+
+    const link = tile.matches('a[href]')
+      ? (tile as HTMLAnchorElement)
+      : (tile.querySelector('a[href*="/item/"]') as HTMLAnchorElement | null);
+
+    const title = pickSerpTitleFromTile({
+      linkTitle: link?.getAttribute('title'),
+      ariaLabel: link?.getAttribute('aria-label') ?? tile.getAttribute('aria-label'),
+      headline: tile
+        .querySelector('h1, h2, h3, [class*="title" i], [class*="Title"]')
+        ?.textContent?.trim(),
+      linkText: link?.textContent?.trim(),
+      containerText: tile.innerText?.slice(0, 800),
+      fallback: query,
+      url,
+    });
+    if (!title || title.length < 3) return;
+
+    const priceText = tile.innerText?.slice(0, 500) ?? '';
+    const priceNums = priceText.match(/(\d[\d\s]*)\s*(?:₽|руб|RUB)/i);
+    let price: number | null = priceNums
+      ? parseInt(priceNums[1]!.replace(/\s/g, ''), 10)
+      : parsePrice(priceText) || null;
+    if (price == null || !(price > 0)) {
+      const listed = parseListingRubNumbers(priceText);
+      price = listed[0] ?? null;
+    }
+
+    const img = tile.querySelector('img') as HTMLImageElement | null;
+    const imageUrl =
+      normalizeImageCandidate(img?.currentSrc || img?.src) ||
+      normalizeImageCandidate(img?.getAttribute('data-src')) ||
+      normalizeImageCandidate(img?.getAttribute('data-original')) ||
+      parseImageFromDomRoot(tile) ||
+      undefined;
+
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title,
+        url,
+        price: price && price > 0 ? price : null,
+        imageUrl,
+        rating: null,
+        reviewCount: undefined,
+      },
+      'aliexpress',
+    );
+  };
+
+  for (const link of document.querySelectorAll('a[href*="/item/"]')) {
+    if (results.length >= 24) break;
+    const hrefRaw = (link as HTMLAnchorElement).href || link.getAttribute('href') || '';
+    const tile =
+      (link.closest(
+        '[data-product-id], [class*="product" i], [class*="Product"], [class*="search-item" i], li, article',
+      ) as HTMLElement | null) ?? (link as HTMLElement);
+    pushFromTile(hrefRaw, tile);
+  }
+
+  return results;
+}
+
 export function scrapeAllCandidates(marketplace: ComparisonMarketplace, query: string): SearchCandidate[] {
   switch (marketplace) {
     case 'wildberries':
@@ -633,6 +883,12 @@ export function scrapeAllCandidates(marketplace: ComparisonMarketplace, query: s
       return scrapeOzonCandidates(query);
     case 'yandex_market':
       return scrapeYandexMarketCandidates(query);
+    case 'megamarket':
+      return scrapeMegamarketCandidates(query);
+    case 'aliexpress':
+      return scrapeAliExpressCandidates(query);
+    default:
+      return scrapeGenericTabSearchCandidates(marketplace, query);
   }
 }
 

@@ -5,6 +5,8 @@
 **Chosen variant:** **B (optimal)** — Next.js App Router + ISR + durable `seo_product_pages`  
 **Not chosen:** A (landing prerender spike only); C (queues/search cluster — later)
 
+**Multi-MP rollout:** see [`SEO_MP_ROLLOUT.md`](./SEO_MP_ROLLOUT.md) — allowlist, publishAllowed gates, per-MP checklist. Only WB / Ozon / YM publish until a new MP is READY.
+
 ---
 
 ## 1. Approve: variant + canonical host

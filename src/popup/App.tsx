@@ -14,6 +14,12 @@ import { isLiveProductInTrackedList } from '@/lib/price-identity';
 import { loadUiTheme, saveUiTheme, type UiTheme } from '@/lib/ui-theme';
 import { sendRuntimeMessage } from '@/lib/runtime-message';
 import { isFullAnalysisBusy, FULL_ANALYSIS_BUSY_MESSAGE } from '@/lib/ai-busy-lock';
+import {
+  trackCompareStarted,
+  trackExtensionStarted,
+  classifyFailureReason,
+  trackMonitoringRefresh,
+} from '@/lib/telemetry/funnel';
 import { useLiveProduct } from '@/popup/hooks/useLiveProduct';
 import { loadMyProductItems, migrateMyProductsOnce } from '@/lib/my-products';
 import type { Product, TrackedProduct } from '@/types/product';
@@ -140,6 +146,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    void trackExtensionStarted();
+  }, []);
+
+  useEffect(() => {
     void isFullAnalysisBusy().then(setFullAnalysisBusy);
     const onSessionChange = (
       changes: { [key: string]: chrome.storage.StorageChange },
@@ -240,6 +250,7 @@ export function App() {
 
     setIsComparePending(true);
     try {
+      void trackCompareStarted(product.marketplace);
       const gate = await canAddMyProduct({ url: product.url });
       if (!gate.allowed && !gate.alreadyPresent) {
         toastUserError(
@@ -421,6 +432,7 @@ export function App() {
       return;
     }
     setListRefreshing(true);
+    const started = Date.now();
     try {
       const refreshWork = (async () => {
         const { syncTrackedProductsWithCloud } = await import('@/lib/storage');
@@ -436,11 +448,13 @@ export function App() {
       });
       await Promise.race([refreshWork, timeout]);
       toastSuccess('Список обновлён');
+      trackMonitoringRefresh(true, Date.now() - started);
     } catch (error) {
       const msg = error instanceof Error && error.message === 'timeout'
         ? 'Не удалось обновить за 20 с — проверьте интернет.'
         : 'Не удалось обновить список';
       toastUserError(msg);
+      trackMonitoringRefresh(false, Date.now() - started, classifyFailureReason(error));
     } finally {
       setListRefreshing(false);
     }
@@ -448,12 +462,15 @@ export function App() {
 
   const handleCheckPrices = async () => {
     setIsChecking(true);
+    const started = Date.now();
     try {
       await sendRuntimeMessage({ type: 'CHECK_PRICES_NOW' });
       await loadTracked();
       await refreshLiveProduct();
-    } catch {
+      trackMonitoringRefresh(true, Date.now() - started);
+    } catch (error) {
       toastUserError('Не удалось проверить цены');
+      trackMonitoringRefresh(false, Date.now() - started, classifyFailureReason(error));
     } finally {
       setIsChecking(false);
     }

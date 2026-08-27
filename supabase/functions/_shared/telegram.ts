@@ -5,7 +5,11 @@ import { sanitizeAlertButtonUrl } from './safe-url.ts';
  * HTML parse_mode + inline-кнопка «Открыть товар»
  */
 
-/** Публичная страница расширения в Chrome Web Store */
+/**
+ * Публичная страница расширения (CWS).
+ * Keep in sync with extension `src/lib/store-config.ts` → chrome.*
+ * Do not set Edge/Yandex here until real store URLs exist (never fake IDs).
+ */
 export const CHROME_WEB_STORE_URL =
   'https://chromewebstore.google.com/detail/priceguard-ai/ipaichogganccpnapdgkjldplllnjlpf';
 

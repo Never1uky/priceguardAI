@@ -13,6 +13,7 @@ import { getDeviceId } from '@/lib/supabase/device-id';
 import { AI_AUTH_REQUIRED_MESSAGE, canUseCloudFeatures } from '@/lib/supabase/auth-guard';
 import { AI_REQUEST_DEFAULTS } from '@/lib/ai/schemas';
 import { telemetry } from '@/lib/telemetry/log';
+import { trackAiStarted, trackAiAnalysisStarted, trackAiAnalysisFailed, classifyFailureReason } from '@/lib/telemetry/funnel';
 import type { WebResearchSource } from '@/types/full-analysis';
 
 export type AiProviderName = 'grok' | 'openai';
@@ -349,6 +350,8 @@ export async function sendFullAnalysisViaProxy(
   const provider = resolveProviderOrder(settings);
   const webResearch = options.webResearch !== false;
 
+  trackAiAnalysisStarted();
+
   try {
     const aiStarted = Date.now();
     const data = await callEdge<{
@@ -405,6 +408,11 @@ export async function sendFullAnalysisViaProxy(
         webResearchCached: Boolean(data.webResearchCached),
       },
     });
+    void trackAiStarted({
+      mode: 'full',
+      cache: data.webResearchCached ? 'hit' : 'miss',
+      provider: data.provider ?? 'openai',
+    });
 
     return {
       text,
@@ -416,6 +424,10 @@ export async function sendFullAnalysisViaProxy(
       webSources: data.webSources,
     };
   } catch (error) {
+    trackAiAnalysisFailed(
+      classifyFailureReason(error),
+      error instanceof ApiError ? error.provider : undefined,
+    );
     if (!(error instanceof ApiError)) {
       telemetry.error({
         stage: 'ai',

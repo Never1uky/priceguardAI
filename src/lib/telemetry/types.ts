@@ -33,6 +33,7 @@ export interface TelemetryEvent {
   jobId?: string;
   userId?: string | null;
   extVersion: string;
+  /** Coarse browser: chrome | edge | yandex | unknown — never raw UA */
   browser: string;
   marketplace?: string;
   productId?: string;
@@ -44,6 +45,10 @@ export interface TelemetryEvent {
   /** Structured extras — keep small & redacted */
   data?: Record<string, unknown>;
   stack?: string;
+  /** Product funnel INFO — may enqueue remotely when opt-in */
+  funnel?: boolean;
+  /** Operational metrics INFO — privacy-safe, may enqueue remotely when opt-in */
+  ops?: boolean;
 }
 
 export interface TelemetryContextPatch {
@@ -57,7 +62,7 @@ export interface TelemetryContextPatch {
 
 export interface TelemetrySettings {
   mode: TelemetryMode;
-  /** Opt-in: flush WARN/ERROR to Supabase */
+  /** Opt-in: flush WARN/ERROR and product-funnel INFO to Supabase */
   remoteEnabled: boolean;
 }
 

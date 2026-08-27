@@ -77,7 +77,7 @@
       <p><strong>Остановка:</strong> отключите Telegram в <strong>Настройках</strong> расширения (нужен вход). Удаление диалога с ботом само по себе не снимает Chat ID с сервера.</p>
 
       <h3>2.6. Серверный скрапинг (Scrappey)</h3>
-      <p>Сервер может запрашивать страницы через <strong>Scrappey</strong> (URL → HTML) при Telegram-мониторинге и/или серверном unlock / compare-research у авторизованного пользователя. Cookies браузера <strong>не</strong> передаются. Кэш цены ~2 часа.</p>
+      <p>Сервер может запрашивать страницы через <strong>Scrappey</strong> (URL → HTML) при Telegram-мониторинге и/или серверном unlock / compare-research у авторизованного пользователя. Cookies браузера <strong>не</strong> передаются. Кэш цены ~6 часов.</p>
 
       <h3>2.7. Телеметрия, матчинг и диагностика</h3>
       <p>При входе: лог AI (провайдер, успех, длительность), события «оригинал», версия, <strong>match feedback</strong> (ID/URL кандидатов), <strong>compare-research</strong> (название + URL). Краткие итоги поиска могут писаться в <code>search_metrics</code>. Подробные WARN/ERROR — на устройстве; opt-in remote только в developer-диагностике. <strong>Автоотчёт об ошибке</strong> (без диалога): текст до 800 символов, контекст, версия, userId → Edge <code>support-notify</code> → Telegram оператора. Не передаём полную историю браузинга и данные карт.</p>
@@ -120,7 +120,7 @@
       <ul>
         <li>аккаунт и лицензия — пока действует аккаунт/подписка и разумный срок после;</li>
         <li>локальные данные — до удаления расширения или очистки storage;</li>
-        <li>периодический purge: <code>product_cache</code> ~7 дней; <code>price_scrape_cache</code> ~2 часа; истёкшие треды Telegram AI ~48 часов; логи поиска/AI ~90 дней;</li>
+        <li>периодический purge: <code>product_cache</code> ~7 дней; <code>price_scrape_cache</code> ~6 часов; истёкшие треды Telegram AI ~48 часов; логи поиска/AI ~90 дней;</li>
         <li>облачная история цен — пока действует аккаунт / список отслеживания.</li>
       </ul>
 

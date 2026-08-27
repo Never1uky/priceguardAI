@@ -29,4 +29,19 @@ describe('lineage-generation P1 extractor', () => {
       ),
     ).toBe(false);
   });
+
+  it('iPhone tier in genKey: base ≠ Pro ≠ Pro Max', () => {
+    expect(extractLineageGeneration('Apple iPhone 15 128GB')?.genKey).toBe('15');
+    expect(extractLineageGeneration('iPhone 15 Pro 256GB')?.genKey).toBe('15pro');
+    expect(extractLineageGeneration('iPhone 15 Pro Max')?.genKey).toBe('15promax');
+    expect(
+      areLineageGenerationsCompatible('Apple iPhone 15 128GB', 'Apple iPhone 15 Pro 128GB'),
+    ).toBe(false);
+    expect(
+      areLineageGenerationsCompatible('iPhone 15 Pro', 'iPhone 15 Pro Max'),
+    ).toBe(false);
+    expect(
+      areLineageGenerationsCompatible('Смартфон Apple iPhone 15 128GB', 'Apple iPhone 15 128 ГБ'),
+    ).toBe(true);
+  });
 });

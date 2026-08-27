@@ -11,8 +11,17 @@ import { upsertTrackedProduct } from '../_shared/tracked-upsert.ts';
 import { parseProductKey, productKey, productIdLookupCandidates } from '../_shared/product-id.ts';
 import { runProductIntel, loadAnalysisForKey, lookupCheapOffers } from '../_shared/product-intel.ts';
 import { projectScraperCredentials } from '../_shared/reviews-common.ts';
+import {
+  loadCostGuards,
+  scraperForMarketplace,
+  trackLimitForPlan,
+} from '../_shared/cost-guards.ts';
+import {
+  isMonitoringAllowed,
+  loadMarketplaceFlags,
+} from '../_shared/marketplace-flags.ts';
 import { loadPriceHistory } from '../_shared/price-history.ts';
-import { isPremiumRowActive } from '../_shared/premium-active.ts';
+import { resolveUserPlanAccess } from '../_shared/premium-active.ts';
 import { loadPriceMins, formatMinStatusLine } from '../_shared/price-mins.ts';
 import {
   resolveCachedCompareOffers,
@@ -81,8 +90,6 @@ interface TelegramUpdate {
 
 const pendingAddByChat = new Map<string, number>();
 const PENDING_TTL_MS = 15 * 60 * 1000;
-const FREE_TRACK_LIMIT = 5;
-const PREMIUM_TRACK_LIMIT = 50;
 const STATUS_CARD_LIMIT = 5;
 /** Free: min interval between AI refresh per product */
 const FREE_AI_REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -250,8 +257,9 @@ async function sendStatusCards(
 ): Promise<void> {
   const all = await loadTrackedForUser(supabase, userId);
   const total = all.length;
-  const trackCap = premium ? PREMIUM_TRACK_LIMIT : FREE_TRACK_LIMIT;
-  // Free: only first page (≤5). Premium: paginate within trackCap for monitoring parity.
+  const guards = await loadCostGuards(supabase);
+  const trackCap = trackLimitForPlan(guards, premium);
+  // Free: only first page (≤trackCap). Premium: paginate within trackCap for monitoring parity.
   const maxVisible = Math.min(total, trackCap);
   const totalPages = Math.max(1, Math.ceil(maxVisible / STATUS_CARD_LIMIT));
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
@@ -281,12 +289,12 @@ async function sendStatusCards(
   const shownTo = start + cards.length;
   const header = premium
     ? safePage === 0
-      ? `📋 <b>Мои товары</b> · ${shownFrom}–${shownTo} из ${maxVisible} (лимит ${PREMIUM_TRACK_LIMIT})${
-          total > PREMIUM_TRACK_LIMIT ? ` · на сервере ${total}` : ''
+      ? `📋 <b>Мои товары</b> · ${shownFrom}–${shownTo} из ${maxVisible} (лимит ${trackCap})${
+          total > trackCap ? ` · на сервере ${total}` : ''
         }`
       : `📋 <b>Страница ${safePage + 1}</b> · ${shownFrom}–${shownTo} из ${maxVisible}`
-    : `📋 <b>Мои товары</b> · ${Math.min(total, FREE_TRACK_LIMIT)} из ${FREE_TRACK_LIMIT} (мониторинг)${
-        total > FREE_TRACK_LIMIT ? ` · на сервере ${total}` : ''
+    : `📋 <b>Мои товары</b> · ${Math.min(total, trackCap)} из ${trackCap} (мониторинг)${
+        total > trackCap ? ` · на сервере ${total}` : ''
       }`;
 
   const nav = premium && maxVisible > STATUS_CARD_LIMIT
@@ -336,12 +344,8 @@ async function sendStatusCards(
 }
 
 async function isPremiumUser(supabase: SupabaseClient, userId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('user_premium')
-    .select('user_id, expires_at, license_key_id, license_keys(is_active, expires_at)')
-    .eq('user_id', userId)
-    .maybeSingle();
-  return isPremiumRowActive(data);
+  const plan = await resolveUserPlanAccess(supabase, userId);
+  return plan.premiumTier;
 }
 
 async function upsertSession(
@@ -429,7 +433,19 @@ async function addProductFromLink(
   }
 
   const premium = await isPremiumUser(supabase, userId);
-  const trackCap = premium ? PREMIUM_TRACK_LIMIT : FREE_TRACK_LIMIT;
+  const guards = await loadCostGuards(supabase);
+  const mpFlags = await loadMarketplaceFlags(supabase);
+  if (!isMonitoringAllowed(mpFlags, parsed.marketplace, guards.monitoringMarketplaces)) {
+    return {
+      ok: false,
+      reply: [
+        '⏸ Мониторинг этой площадки временно отключён на сервере.',
+        'Попробуйте позже или другую площадку (WB / Ozon / Я.Маркет).',
+      ].join('\n'),
+      buttonUrl: parsed.url,
+    };
+  }
+  const trackCap = trackLimitForPlan(guards, premium);
   const { data: existing } = await supabase
     .from('tracked_products')
     .select('id')
@@ -451,8 +467,8 @@ async function addProductFromLink(
         ok: false,
         reply: [
           premium
-            ? `📦 Лимит Premium: до <b>${PREMIUM_TRACK_LIMIT}</b> товаров.`
-            : `📦 Лимит Free: до <b>${FREE_TRACK_LIMIT}</b> товаров.`,
+            ? `📦 Лимит Premium: до <b>${trackCap}</b> товаров.`
+            : `📦 Лимит Free: до <b>${trackCap}</b> товаров.`,
           '',
           premium
             ? 'Удалите товар в расширении → «Мои товары» или в боте.'
@@ -467,7 +483,18 @@ async function addProductFromLink(
     parsed.marketplace,
     parsed.productId,
     parsed.url,
-    { supabase, scraper: projectScraperCredentials() },
+    {
+      supabase,
+      // Phase 13: Free /add uses cache + legacy only — Scrappey for Premium/trial
+      scraper: premium
+        ? scraperForMarketplace(
+            guards,
+            parsed.marketplace,
+            projectScraperCredentials(),
+          )
+        : null,
+      cacheTtlMs: guards.priceCacheTtlMs,
+    },
   );
 
   const title = (fetched?.title || parsed.titleHint || 'Товар').slice(0, 500);
@@ -485,10 +512,26 @@ async function addProductFromLink(
     lastChecked: price != null ? nowIso : null,
     deleted: false,
     updatedAt: nowIso,
+    maxActiveTracks: trackCap,
   });
 
   if (saved.ok === false) {
     console.error('[telegram-webhook] upsert tracked', saved);
+    if (saved.code === 'TRACK_LIMIT') {
+      return {
+        ok: false,
+        reply: [
+          premium
+            ? `📦 Лимит Premium: до <b>${trackCap}</b> товаров.`
+            : `📦 Лимит Free: до <b>${trackCap}</b> товаров.`,
+          '',
+          premium
+            ? 'Удалите товар в расширении → «Мои товары» или в боте.'
+            : 'Удалите товар в расширении → «Список» или оформите Premium (до 50).',
+        ].join('\n'),
+        buttonUrl: parsed.url,
+      };
+    }
     return {
       ok: false,
       reply: [
@@ -1096,7 +1139,16 @@ async function handleCallback(
   }
   if (action === 'cheap') {
     await sendTyping(chatId);
-    const scraper = projectScraperCredentials();
+    const guards = await loadCostGuards(supabase);
+    const cheapUserId = await resolveUserId(supabase, chatId);
+    const premium = cheapUserId ? await isPremiumUser(supabase, cheapUserId) : false;
+    const scraper = premium
+      ? scraperForMarketplace(
+          guards,
+          parsedKey.marketplace,
+          projectScraperCredentials(),
+        )
+      : null;
     const sourcePrice =
       session?.product_url
         ? (
@@ -1104,7 +1156,7 @@ async function handleCallback(
               parsedKey.marketplace,
               parsedKey.productId,
               String(session.product_url),
-              { supabase, scraper },
+              { supabase, scraper, cacheTtlMs: guards.priceCacheTtlMs },
             )
           )?.price ?? null
         : null;

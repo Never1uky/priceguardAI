@@ -45,11 +45,13 @@ const COLOR_ALIASES: Record<string, ColorFamily> = {
   'jet black': 'black',
   graphite: 'black',
   графит: 'black',
+  obsidian: 'black',
   white: 'white',
   белый: 'white',
   белая: 'white',
   'starlight': 'white',
   ivory: 'white',
+  porcelain: 'white',
   blue: 'blue',
   синий: 'blue',
   синяя: 'blue',
@@ -71,10 +73,12 @@ const COLOR_ALIASES: Record<string, ColorFamily> = {
   purple: 'purple',
   фиолетовый: 'purple',
   violet: 'purple',
+  indigo: 'purple',
   pink: 'pink',
   розовый: 'pink',
   beige: 'beige',
   бежевый: 'beige',
+  hazel: 'beige',
   brown: 'brown',
   коричневый: 'brown',
   orange: 'orange',
@@ -169,7 +173,7 @@ export function extractNormalizedColor(title: string, specs?: string): string | 
   const combined = `${title} ${specs ?? ''}`.toLowerCase();
 
   const pattern =
-    /\b(space\s*black|jet\s*black|midnight|graphite|starlight|lemongrass|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|бежев(?:ый|ая|ое)?|коричнев(?:ый|ая|ое)?|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|beige|brown|yellow)\b/i;
+    /\b(space\s*black|jet\s*black|midnight|graphite|obsidian|porcelain|indigo|hazel|starlight|lemongrass|светло-?ж[её]лт\w*|ж[её]лт(?:ый|ая|ое)?|ч[её]рн(?:ый|ая|ое)?|бел(?:ый|ая|ое)?|син(?:ий|яя|ее)?|серебрист(?:ый|ая|ое)?|сер(?:ый|ая|ое)?|зел[её]н(?:ый|ая|ое)?|красн(?:ый|ая|ое)?|золот(?:ой|ая|ое)?|фиолетов(?:ый|ая|ое)?|розов(?:ый|ая|ое)?|бежев(?:ый|ая|ое)?|коричнев(?:ый|ая|ое)?|black|white|blue|silver|grey|gray|green|red|gold|purple|pink|beige|brown|yellow)\b/i;
 
   const match = combined.match(pattern);
   if (match?.[1]) return normalizeColor(match[1]) ?? undefined;
@@ -476,5 +480,24 @@ export function storageCompatible(
   if (!a || !b) return 'unknown';
   const na = normalizeStorage(a) ?? a;
   const nb = normalizeStorage(b) ?? b;
-  return na === nb;
+  if (na === nb) return true;
+  // ROM-only «128gb» must match RAM+ROM «12+128» (YM «12/128Gb» titles).
+  const ra = storageRomCanonical(na);
+  const rb = storageRomCanonical(nb);
+  if (ra && rb && ra === rb) return true;
+  return false;
+}
+
+/**
+ * ROM / capacity identity key for SKU gates.
+ * «12+128» and «128gb» → «128gb»; «1+1024» / «1tb» → «1024gb» when already normalized.
+ */
+export function storageRomCanonical(key: string | undefined): string | undefined {
+  if (!key) return undefined;
+  const n = (normalizeStorage(key) ?? key).toLowerCase().trim();
+  const plus = n.match(/^(\d{1,2})\+(\d{2,4})$/);
+  if (plus) return `${plus[2]}gb`;
+  if (/^\d{2,4}gb$/.test(n)) return n;
+  if (/^\d+tb$/.test(n)) return n;
+  return n;
 }

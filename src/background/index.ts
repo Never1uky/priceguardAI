@@ -52,11 +52,13 @@ import { withPriceInsightOverlay } from '@/lib/price-insight-overlay';
 import { formatApiErrorForUser } from '@/api/errors';
 import { userFacingError } from '@/lib/fetch-retry';
 import { offersFromCompareProduct } from '@/lib/compare-offers';
+import { getSelectedSearchMarketplaces } from '@/lib/marketplaces/search-settings';
 import type { ReviewFilter } from '@/types/review-analysis';
 import { dispatchPriceDropAlert, dispatchTargetPriceAlert } from '@/lib/price-alert-dispatch';
 import { assertScrapedPriceIdentity } from '@/lib/price-identity';
 import { isHiddenBrowserTab } from '@/lib/hidden-browser';
 import { ensureSessionId } from '@/lib/telemetry/context';
+import { trackExtensionInstalled, trackProductCardOpened } from '@/lib/telemetry/funnel';
 import { flushRemoteTelemetry } from '@/lib/telemetry/flush';
 import { setupNotificationHandlers } from '@/lib/notifications';
 import { getAuthSession } from '@/lib/supabase/auth';
@@ -86,6 +88,10 @@ import { logAuthenticityCheck } from '@/lib/authenticity/supabase-log';
 import {
   isServerPriceMonitoringActive,
 } from '@/lib/supabase/alert-settings-sync';
+import {
+  compareProductNeedsClientRefresh,
+  selectTrackedForClientRefresh,
+} from '@/lib/tracked-client-refresh';
 import {
   getRemoteFullProductCache,
   putRemoteFullProductCache,
@@ -134,15 +140,20 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function checkTrackedProduct(product: TrackedProduct): Promise<void> {
+async function checkTrackedProduct(
+  product: TrackedProduct,
+  options?: { force?: boolean },
+): Promise<void> {
   const marketplace = detectComparisonMarketplace(product.url) ?? detectMarketplace(product.url);
   if (!marketplace) return;
 
   const pageUrl = toCanonicalProductUrl(product.url, product.marketplace);
   const mp = (detectComparisonMarketplace(product.url) ?? product.marketplace) as ComparisonMarketplace;
+  // Periodic: cache + tab (no Scrappey). Manual force: Mega may use Premium unlocker (MEGA-3).
+  const skipUnlocker = !(options?.force && product.marketplace === 'megamarket');
 
   try {
-    let offer = await fetchOfferFromUrl(pageUrl, mp);
+    let offer = await fetchOfferFromUrl(pageUrl, mp, { skipUnlocker });
     let imageUrlAlternatives = product.imageUrlAlternatives;
 
     if ((!offer?.price || offer.price <= 0) && product.marketplace === 'wildberries') {
@@ -214,39 +225,32 @@ async function checkTrackedProduct(product: TrackedProduct): Promise<void> {
   }
 }
 
-/** Если серверный cron не обновил цену дольше этого — клиентский backup */
-const SERVER_STALE_MS = 8 * 60 * 60 * 1000;
-
-function isTrackedPriceStale(product: TrackedProduct, now = Date.now()): boolean {
-  const checkedAt = product.scrapedAt;
-  if (!checkedAt || !Number.isFinite(checkedAt) || checkedAt <= 0) return true;
-  return now - checkedAt >= SERVER_STALE_MS;
-}
-
 export async function checkAllTrackedPrices(options?: { force?: boolean }): Promise<void> {
   const tracked = await getTrackedProducts();
   if (tracked.length === 0) return;
 
-  // При server_monitoring cron — основной путь; клиент — backup для устаревших
-  // (Ozon/YM antibot на Edge). force=true — полная ручная проверка.
-  let toCheck = tracked;
-  if (!options?.force && (await isServerPriceMonitoringActive())) {
-    toCheck = tracked.filter((p) => isTrackedPriceStale(p));
-    if (toCheck.length === 0) {
-      console.info(
-        '[PriceGuard AI] Серверный мониторинг активен — все цены свежие, клиентский backup не нужен',
-      );
-      return;
-    }
+  const serverMonitoring = !options?.force && (await isServerPriceMonitoringActive());
+  const toCheck = selectTrackedForClientRefresh(tracked, {
+    force: options?.force,
+    serverMonitoringActive: serverMonitoring,
+  });
+
+  if (toCheck.length === 0) {
     console.info(
-      `[PriceGuard AI] Серверный мониторинг: клиентский backup для ${toCheck.length}/${tracked.length} устаревших`,
+      '[PriceGuard AI] Серверный мониторинг активен — все CORE цены свежие, клиентский backup не нужен',
+    );
+    return;
+  }
+  if (serverMonitoring && toCheck.length < tracked.length) {
+    console.info(
+      `[PriceGuard AI] Серверный мониторинг: клиентский backup для ${toCheck.length}/${tracked.length} (устаревшие CORE + Mega)`,
     );
   } else {
     console.info(`[PriceGuard AI] Фоновая проверка: ${toCheck.length} товаров`);
   }
 
   for (const product of toCheck) {
-    await checkTrackedProduct(product);
+    await checkTrackedProduct(product, { force: options?.force });
     await delay(2_000);
   }
 }
@@ -255,14 +259,16 @@ async function checkAllComparePrices(options?: { force?: boolean }): Promise<voi
   let products = await getCompareProducts();
   if (!products.length) return;
 
-  // Server cron is primary; client only refreshes stale bound cards (no SERP / Scrappey).
+  // Server cron is primary for CORE; Mega (and other non-cron MPs) always client-refresh.
   const skipUnlocker = !options?.force;
-  if (!options?.force && (await isServerPriceMonitoringActive())) {
-    products = products.filter((p) => {
-      const at = p.comparedAt;
-      if (!at || !Number.isFinite(at) || at <= 0) return true;
-      return Date.now() - at >= SERVER_STALE_MS;
-    });
+  const serverMonitoring = !options?.force && (await isServerPriceMonitoringActive());
+  if (serverMonitoring) {
+    products = products.filter((p) =>
+      compareProductNeedsClientRefresh(p, {
+        force: false,
+        serverMonitoringActive: true,
+      }),
+    );
     if (!products.length) {
       console.info(
         '[PriceGuard AI] Серверный мониторинг активен — compare цены свежие, клиентский backup не нужен',
@@ -270,7 +276,7 @@ async function checkAllComparePrices(options?: { force?: boolean }): Promise<voi
       return;
     }
     console.info(
-      `[PriceGuard AI] Серверный мониторинг: compare backup для ${products.length} устаревших`,
+      `[PriceGuard AI] Серверный мониторинг: compare backup для ${products.length} устаревших / Mega`,
     );
   }
 
@@ -383,6 +389,7 @@ const UPDATE_SYNC_HINT_KEY = 'priceguard_update_sync_hint';
 chrome.runtime.onInstalled.addListener((details) => {
   console.info('[PriceGuard] SW ready', chrome.runtime.getManifest().version);
   console.info('[PriceGuard AI] Extension installed', details.reason);
+  trackExtensionInstalled(details.reason);
   void ensureSessionId();
   setupNotificationHandlers();
   setupProductPageNavigation();
@@ -491,6 +498,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.action.setBadgeText({ text: '●' });
     chrome.action.setBadgeBackgroundColor({ color: '#16a34a' });
     chrome.storage.local.set({ priceguard_badge_product: product.id });
+    void trackProductCardOpened(product.marketplace, product.article);
     sendResponse({ ok: true });
     return true;
   }
@@ -1082,7 +1090,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             (p) => p.sourceUrl === productUrl || p.article === article,
           );
           const compareOffers = compareProduct
-            ? offersFromCompareProduct(compareProduct).map((o) => ({
+            ? offersFromCompareProduct(compareProduct, {
+                marketplaces: await getSelectedSearchMarketplaces(),
+              }).map((o) => ({
                 marketplace: o.marketplace,
                 price: o.price,
                 rating: o.rating,

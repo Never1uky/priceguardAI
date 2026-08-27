@@ -12,6 +12,8 @@ const ALL_CATEGORIES: ProductCategory[] = [
   'laptops',
   'gpus',
   'desktops',
+  'monoblocks',
+  'pc_components',
   'headphones',
   'wearables',
   'lenses',
@@ -28,6 +30,7 @@ const ALL_CATEGORIES: ProductCategory[] = [
   'detergents',
   'cosmetics',
   'pet_food',
+  'grocery',
   'memory_cards',
   'generic',
 ];

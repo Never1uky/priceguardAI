@@ -66,7 +66,7 @@ Our servers may fetch product pages/data via **Scrappey** (product URL in, HTML/
 - Telegram **server price monitoring** is enabled; and/or
 - a signed-in user triggers server-assisted card/offer unlock or compare research.
 
-Your browser cookies are **not** sent to Scrappey. Short price results may be cached (~2 hours; expired rows purged periodically). Unused legacy scraper credential columns may exist in settings storage and are not used by current code.
+Your browser cookies are **not** sent to Scrappey. Short price results may be cached (~6 hours; expired rows purged periodically). Unused legacy scraper credential columns may exist in settings storage and are not used by current code.
 
 ### 2.7 Telemetry, matching feedback, and support diagnostics
 
@@ -123,7 +123,7 @@ Provide extension and bot features; AI analysis and caching; alerts and comparis
 
 Account/license while active (+ reasonable period after); local data until uninstall/clear; cloud price history while the account/watchlist is active.
 
-Periodic cleanup (when enabled): `product_cache` older than ~7 days; `price_scrape_cache` older than ~2 hours; expired `telegram_ai_threads` (~48 hours); `ai_request_log` / `search_metrics` older than ~90 days. Freshness checks also ignore stale cache without waiting for purge.
+Periodic cleanup (when enabled): `product_cache` older than ~7 days; `price_scrape_cache` older than ~6 hours; expired `telegram_ai_threads` (~48 hours); `ai_request_log` / `search_metrics` older than ~90 days. Freshness checks also ignore stale cache without waiting for purge.
 
 Service logs may be retained for operations and security and are removed on account-deletion request and/or by the periodic cleanup above.
 

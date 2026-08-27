@@ -39,7 +39,13 @@ function isWeakTitle(title) {
   if (/\bSEO\s*Smoke\b/i.test(t)) return true;
   if (/\b(smoke\s*fixture|test\s*fixture)\b/i.test(t)) return true;
   if (/^(test|fixture|asdf|xxx)\b/i.test(t)) return true;
-  if (/\b(wildberries|ozon|яндекс\.?\s*маркет|yandex\s*market)\b/i.test(t)) return true;
+  if (
+    /\b(wildberries|wb|ozon|яндекс\.?\s*маркет|yandex\s*market|megamarket|мегамаркет|aliexpress|алиэкспресс|mvideo|м\.?видео|dns|citilink|ситилинк|lamoda|ламода)\b/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 
