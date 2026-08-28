@@ -42,6 +42,10 @@ function bareTrackedProductId(marketplace: string, productId: string): string {
     const digits = raw.replace(/\D/g, '');
     return (digits.length >= 8 ? digits : raw).slice(0, 64);
   }
+  if (marketplace === 'mvideo') {
+    const digits = raw.replace(/\D/g, '');
+    return (digits.length >= 6 ? digits : raw).slice(0, 64);
+  }
   const mp = marketplace as UrlMarketplace;
   if (mp === 'wildberries' || mp === 'ozon' || mp === 'yandex_market') {
     return stripProductIdPrefix(mp, raw).slice(0, 64);

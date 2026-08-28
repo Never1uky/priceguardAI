@@ -23,6 +23,9 @@
 
 -- Env overlay (Edge secrets, wins over DB):
 --   MARKETPLACE_FLAGS_JSON={"megamarket":{"marketplace_enabled":true,"monitoring_enabled":false}}
+-- MVIDEO-2 (compare on, monitoring off):
+--   update public.marketplace_flags set marketplace_enabled = true, monitoring_enabled = false
+--   where marketplace_id = 'mvideo';
 
 select marketplace_id, marketplace_enabled, monitoring_enabled, note, updated_at
 from public.marketplace_flags

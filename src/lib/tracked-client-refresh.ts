@@ -1,6 +1,7 @@
 /**
- * Who owns price refresh: Telegram cron (CORE trio) vs client (Mega / Ali / test MPs).
- * MEGA-6 / ALI-6: never skip Mega/Ali because server_monitoring is on — cron does not scrape them.
+ * Who owns price refresh: Telegram cron (CORE trio) vs client (Mega / Ali / M.Video / test MPs).
+ * MEGA-6 / ALI-6 / MVIDEO-6: never skip Mega/Ali/M.Video because server_monitoring is on —
+ * cron does not scrape them.
  */
 
 import { isCronPriceMonitoredMarketplace } from '@/lib/marketplaces/registry';

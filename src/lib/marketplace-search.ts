@@ -15,7 +15,7 @@ import { shouldRunCompare } from '@/lib/compare-cache';
 import { enrichOfferFromProductPage, fetchOfferFromUrl } from '@/lib/offer-fetch';
 import { inferProductModel } from '@/lib/model-extract';
 import { parseAllOzonSearchOffers } from '@/lib/ozon-offer';
-import { pickBestMatchWithFallbackScored, pickTopMatchesWithScore, isProductPageUrl, isUrlExcluded, computeMatchConfidence, isAcceptableProductMatch, MIN_COMPARE_MATCH_CONFIDENCE, AUTO_PICK_CONFIDENCE_THRESHOLD, diagnoseMatchFactors } from '@/lib/product-match';
+import { pickBestMatchWithFallbackScored, pickTopMatchesWithScore, isProductPageUrl, isUrlExcluded, computeMatchConfidence, isAcceptableProductMatch, MIN_COMPARE_MATCH_CONFIDENCE, AUTO_PICK_CONFIDENCE_THRESHOLD, diagnoseMatchFactors, isAliMegaMarketplace, isAliMegaSerpPriceOutlier, isAliMegaCardPriceTooCheap } from '@/lib/product-match';
 import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
 import { buildOfferFromRankedCandidates } from '@/lib/search-offer-from-candidates';
 import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
@@ -1167,6 +1167,7 @@ async function finalizeSearchOffer(
   context: {
     referenceTitle: string;
     referenceSpecs?: string;
+    referencePrice?: number;
     query: string;
     searchUrl: string;
   },
@@ -1179,7 +1180,15 @@ async function finalizeSearchOffer(
     isOfferWithPrice(offer) &&
     (offer.matchConfidence ?? 0) >= AUTO_PICK_CONFIDENCE_THRESHOLD;
   if (alreadyVerified) {
-    result = offer;
+    if (
+      isAliMegaMarketplace(offer.marketplace) &&
+      (isAliMegaSerpPriceOutlier(context.referencePrice, offer.price) ||
+        isAliMegaCardPriceTooCheap(context.referencePrice, offer.price))
+    ) {
+      result = await verifySerpOfferWithCardCascade(offer, context);
+    } else {
+      result = offer;
+    }
   } else if (offer.needsManualPick && offer.searchCandidates?.length) {
     // Unambiguous SERP pool → bind without opening cards (OOS edge cases still go through cascade
     // when the offer arrived as a single ambiguous / low-confidence shell).
@@ -1193,6 +1202,7 @@ async function finalizeSearchOffer(
         imageUrl: c.imageUrl,
         rating: c.rating,
       })),
+      { referencePrice: context.referencePrice },
     );
     if (fromSerp) {
       result = fromSerp;
@@ -1254,6 +1264,7 @@ export async function searchMarketplaceWithFallback(
   const cascadeContext = {
     referenceTitle: ref,
     referenceSpecs,
+    referencePrice,
     query,
     searchUrl,
   };
@@ -2196,6 +2207,7 @@ export async function compareProductAcrossMarketplaces(
           const verified = await verifySerpOfferWithCardCascade(edgeOffer, {
             referenceTitle: edgeTitle,
             referenceSpecs: edgeSpecs,
+            referencePrice: getReferencePrice(currentProduct),
             query,
             searchUrl: buildMarketplaceSearchUrl(mp, query),
           });

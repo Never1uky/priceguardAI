@@ -16,4 +16,12 @@ describe('formatOfferErrorForDisplay', () => {
     expect(formatted.text).toMatch(/лимита запросов/);
     expect(formatted.text).toMatch(/Wildberries/);
   });
+
+  it('maps not-found-in-SERP to honest copy without similar-variants tease', () => {
+    const formatted = formatOfferErrorForDisplay(
+      'Подходящий товар не найден в выдаче (запрос: «AirPods»)',
+    );
+    expect(formatted.text).not.toMatch(/похожие вариант/i);
+    expect(formatted.kind).toBe('no_confident_match');
+  });
 });

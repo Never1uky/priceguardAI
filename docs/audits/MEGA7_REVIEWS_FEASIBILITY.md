@@ -1,8 +1,8 @@
 # MEGA-7 — Megamarket reviews feasibility
 
-**Date:** 2026-08-26  
+**Date:** 2026-08-26 (revisit 2026-08-27)  
 **Verdict:** **SKIP** (do not set `capabilities.reviews = true`)  
-**Out of scope:** Telegram / monitoring.
+**Out of scope:** Telegram / monitoring / Scrappey reviews.
 
 ---
 
@@ -14,28 +14,29 @@ Can ReviewsTab + product-intel collect real Mega review texts without inventing 
 
 | Path | Result |
 |------|--------|
-| Public HTML card (`megamarket.ru/catalog/details/…`) from non-browser / DC IP | Antibot shell (~1.8 KB, `noscript` → challenge). Same class of block that forced MEGA-3 **card** Scrappey unlocker. |
-| Guessed mobile review APIs (`/api/mobile/v1/reviewsList`, `productReviews`, `/api/market/v2/reviews`) | No usable JSON: geo/VPN deny payload or same antibot HTML. **No WB-style open feedbacks API.** |
-| Commercial wrappers (parse.bot `get_product_reviews`, Apify Mega reviews) | Paid scrapers / residential proxies — cost ≈ new Scrappey surface, not a free client API. |
-| Existing PriceGuard reviews stack | WB = public API; Ozon = active-tab DOM (+ Edge Scrappey for server intel); YM = HiddenBrowser DOM. Mega has **no** selector path or hidden-tab scraper today; `resolveReviewTarget` trio-only. |
+| Public HTML card from non-browser / DC IP | Antibot shell (~1.8 KB). Same class that forced MEGA-3 **card** Scrappey unlocker. |
+| Guessed mobile review APIs | No usable JSON. **No** WB-style open feedbacks API. |
+| Commercial wrappers | Paid — cost ≈ Scrappey surface. |
+| **Live revisit 2026-08-27 (Chrome DevTools MCP)** | `megamarket.ru/catalog/details/smartfon-100067205836/` → page title **«Упс…»**, body: *«запросы с вашего устройства похожи на автоматические»*, `htmlLen≈3708`, `punish=true`. Same block on `/catalog/`. **No review DOM to scrape.** |
 
 ## Cost / antibot
 
-- **Tab-only:** possible in theory if user already has a Mega card open and DOM exposes review text — unvalidated, fragile, and preview/full analysis often need HiddenBrowser (YM pattern). Mega card antibot makes hidden-tab success rate poor without Scrappey.
-- **Scrappey reviews:** would be **extra** billable HTML vs MEGA-3 card-price unlocker (reviews pages / pagination). No cost RFC; MEGA-3 was card-only on purpose.
-- **Fake / empty reviews:** would light `reviews: true` and return empty / placeholder — rejected by phase rules.
+- **Tab-only in a normal user Chrome** (extension content script, no automation CDP) remains **unvalidated** — this session’s DevTools browser is blocked by Mega antibot, so we **cannot** prove ≥3 live review texts.
+- **Scrappey reviews:** extra billable HTML vs MEGA-3 card-only unlocker — no cost RFC.
+- Flipping `reviews: true` with empty scraper = rejected.
 
 ## Decision
 
 | Action | Status |
 |--------|--------|
 | `registry.capabilities.reviews` Mega | stays **`false`** |
-| Mega review parsers / Edge `*-reviews` | **not implemented** |
-| ReviewsTab Mega URL | stays unsupported (same as today) |
-| Revisit when | Stable public reviews JSON **or** dedicated cost RFC for Scrappey/tab review path with live success rate ≥ ~40% |
+| Mega review parsers | **not implemented** |
+| ReviewsTab Mega URL | rejected via `capabilities.reviews` gate in `resolveReviewTarget` |
+| Revisit when | User-opened Mega card (non-automation) shows ≥3 review texts in DOM **or** public reviews JSON **or** Scrappey reviews cost RFC with live success ≥ ~40% |
 
 ## Non-goals kept
 
 - No Telegram
 - No `monitoring_enabled`
 - No fake review strings for AI analysis
+- No Scrappey for reviews

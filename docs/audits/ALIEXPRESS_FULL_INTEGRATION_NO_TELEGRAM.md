@@ -37,7 +37,7 @@ Do **not** set `monitoring_enabled=true` for Ali without a separate Telegram RFC
 | **Client refresh** | READY | Always refresh Ali when CORE cron on. `tracked-client-refresh.test.ts` |
 | **Cache** | READY | Shared `price_scrape_cache` R/W. ALI-4 |
 | **Unlocker** | READY | Premium card-only Scrappey. ALI-3; `premium-unlocker-offer` / cost-guards |
-| **Reviews** | **SKIP** | `capabilities.reviews: false`. `ALI7_REVIEWS_FEASIBILITY.md` |
+| **Reviews** | **READY (tab DOM)** | Active-tab DOM (`RedReviews*`); no Scrappey. `ALI7_REVIEWS_FEASIBILITY.md` |
 | **SEO** | READY* | `publishAllowed` + DB CHECK; *gates still apply (often need webOverview). ALI-8 |
 
 \* SEO READY = allowlisted + gates enforced; not “flood of Ali pages”.
@@ -54,7 +54,7 @@ Do **not** set `monitoring_enabled=true` for Ali without a separate Telegram RFC
 | ALI-4 Shared `price_scrape_cache` | done | `ALI4_PRICE_SCRAPE_CACHE_DEPLOY.md` |
 | ALI-5 Edge `compare-research` | done | `ALI5_COMPARE_RESEARCH_DEPLOY.md` |
 | ALI-6 Client tracked / My Products | done | `ALI6_CLIENT_TRACKED.md` |
-| ALI-7 Reviews | **SKIP** | `ALI7_REVIEWS_FEASIBILITY.md` |
+| ALI-7 Reviews | **READY (tab DOM)** | `ALI7_REVIEWS_FEASIBILITY.md` |
 | ALI-8 SEO `publishAllowed` | done | `ALI8_SEO_PUBLISH.md` |
 | **ALI-9** Regression pack + READY gate | **done** — this doc | |
 
@@ -108,8 +108,8 @@ Load zip `priceguard-ai-v{version}.zip` unpacked.
 
 ### SEO / reviews (optional awareness)
 
-11. Reviews tab: Ali has no review scrape (`reviews: false`).  
-12. Do not expect Ali SEO pages without real gate-quality analysis (reviews SKIP → need long webOverview).
+11. Reviews tab: Ali card open → DOM scrape (`reviews: true`); Mega still unsupported.  
+12. Do not expect Ali SEO pages without real gate-quality analysis (reviews help when collected; thin webOverview still fails gates).
 
 ### OUT OF SCOPE confirm
 

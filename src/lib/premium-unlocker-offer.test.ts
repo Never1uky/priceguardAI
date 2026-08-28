@@ -34,10 +34,13 @@ describe('premium unlocker assert', () => {
     vi.mocked(trackCompareMpAttempt).mockReset();
   });
 
-  it('only unlocker-eligible MPs (CORE + megamarket; not test MPs)', () => {
+  it('only unlocker-eligible MPs (CORE + Mega/Ali/M.Video; not test MPs)', () => {
     expect(isPremiumUnlockerMarketplace('wildberries')).toBe(true);
     expect(isPremiumUnlockerMarketplace('megamarket')).toBe(true);
+    expect(isPremiumUnlockerMarketplace('aliexpress')).toBe(true);
+    expect(isPremiumUnlockerMarketplace('mvideo')).toBe(true);
     expect(isPremiumUnlockerMarketplace('lamoda')).toBe(false);
+    expect(isPremiumUnlockerMarketplace('dns')).toBe(false);
   });
 
   it('denies not_premium / not_selected / not_core', async () => {
@@ -149,6 +152,35 @@ describe('premium unlocker assert', () => {
         marketplace: 'aliexpress',
         skipCache: false,
         productId: '1005001234567890',
+      }),
+    );
+  });
+
+  it('MVIDEO-3/4: mvideo unlocker calls Edge with skipCache false (post MVIDEO-4)', async () => {
+    vi.mocked(isPremium).mockResolvedValue(true);
+    vi.mocked(getSelectedSearchMarketplaces).mockResolvedValue([
+      'wildberries',
+      'ozon',
+      'yandex_market',
+      'mvideo',
+    ]);
+    vi.mocked(callEdgeSafe).mockResolvedValue({
+      ok: true,
+      price: 24_990,
+      title: 'Phone',
+      url: 'https://www.mvideo.ru/products/30066712',
+    });
+    const r = await fetchOfferViaPremiumUnlocker(
+      'https://www.mvideo.ru/products/smartfon-30066712',
+      'mvideo',
+    );
+    expect(r?.price).toBe(24_990);
+    expect(callEdgeSafe).toHaveBeenCalledWith(
+      'fetch-product-price',
+      expect.objectContaining({
+        marketplace: 'mvideo',
+        skipCache: false,
+        productId: '30066712',
       }),
     );
   });

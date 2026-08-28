@@ -24,6 +24,11 @@ Deno.test('bareCacheProductId aliexpress strips to 8+ digit item id', () => {
   );
 });
 
+Deno.test('bareCacheProductId mvideo strips to 6+ digit article', () => {
+  assertEquals(bareCacheProductId('mvideo', 'smartfon-30066712'), '30066712');
+  assertEquals(bareCacheProductId('mvideo', '30066712'), '30066712');
+});
+
 Deno.test('bareCacheProductId core trio uses strip prefix', () => {
   assertEquals(bareCacheProductId('wildberries', 'wb-12345678'), '12345678');
   assertEquals(bareCacheProductId('ozon', 'ozon-987'), '987');

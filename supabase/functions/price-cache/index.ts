@@ -21,6 +21,7 @@ const VALID: CacheMarketplace[] = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ];
 
 function serviceClient() {

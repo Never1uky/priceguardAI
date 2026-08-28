@@ -81,17 +81,69 @@ const PC_COMPONENT_HINT =
 const GPU_OR_DESKTOP_INTRUDER =
   /видеокарт|\bgpu\b|графическ|трафарет|наклейк|стикер|системн\w*\s*блок|игровой\s+компьютер|пк\s+сборк|мини[-\s]?пк|mini[-\s]?pc/i;
 
-/** Primary device — do not classify as accessory when present. */
+/** Primary device — do not classify as accessory when present as the SKU itself. */
 const PRIMARY_DEVICE_HINT =
-  /смартфон|ноутбук|laptop|macbook|notebook|ultrabook|моноблок|телевизор|\bsmart\s*tv\b|монитор|\bmonitor\b/i;
+  /смартфон|ноутбук|laptop|macbook|notebook|ultrabook|моноблок|телевизор|\bsmart\s*tv\b|монитор|\bmonitor\b|\bsmartphone\b/i;
 
-const ACCESSORY_HINT =
-  /чехол|защитн\w*\s+(?:стекл|плёнк|пленк)|плёнк|пленк|кабель|зарядк|зарядн|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop)|сумка\s+для\s+ноут/i;
+/**
+ * Accessory / attachment SKU markers (RU + EN Ali wholesale).
+ * Host names like iPhone/Xiaomi alone are NOT enough — need case/cable/etc.
+ */
+export const ACCESSORY_SKU_MARKER_RE =
+  /чехол|(?:^|[\s,./_-])(?:case|cover|sleeve|pouch|skin|holder|stand|charger|adapter)(?:$|[\s,./_-])|\bsoft\s+(?:tpu\s+)?case\b|\bprotective\s+case\b|\bsilicone\s+case\b|\blaptop\s+(?:sleeve|bag|case)\b|\bnotebook\s+(?:sleeve|bag|case)\b|\btempered\s+glass\b|\bscreen\s+protector\b|\bcharging\s+cable\b|\b(?:usb[-\s]?c|lightning|type[-\s]?c)\s+cable\b|защитн\w*\s+(?:стекл|плёнк|пленк)|плёнк|пленк|кабель|зарядк|зарядн|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop)|сумка\s+для\s+ноут/i;
+
+export function hasAccessorySkuMarker(title: string): boolean {
+  return ACCESSORY_SKU_MARKER_RE.test(title);
+}
+
+const ACCESSORY_HINT = ACCESSORY_SKU_MARKER_RE;
+
+/** Categories that are primary devices — accessory candidates must not auto-match. */
+const PRIMARY_DEVICE_CATEGORIES = new Set<ProductCategory>([
+  'smartphones',
+  'laptops',
+  'tvs',
+  'monitors',
+  'cameras',
+  'headphones',
+  'wearables',
+  'gpus',
+  'desktops',
+  'monoblocks',
+  'consoles',
+]);
+
+/**
+ * Asymmetric: accessory-marked candidate vs primary-device reference → reject.
+ * Skip when the reference itself is an accessory search.
+ */
+export function shouldRejectAccessoryVsPrimaryDevice(
+  referenceTitle: string,
+  candidateTitle: string,
+  refCategory?: ProductCategory,
+): boolean {
+  if (!hasAccessorySkuMarker(candidateTitle)) return false;
+  if (hasAccessorySkuMarker(referenceTitle)) return false;
+  if (refCategory === 'accessories') return false;
+  if (refCategory && PRIMARY_DEVICE_CATEGORIES.has(refCategory)) return true;
+  // Ref looks like a device SKU even when category is still generic (Ali EN / short titles)
+  if (PRIMARY_DEVICE_HINT.test(referenceTitle)) return true;
+  if (
+    (!refCategory || refCategory === 'generic') &&
+    /\b(?:iphone|galaxy|pixel|redmi|xiaomi|poco|realme|honor|huawei|samsung)\b/i.test(
+      referenceTitle,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
 
 /** Case / film / cable vs phone or laptop — near hard reject. */
 export function accessoryCrossCategoryPenalty(referenceTitle: string, candidateTitle: string): number {
-  const refAcc = ACCESSORY_HINT.test(referenceTitle) && !PRIMARY_DEVICE_HINT.test(referenceTitle);
-  const candAcc = ACCESSORY_HINT.test(candidateTitle) && !PRIMARY_DEVICE_HINT.test(candidateTitle);
+  if (shouldRejectAccessoryVsPrimaryDevice(referenceTitle, candidateTitle)) return 0.95;
+  const refAcc = hasAccessorySkuMarker(referenceTitle) && !PRIMARY_DEVICE_HINT.test(referenceTitle);
+  const candAcc = hasAccessorySkuMarker(candidateTitle) && !PRIMARY_DEVICE_HINT.test(candidateTitle);
   if (refAcc !== candAcc) return 0.95;
   return 0;
 }
@@ -269,6 +321,21 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
       /\bgalaxy\b/i,
     ],
     inferPatterns: [
+      // EN Ali wholesale accessories — before smartphones match «iPhone» / «phone» in host titles
+      /\bsoft\s+(?:tpu\s+)?case\b/i,
+      /\bprotective\s+case\b/i,
+      /\bsilicone\s+case\b/i,
+      /\b(?:phone|iphone|galaxy|pixel|xiaomi)?\s*case\b/i,
+      /\b(?:back\s+)?cover\b/i,
+      /\blaptop\s+(?:sleeve|bag|case)\b/i,
+      /\bnotebook\s+(?:sleeve|bag|case)\b/i,
+      /\bsleeve\s+bag\b/i,
+      /\btempered\s+glass\b/i,
+      /\bscreen\s+protector\b/i,
+      /\bcharging\s+cable\b/i,
+      /\b(?:usb[-\s]?c|lightning|type[-\s]?c)\s+cable\b/i,
+      /\b(?:wall\s+)?charger\b/i,
+      /\b(?:power\s+)?adapter\b/i,
       // Console controllers / gamepads (before consoles plugin matches «PlayStation 5» in title)
       /\bdual\s*sense\b/i,
       /\bdualshock\b/i,
@@ -280,7 +347,7 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
       /(?:чехол|сумк\w*).{0,40}(?:фото|nikon|canon|sony|fujifilm|dslr|\bd\d{3,4}\b)/i,
       /(?:для\s+(?:фотоаппарат|камеры|nikon|canon)).{0,24}(?:чехол|сумк)/i,
       // Accessory keyword without primary device word (смартфон/ноутбук/…)
-      /(?!.*(?:смартфон|ноутбук|laptop|macbook|телевизор|монитор)).*(?:чехол|защитн\w*\s+(?:стекл|плёнк|пленк)|плёнк|пленк|кабель\s+(?:usb|type|type-c|lightning)|зарядк|зарядн(?:ое|ый)\s+(?:устрой|блок)|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop))/i,
+      /(?!.*(?:смартфон|ноутбук|laptop|macbook|телевизор|монитор|\bsmartphone\b)).*(?:чехол|защитн\w*\s+(?:стекл|плёнк|пленк)|плёнк|пленк|кабель\s+(?:usb|type|type-c|lightning)|зарядк|зарядн(?:ое|ый)\s+(?:устрой|блок)|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop))/i,
       /чехол\s+для\s+(?:iphone|galaxy|samsung|xiaomi|redmi|телефон|смартфон|ноут)/i,
       /(?:стекл|плёнк|пленк).{0,24}(?:iphone|galaxy|samsung|xiaomi)/i,
       /сумка\s+для\s+ноут/i,
@@ -363,6 +430,7 @@ export const CATEGORY_PLUGINS: CategoryPlugin[] = [
     roleDefault: 'primary',
     inferPatterns: [
       /смартфон/i,
+      /\bsmartphone\b/i,
       /телефон/i,
       /\biphone\b/i,
       /\bphone\b/i,

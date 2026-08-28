@@ -11,7 +11,7 @@ export const AI_REQUEST_DEFAULTS = {
 export const FULL_ANALYSIS_JSON_SCHEMA = {
   qualityScore: 'number 1–10',
   qualitySummary: 'string ≤2 предложения',
-  webOverview: 'string ≤3 предложения',
+  webOverview: 'string 2–4 предложения (≥80 символов, если отзывов мало / нет веб-блока; синтез из отзывов+title, без выдуманных обзоров из сети)',
   pros: 'string[] (≤4, коротко, конкретика из отзывов)',
   cons: 'string[] (≤4, коротко, конкретика из отзывов)',
   fakeRisk: '"low" | "medium" | "high"',

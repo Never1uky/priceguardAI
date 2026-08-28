@@ -8,6 +8,7 @@ import type {
   SearchCandidateOffer,
 } from '@/types/comparison';
 import { MAX_CANDIDATE_POOL } from '@/lib/candidate-pool';
+import { candidateDedupeKey, dedupeByCandidateIdentity } from '@/lib/candidate-dedupe';
 import { isOfferWithPrice, normalizeMarketplaceRating } from '@/lib/compare-offers';
 import { fetchOfferFromUrl } from '@/lib/offer-fetch';
 import { isOutOfStockError } from '@/lib/out-of-stock';
@@ -20,6 +21,8 @@ import {
 import {
   CARD_VERIFY_CONFIDENCE_THRESHOLD,
   computeMatchConfidence,
+  isAliMegaMarketplace,
+  isAliMegaCardPriceTooCheap,
   isProductPageUrl,
   MIN_COMPARE_MATCH_CONFIDENCE,
   SINGLE_CANDIDATE_AUTO_PICK_THRESHOLD,
@@ -28,6 +31,7 @@ import { hashQuery, telemetry } from '@/lib/telemetry';
 import { isTitleCategoryCompatible, inferProductCategory } from '@/lib/match-category';
 import { normalizeCompareUrl } from '@/utils/comparison-url';
 import { resolveCandidateDisplayTitle, sanitizeCandidateTitle } from '@/lib/serp-title';
+import { NO_CONFIDENT_MATCH_ERROR } from '@/lib/search-offer-from-candidates';
 
 /** Prefer SERP "from" when card opens a dearer default offer (YM/WB/Ozon). */
 export function pickSerpOrCardPrice(
@@ -62,7 +66,7 @@ function notFoundOffer(
     rating: null,
     url: searchUrl,
     found: false,
-    error: error ?? 'Товар не найден',
+    error: error ?? NO_CONFIDENT_MATCH_ERROR,
     matchStatus: 'not_found',
   };
 }
@@ -89,13 +93,14 @@ function pickRating(
 export function collectSerpCascadeCandidates(offer: MarketplaceOffer): SerpCascadeCandidate[] {
   const out: SerpCascadeCandidate[] = [];
   const seen = new Set<string>();
+  const marketplace = offer.marketplace;
 
   const push = (c: SerpCascadeCandidate) => {
     if (!c.url || !isProductPageUrl(c.url)) return;
-    const key = normalizeCandidateUrl(c.url);
+    const key = candidateDedupeKey(marketplace, c.url) || normalizeCandidateUrl(c.url);
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ ...c, url: key });
+    out.push({ ...c, url: normalizeCandidateUrl(c.url) });
   };
 
   if (offer.found && offer.url && isProductPageUrl(offer.url)) {
@@ -236,11 +241,12 @@ export async function verifySerpOfferWithCardCascade(
   options: {
     referenceTitle: string;
     referenceSpecs?: string;
+    referencePrice?: number;
     query: string;
     searchUrl: string;
   },
 ): Promise<MarketplaceOffer> {
-  const { referenceTitle, referenceSpecs, query, searchUrl } = options;
+  const { referenceTitle, referenceSpecs, referencePrice, query, searchUrl } = options;
   const marketplace = serpOffer.marketplace;
   const candidates = collectSerpCascadeCandidates(serpOffer);
   const serpRating = normalizeMarketplaceRating(serpOffer.rating);
@@ -339,6 +345,12 @@ export async function verifySerpOfferWithCardCascade(
     if (!isTitleCategoryCompatible(referenceTitle, titleForScore, referenceSpecs)) continue;
 
     const displayPrice = pickSerpOrCardPrice(candidate.price, card.price);
+    if (
+      isAliMegaMarketplace(marketplace) &&
+      isAliMegaCardPriceTooCheap(referencePrice, displayPrice)
+    ) {
+      continue;
+    }
 
     verified.push({
       offer: {
@@ -413,29 +425,29 @@ export async function verifySerpOfferWithCardCascade(
       : candidates.map((c) => ({ candidate: c, card: null as MarketplaceOffer | null }))
     ).filter((row) => {
       if (
-        row.card &&
-        (isOutOfStockError(row.card.error) || row.card.matchStatus === 'oos')
-      ) {
-        return false;
-      }
-      if (!row.candidate.url || !isProductPageUrl(row.candidate.url)) return false;
-      const title = resolveCandidateDisplayTitle({
-        serpTitle: row.candidate.title,
-        cardTitle: row.card?.title,
-        url: row.candidate.url,
-      });
-      // Always keep rows that already opened a card (display title from card)
-      if (row.card) {
-        return isTitleCategoryCompatible(referenceTitle, title, referenceSpecs) ||
-          inferProductCategory(referenceTitle, referenceSpecs) === 'generic' ||
-          inferProductCategory(title) === 'generic';
-      }
-      if (!isTitleCategoryCompatible(referenceTitle, title, referenceSpecs)) return false;
-      // Mixed models of the same category (Pixel 7 vs 9a) must stay in the picker
-      // even when SERP confidence is below MIN_COMPARE — not_found hides the tiles.
-      if (candidates.length >= 2) return true;
-      return row.candidate.serpConfidence >= MIN_COMPARE_MATCH_CONFIDENCE;
-    });
+    row.card &&
+    (isOutOfStockError(row.card.error) || row.card.matchStatus === 'oos')
+  ) {
+    return false;
+  }
+  if (!row.candidate.url || !isProductPageUrl(row.candidate.url)) return false;
+  const title = resolveCandidateDisplayTitle({
+    serpTitle: row.candidate.title,
+    cardTitle: row.card?.title,
+    url: row.candidate.url,
+  });
+  // Always keep rows that already opened a card (display title from card)
+  if (row.card) {
+    return isTitleCategoryCompatible(referenceTitle, title, referenceSpecs) ||
+      inferProductCategory(referenceTitle, referenceSpecs) === 'generic' ||
+      inferProductCategory(title) === 'generic';
+  }
+  if (!isTitleCategoryCompatible(referenceTitle, title, referenceSpecs)) return false;
+  // Mixed models of the same category (Pixel 7 vs 9a) must stay in the picker
+  // even when SERP confidence is below MIN_COMPARE — not_found hides the tiles.
+  if (candidates.length >= 2) return true;
+  return row.candidate.serpConfidence >= MIN_COMPARE_MATCH_CONFIDENCE;
+});
 
     if (!choiceRows.length) {
       const anyOos = cardFetched.some(
@@ -452,7 +464,13 @@ export async function verifySerpOfferWithCardCascade(
     }
 
     const searchCandidates = reorderSearchCandidateOffers(
-      choiceRows.map((row, i) => buildChoiceCandidate(row, i)),
+      dedupeByCandidateIdentity(
+        marketplace,
+        choiceRows.map((row, i) => buildChoiceCandidate(row, i)),
+        (c) => c.url,
+        (c) => c.matchConfidence ?? 0,
+        (c, canonicalUrl) => ({ ...c, url: canonicalUrl }),
+      ),
       referenceTitle,
       referenceSpecs,
     );
@@ -474,9 +492,19 @@ export async function verifySerpOfferWithCardCascade(
     (r) => r.price,
     referenceSpecs,
   );
-  const forceChoice = hasLargePriceSpreadAmongClose(reordered);
+  const uniqueVerified = dedupeByCandidateIdentity(
+    marketplace,
+    reordered,
+    (r) => r.offer.url,
+    (r) => r.confidence,
+    (r, canonicalUrl) => ({
+      ...r,
+      offer: { ...r.offer, url: canonicalUrl },
+    }),
+  );
+  const forceChoice = hasLargePriceSpreadAmongClose(uniqueVerified);
 
-  const aboveCardThreshold = reordered.filter(
+  const aboveCardThreshold = uniqueVerified.filter(
     (r) => r.confidence >= CARD_VERIFY_CONFIDENCE_THRESHOLD,
   );
 
@@ -502,10 +530,7 @@ export async function verifySerpOfferWithCardCascade(
   // aboveCardThreshold (≥ CARD_VERIFY 90) first. Single ≥95 after forceChoice /
   // pool path is handled by trySingleCandidateAutoPick below.
 
-  const pool = (aboveCardThreshold.length > 0 ? aboveCardThreshold : reordered).slice(
-    0,
-    MAX_CANDIDATE_POOL,
-  );
+  const pool = uniqueVerified.slice(0, MAX_CANDIDATE_POOL);
   const searchCandidates = pool.map((r, i) => toSearchCandidate(r.offer, r.confidence, i));
 
   // Single pool item ≥ 95 → auto (covers edge cases where forceChoice was false but threshold branch missed)

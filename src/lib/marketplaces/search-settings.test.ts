@@ -43,19 +43,21 @@ beforeEach(() => {
 });
 
 describe('search-settings', () => {
-  it('defaults to WB + Ozon + YM + Megamarket + AliExpress (not remaining test MPs)', async () => {
+  it('defaults to WB + Ozon + YM + Megamarket + AliExpress + M.Video (not remaining test MPs)', async () => {
     const { loadSearchMarketplacesSettings } = await import('./search-settings');
     const { DEFAULT_SEARCH_MARKETPLACE_IDS } = await import('./registry');
     const settings = await loadSearchMarketplacesSettings();
     expect(settings.selected).toEqual(DEFAULT_SEARCH_MARKETPLACE_IDS);
     expect(settings.selected).toContain('megamarket');
     expect(settings.selected).toContain('aliexpress');
+    expect(settings.selected).toContain('mvideo');
     expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toEqual([
       'wildberries',
       'ozon',
       'yandex_market',
       'megamarket',
       'aliexpress',
+      'mvideo',
     ]);
     const { TEST_MARKETPLACE_IDS } = await import('./adapter-config');
     for (const id of TEST_MARKETPLACE_IDS) {
@@ -63,7 +65,7 @@ describe('search-settings', () => {
     }
   });
 
-  it('normalizes empty / corrupt to defaults (includes megamarket + aliexpress)', async () => {
+  it('normalizes empty / corrupt to defaults (includes megamarket + aliexpress + mvideo)', async () => {
     const { normalizeSearchMarketplaces } = await import('./search-settings');
     expect(normalizeSearchMarketplaces([])).toEqual([
       'wildberries',
@@ -71,6 +73,7 @@ describe('search-settings', () => {
       'yandex_market',
       'megamarket',
       'aliexpress',
+      'mvideo',
     ]);
     expect(normalizeSearchMarketplaces(null)).toEqual([
       'wildberries',
@@ -78,6 +81,7 @@ describe('search-settings', () => {
       'yandex_market',
       'megamarket',
       'aliexpress',
+      'mvideo',
     ]);
     expect(normalizeSearchMarketplaces(['nope', 1, 'ozon'])).toEqual(['ozon']);
   });

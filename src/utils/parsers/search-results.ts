@@ -15,6 +15,8 @@ import {
 } from '@/lib/marketplaces/adapter-config';
 import {
   MIN_COMPARE_MATCH_CONFIDENCE,
+  isAliMegaMarketplace,
+  isAliMegaSerpPriceOutlier,
   isProductPageUrl,
   pickBestMatchWithFallbackScored,
   pickTopMatchesWithScore,
@@ -29,6 +31,8 @@ import {
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { areLineageGenerationsCompatible } from '@/lib/lineage-generation';
 import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
+import { dedupeByCandidateIdentity } from '@/lib/candidate-dedupe';
+import { NO_CONFIDENT_MATCH_ERROR } from '@/lib/search-offer-from-candidates';
 import { parsePrice } from '@/utils/dom';
 import { parseListingRubNumbers } from '@/lib/listing-rub-prices';
 import { normalizeMarketplaceRating, parseRatingFromMarketplaceText } from '@/lib/compare-offers';
@@ -305,39 +309,51 @@ export function pickSearchFromCandidates(
   if (!rankedRaw.length) {
     return {
       offer: {
-        ...buildSearchNotFoundOffer(
-          marketplace,
-          query,
-          'Точного совпадения нет. Проверьте похожие варианты: название, цвет и память.',
-        ),
+        ...buildSearchNotFoundOffer(marketplace, query, NO_CONFIDENT_MATCH_ERROR),
         matchStatus: 'not_found',
       },
       ranked: [],
     };
   }
 
-  // Mega + Ali: minScore:0 fallback otherwise promotes score===0 junk (furniture/food/wrong storage)
+  // Mega + Ali + M.Video: minScore:0 fallback otherwise promotes score===0 junk
   // into needs_choice. CORE marketplaces keep the shared soft path unchanged.
-  if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+  if (isAliMegaMarketplace(marketplace)) {
     rankedRaw = rankedRaw.filter((r) => {
       const title = r.candidate.title ?? '';
       if (!isTitleCategoryCompatible(ref, title, pickOpts.referenceSpecs)) return false;
       return scoreProductMatch(ref, title, pickOpts.referenceSpecs) > 0;
     });
+    // Price outliers (dummy 2k vs phone 12k) even on soft path — null price kept for cascade.
+    const refPrice = pickOpts.referencePrice;
+    if (refPrice != null && refPrice > 0) {
+      rankedRaw = rankedRaw.filter((r) => {
+        const p = r.candidate.price;
+        if (p == null || p <= 0) return true;
+        return !isAliMegaSerpPriceOutlier(refPrice, p);
+      });
+    }
     if (!rankedRaw.length) {
       return {
         offer: {
-          ...buildSearchNotFoundOffer(
-            marketplace,
-            query,
-            'Точного совпадения нет. Проверьте похожие варианты: название, цвет и память.',
-          ),
+          ...buildSearchNotFoundOffer(marketplace, query, NO_CONFIDENT_MATCH_ERROR),
           matchStatus: 'not_found',
         },
         ranked: [],
       };
     }
   }
+
+  rankedRaw = dedupeByCandidateIdentity(
+    marketplace,
+    rankedRaw,
+    (r) => r.candidate.url,
+    (r) => r.confidence,
+    (r, canonicalUrl) => ({
+      ...r,
+      candidate: { ...r.candidate, url: canonicalUrl },
+    }),
+  );
 
   const ranked = reorderPickerCandidates(
     rankedRaw,
@@ -380,6 +396,7 @@ export function pickSearchFromCandidates(
       imageUrl: r.candidate.imageUrl,
       rating: r.candidate.rating,
     })),
+    { referencePrice: pickOpts.referencePrice },
   );
   if (unambiguous) {
     return { offer: unambiguous, ranked: top3 };
@@ -875,6 +892,88 @@ export function scrapeAliExpressCandidates(query: string): SearchCandidate[] {
   return results;
 }
 
+/**
+ * M.Video / Eldorado SERP — product href tiles only (MVIDEO-1).
+ * Dedupes by article; canonical URL without query; keep host (mvideo vs eldorado).
+ */
+export function scrapeMvideoCandidates(query: string): SearchCandidate[] {
+  const results: SearchCandidate[] = [];
+  const seenIndex = new Map<string, number>();
+  const hrefRe = /\/products\/[^/?#]+|\/cat\/detail\/|\/item\/\d+|\/catalog\/product\//i;
+
+  const pushFromTile = (hrefRaw: string, tile: HTMLElement) => {
+    if (!hrefRe.test(hrefRaw)) return;
+    if (/product-list-page|\/search/i.test(hrefRaw)) return;
+    const href = sanitizeCandidateUrl(hrefRaw, 'mvideo');
+    if (!href) return;
+    const url = toCanonicalProductUrl(href, 'mvideo');
+    const article = extractComparisonArticle(url, 'mvideo');
+    if (!article) return;
+
+    const link = tile.matches('a[href]')
+      ? (tile as HTMLAnchorElement)
+      : (tile.querySelector('a[href]') as HTMLAnchorElement | null);
+
+    const title = pickSerpTitleFromTile({
+      linkTitle: link?.getAttribute('title'),
+      ariaLabel: link?.getAttribute('aria-label') ?? tile.getAttribute('aria-label'),
+      headline: tile
+        .querySelector('h1, h2, h3, [class*="title" i], [class*="Title"], [class*="name" i]')
+        ?.textContent?.trim(),
+      linkText: link?.textContent?.trim(),
+      containerText: tile.innerText?.slice(0, 800),
+      fallback: query,
+      url,
+    });
+    if (!title || title.length < 3 || isPlaceholderSerpTitle(title)) return;
+
+    const priceText = tile.innerText?.slice(0, 500) ?? '';
+    const priceNums = priceText.match(/(\d[\d\s]*)\s*(?:₽|руб|RUB)/i);
+    let price: number | null = priceNums
+      ? parseInt(priceNums[1]!.replace(/\s/g, ''), 10)
+      : parsePrice(priceText) || null;
+    if (price == null || !(price > 0)) {
+      const listed = parseListingRubNumbers(priceText);
+      price = listed[0] ?? null;
+    }
+
+    const img = tile.querySelector('img') as HTMLImageElement | null;
+    const imageUrl =
+      normalizeImageCandidate(img?.currentSrc || img?.src) ||
+      normalizeImageCandidate(img?.getAttribute('data-src')) ||
+      normalizeImageCandidate(img?.getAttribute('data-original')) ||
+      parseImageFromDomRoot(tile) ||
+      undefined;
+
+    upsertSerpCandidate(
+      results,
+      seenIndex,
+      {
+        title,
+        url,
+        price: price && price > 0 ? price : null,
+        imageUrl,
+        rating: null,
+        reviewCount: undefined,
+      },
+      'mvideo',
+    );
+  };
+
+  for (const link of document.querySelectorAll('a[href]')) {
+    if (results.length >= 24) break;
+    const hrefRaw = (link as HTMLAnchorElement).href || link.getAttribute('href') || '';
+    if (!hrefRe.test(hrefRaw)) continue;
+    const tile =
+      (link.closest(
+        '[data-product-id], [class*="product" i], [class*="Product"], [class*="product-tile" i], li, article',
+      ) as HTMLElement | null) ?? (link as HTMLElement);
+    pushFromTile(hrefRaw, tile);
+  }
+
+  return results;
+}
+
 export function scrapeAllCandidates(marketplace: ComparisonMarketplace, query: string): SearchCandidate[] {
   switch (marketplace) {
     case 'wildberries':
@@ -887,6 +986,8 @@ export function scrapeAllCandidates(marketplace: ComparisonMarketplace, query: s
       return scrapeMegamarketCandidates(query);
     case 'aliexpress':
       return scrapeAliExpressCandidates(query);
+    case 'mvideo':
+      return scrapeMvideoCandidates(query);
     default:
       return scrapeGenericTabSearchCandidates(marketplace, query);
   }

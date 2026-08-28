@@ -16,7 +16,21 @@
 
 - Migration applied on prod (`ihlfvpocwobvcpxbypsd`) as `aliexpress_seo_publish`.
 - Deployed: `seo-publish`, `seo-refresh-offers` (both pick up Ali allowlist).
+- 2026-08-27 volume addendum: redeployed `seo-publish` + `product-intel` (webOverview compose + prompt).
 
 ## Ops note
 
-Do **not** expect a flood of Ali SEO pages: ALI-7 reviews SKIP → most Ali analyses need long `webOverview` to pass gates. Rejected/draft rows are expected until content quality is real.
+Do **not** expect a flood of Ali SEO pages: even with ALI-7 tab reviews READY, many cards still have `reviewCount < SEO_MIN_REVIEWS` → need `webOverview` ≥ `SEO_MIN_WEB_OVERVIEW_LEN`. Rejected/draft rows are expected until content quality is real. No fake `reviewCount`.
+
+## Addendum — volume strategy (webOverview, 2026-08-27)
+
+**RCA:** `seo-publish` copies `product_cache` analysis (no AI at publish). AI prompts historically left `webOverview` empty when there was no «Данные из интернета» block → gate `insufficient_reviews`.
+
+**Path (no gate weaken, no Scrappey reviews, no product Telegram):**
+
+1. **Prompt / schema** — client `src/lib/ai/prompts.ts` + `schemas.ts` and Edge `product-intel`: if no web block, still write 2–4 sentence `webOverview` (≥80 chars) as synthesis from reviews/title/category axes — not invented web reviews.
+2. **Normalize** — `normalizeFullAnalysisResponse` pads short `webOverview` via `composeWebOverviewFromAnalysis` (pros/cons/qualitySummary/verdict/priceInsight).
+3. **Publish enrich** — Edge `seo-publish-run` calls `enrichAnalysisWebOverviewForSeo` before `evaluateSeoPublishGates` (category from title). Helps **old** cache rows without re-analysis.
+4. **Gates unchanged** — `SEO_MIN_*` same; thin analysis still reject; `local_source` / empty still reject.
+
+**Expect:** more Ali pages publishable when analysis already has solid pros/cons/summary; still sparse for empty/local analyses.

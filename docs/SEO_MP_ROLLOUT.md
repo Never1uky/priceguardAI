@@ -1,6 +1,6 @@
 # SEO marketplace rollout
 
-**Status:** allowlist wired; WB / Ozon / YM / **Megamarket** / **AliExpress** may publish when gates pass.  
+**Status:** allowlist wired; WB / Ozon / YM / **Megamarket** / **AliExpress** / **M.Video** may publish when gates pass.  
 **Source of truth:** [`src/lib/seo/seo-marketplaces.ts`](../src/lib/seo/seo-marketplaces.ts)  
 **Mirrors (keep in sync):**
 
@@ -35,14 +35,14 @@ Never flip `publishAllowed` for an MP with NEEDS FIX adapter or no stable price.
 | yandex_market | yes | yes | **yes** |
 | megamarket | yes (MEGA-1…6) | yes | **yes** (MEGA-8; gates still apply) |
 | aliexpress | yes (ALI-1…6) | yes | **yes** (ALI-8; gates still apply) |
-| mvideo | test / tab | yes | **no** |
+| mvideo | yes (MVIDEO-1…7) | yes | **yes** (MVIDEO-8; gates still apply) |
 | dns | test / tab | yes | **no** |
 | citilink | test / tab | yes | **no** |
 | lamoda | test / fashion gate | yes | **no** |
 
 **Extension READY** for SEO publish means: stable card price path, acceptable false-match rate, and an intentional decision to index that MP.
 
-**Megamarket / AliExpress note:** Reviews capability is SKIP (MEGA-7 / ALI-7). Pages typically need `webOverview` ≥ `SEO_MIN_WEB_OVERVIEW_LEN` (or enough reviews later) to clear gates — no fake reviews.
+**Megamarket / AliExpress / M.Video note:** Mega + M.Video reviews SKIP (MEGA-7 / MVIDEO-7); Ali tab reviews READY but often still below `SEO_MIN_REVIEWS`. Pages typically need `webOverview` ≥ `SEO_MIN_WEB_OVERVIEW_LEN` to clear gates — filled via AI prompt + compose enrich at normalize/publish (`web-overview-enrich` / Edge `seo-web-overview`), **not** fake reviews. See ALI-8 / MEGA-8 / MVIDEO-8 addenda.
 
 ---
 
@@ -64,6 +64,6 @@ Never flip `publishAllowed` for an MP with NEEDS FIX adapter or no stable price.
 
 ## What this pass did / did not
 
-**Done (ALI-8):** Ali `publishAllowed` + `offersAllowed`; DB CHECK `seo_product_pages` + `product_cache` + `cross_market_mapping`; three mirrors synced; gates unchanged.
+**Done (MVIDEO-8):** M.Video `publishAllowed` + `offersAllowed`; DB CHECK `seo_product_pages` + `product_cache` + `cross_market_mapping`; extension + Edge mirrors synced; gates unchanged.
 
 **Not done:** Telegram / monitoring; Ali reviews; flipping test MPs; CWS listing copy.

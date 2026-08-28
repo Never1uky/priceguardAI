@@ -13,8 +13,8 @@ import { fetchedPriceMatchesTracked, logPriceIdentityReject } from './price-iden
 import { stripProductIdPrefix } from './product-id.ts';
 import type { Marketplace as CoreMarketplace } from './product-url.ts';
 
-/** Price fetch MPs — Mega/Ali = Scrappey card unlocker only (no Telegram type). */
-export type Marketplace = CoreMarketplace | 'megamarket' | 'aliexpress';
+/** Price fetch MPs — Mega/Ali/M.Video = Scrappey card unlocker only (no Telegram type). */
+export type Marketplace = CoreMarketplace | 'megamarket' | 'aliexpress' | 'mvideo';
 export type PriceSource = 'cache' | 'scrappey' | 'legacy';
 
 export interface FetchedPrice {
@@ -55,6 +55,10 @@ export function reconstructUrl(marketplace: Marketplace, productId: string): str
     const id = productId.replace(/\D/g, '') || productId.trim();
     return `https://aliexpress.ru/item/${id}.html`;
   }
+  if (marketplace === 'mvideo') {
+    const id = productId.replace(/\D/g, '') || productId.trim();
+    return `https://www.mvideo.ru/products/${id}`;
+  }
   const id = stripProductIdPrefix(marketplace, productId) || productId;
   if (marketplace === 'wildberries') {
     return `https://www.wildberries.ru/catalog/${id}/detail.aspx`;
@@ -75,6 +79,93 @@ export function extractMegamarketProductId(url: string): string {
 /** Extract AliExpress item id from /item/{id} URL. */
 export function extractAliExpressProductId(url: string): string {
   return url.match(/\/item\/(\d{8,})(?:\.html)?/i)?.[1] ?? '';
+}
+
+/** Extract M.Video / Eldorado product id from product URL. */
+export function extractMvideoProductId(url: string): string {
+  if (/eldorado\.ru/i.test(url)) {
+    const item = url.match(/\/item\/(\d{6,})/i)?.[1];
+    if (item) return item;
+    const trailing = url.match(
+      /\/(?:cat\/detail|catalog\/product)\/[^/?#]*?(\d{5,})\/?(?:[?#]|$)/i,
+    )?.[1];
+    if (trailing) return trailing;
+  }
+  const fromSlug = url.match(/\/products\/[^/?#]*?(\d{6,})\/?(?:[?#]|$)/i)?.[1];
+  if (fromSlug) return fromSlug;
+  return url.match(/\/products\/(\d{6,})\/?/i)?.[1] ?? '';
+}
+
+/**
+ * Parse M.Video / Eldorado card HTML from Scrappey (JSON-LD + meta).
+ * Does not invent prices — returns null when no positive price found.
+ */
+export function parseMvideoPriceFromHtml(
+  html: string,
+  productUrl: string,
+): FetchedPrice | null {
+  if (/captcha|access.?denied|challenge|robot.?check/i.test(html.slice(0, 8000))) {
+    return null;
+  }
+
+  const scripts = [
+    ...html.matchAll(
+      /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+    ),
+  ];
+  for (const m of scripts) {
+    try {
+      const raw = JSON.parse(m[1]!.trim());
+      const nodes = Array.isArray(raw) ? raw : [raw];
+      for (const node of nodes) {
+        const graph = Array.isArray(node?.['@graph']) ? node['@graph'] : [node];
+        for (const item of graph) {
+          const type = String(item?.['@type'] ?? '');
+          if (!/Product/i.test(type)) continue;
+          const offers = item.offers;
+          const offer = Array.isArray(offers) ? offers[0] : offers;
+          const priceRaw = offer?.price ?? offer?.lowPrice ?? item.price;
+          const priceNum = Number(String(priceRaw ?? '').replace(/\s/g, '').replace(',', '.'));
+          if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+          const availability = String(offer?.availability ?? '');
+          if (/OutOfStock|SoldOut|Discontinued/i.test(availability)) continue;
+          const brand =
+            typeof item.brand === 'string'
+              ? item.brand
+              : item.brand && typeof item.brand === 'object'
+                ? String(item.brand.name ?? '')
+                : '';
+          const name = typeof item.name === 'string' ? item.name.trim() : '';
+          const title = [brand, name].filter(Boolean).join(' ').trim();
+          return {
+            price: Math.round(priceNum),
+            title: title || undefined,
+            url: productUrl,
+          };
+        }
+      }
+    } catch {
+      // next script
+    }
+  }
+
+  const metaPrice =
+    html.match(/itemprop=["']price["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1] ||
+    html.match(/content=["'](\d+(?:[.,]\d+)?)["'][^>]*itemprop=["']price["']/i)?.[1] ||
+    html.match(/property=["']product:price:amount["'][^>]*content=["'](\d+(?:[.,]\d+)?)["']/i)?.[1] ||
+    html.match(/class=["'][^"']*price__main-value[^"']*["'][^>]*>\s*([\d\s]+)/i)?.[1];
+  if (metaPrice) {
+    const priceNum = Number(String(metaPrice).replace(/\s/g, '').replace(',', '.'));
+    if (Number.isFinite(priceNum) && priceNum >= 100) {
+      const ogTitle = html.match(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i)?.[1];
+      return {
+        price: Math.round(priceNum),
+        title: ogTitle?.trim() || undefined,
+        url: productUrl,
+      };
+    }
+  }
+  return null;
 }
 
 /**
@@ -798,6 +889,9 @@ async function fetchViaUnlocker(
     } else if (marketplace === 'aliexpress') {
       const parsed = parseAliExpressPriceFromHtml(unlocked.html, candidate);
       if (parsed) return parsed;
+    } else if (marketplace === 'mvideo') {
+      const parsed = parseMvideoPriceFromHtml(unlocked.html, candidate);
+      if (parsed) return parsed;
     } else {
       const parsed = parseWbPriceFromHtml(unlocked.html, candidate);
       if (parsed) return parsed;
@@ -811,7 +905,9 @@ async function fetchLegacy(
   productId: string,
   url: string,
 ): Promise<FetchedPrice | null> {
-  if (marketplace === 'megamarket' || marketplace === 'aliexpress') return null;
+  if (marketplace === 'megamarket' || marketplace === 'aliexpress' || marketplace === 'mvideo') {
+    return null;
+  }
   if (marketplace === 'wildberries') return fetchWb(productId);
   if (marketplace === 'ozon') return fetchOzon(url);
   return fetchYandex(url);
@@ -830,7 +926,7 @@ export async function fetchMarketplacePriceDetailed(
   const supabase = options?.supabase ?? null;
   const scraper = options?.scraper?.apiKey ? options.scraper : null;
 
-  // Shared price_scrape_cache: trio + Mega (MEGA-4) + Ali (ALI-4).
+  // Shared price_scrape_cache: trio + Mega (MEGA-4) + Ali (ALI-4) + M.Video (MVIDEO-4).
   if (supabase && !options?.skipCacheRead) {
     const cached = await getCachedPrice(
       supabase,
@@ -860,6 +956,24 @@ export async function fetchMarketplacePriceDetailed(
       } else if (marketplace === 'aliexpress') {
         const expected = productId.replace(/\D/g, '') || productId.trim();
         const fromUrl = extractAliExpressProductId(cached.url || url);
+        if (expected && fromUrl && fromUrl !== expected) {
+          logPriceIdentityReject({
+            reason: 'url_product_id_mismatch',
+            marketplace,
+            productId,
+            cachedUrl: cached.url,
+          });
+        } else {
+          return {
+            price: cached.price,
+            title: cached.title,
+            url: cached.url || url,
+            source: 'cache',
+          };
+        }
+      } else if (marketplace === 'mvideo') {
+        const expected = productId.replace(/\D/g, '') || productId.trim();
+        const fromUrl = extractMvideoProductId(cached.url || url);
         if (expected && fromUrl && fromUrl !== expected) {
           logPriceIdentityReject({
             reason: 'url_product_id_mismatch',
@@ -911,8 +1025,12 @@ export async function fetchMarketplacePriceDetailed(
       result = await fetchViaUnlocker(marketplace, url, scraper);
       if (result) source = 'scrappey';
     }
-  } else if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
-    // Mega / Ali: Scrappey only (no legacy HTTP API)
+  } else if (
+    marketplace === 'megamarket' ||
+    marketplace === 'aliexpress' ||
+    marketplace === 'mvideo'
+  ) {
+    // Mega / Ali / M.Video: Scrappey only (no legacy HTTP API)
     if (scraper) {
       result = await fetchViaUnlocker(marketplace, url, scraper);
       if (result) source = 'scrappey';
@@ -954,6 +1072,19 @@ export async function fetchMarketplacePriceDetailed(
   } else if (marketplace === 'aliexpress') {
     const expected = productId.replace(/\D/g, '') || productId.trim();
     const fromUrl = extractAliExpressProductId(fetched.url || url);
+    if (expected && fromUrl && fromUrl !== expected) {
+      logPriceIdentityReject({
+        reason: 'url_product_id_mismatch',
+        marketplace,
+        productId,
+        fetchedUrl: fetched.url,
+        fetchedTitle: fetched.title?.slice(0, 80),
+      });
+      return null;
+    }
+  } else if (marketplace === 'mvideo') {
+    const expected = productId.replace(/\D/g, '') || productId.trim();
+    const fromUrl = extractMvideoProductId(fetched.url || url);
     if (expected && fromUrl && fromUrl !== expected) {
       logPriceIdentityReject({
         reason: 'url_product_id_mismatch',

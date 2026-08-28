@@ -91,16 +91,16 @@ export const MARKETPLACES: readonly MarketplaceRegistryEntry[] = [
     shortName: 'Ali',
     enabledByDefault: true,
     supported: true,
-    capabilities: { search: true, card: true, reviews: false, costTier: 'tab' },
+    capabilities: { search: true, card: true, reviews: true, costTier: 'tab' },
     badgeVariant: 'default',
   },
   {
     id: 'mvideo',
     name: 'М.Видео',
     shortName: 'М.Видео',
-    enabledByDefault: false,
+    enabledByDefault: true,
     supported: true,
-    capabilities: TEST_MP_CAPS,
+    capabilities: { search: true, card: true, reviews: false, costTier: 'tab' },
     badgeVariant: 'default',
   },
   {
@@ -165,7 +165,8 @@ export function isTabCostMarketplace(id: MarketplaceId): boolean {
 
 /**
  * Prices updated by Telegram / update-prices cron.
- * Megamarket / AliExpress (and test MPs) are client-tracked only — never skip client refresh because cron is “on”.
+ * Megamarket / AliExpress / M.Video (and test MPs) are client-tracked only — never skip client
+ * refresh because cron is “on”.
  */
 export function isCronPriceMonitoredMarketplace(id: MarketplaceId | string): boolean {
   return id === 'wildberries' || id === 'ozon' || id === 'yandex_market';

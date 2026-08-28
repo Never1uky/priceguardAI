@@ -13,13 +13,14 @@ import { requireAuthUser } from '../_shared/auth.ts';
 import { upsertTrackedProduct } from '../_shared/tracked-upsert.ts';
 import { resolveTrackLimitForUser } from '../_shared/track-limit.ts';
 
-/** Cloud track sync allowlist. Mega/Ali = compare/track sync only — not Telegram monitoring. */
+/** Cloud track sync allowlist. Mega/Ali/M.Video = compare/track sync only — not Telegram monitoring. */
 const VALID_MARKETPLACES = [
   'wildberries',
   'ozon',
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ];
 
 function serviceClient() {

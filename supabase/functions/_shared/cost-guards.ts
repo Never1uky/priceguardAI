@@ -3,18 +3,22 @@
  * Priority: env kill-switches > DB row `monitoring_cost_guards` > defaults.
  * Users cannot raise limits from the extension.
  *
- * MEGA-3 / ALI-3: Scrappey allowlist may include `megamarket` + `aliexpress`
- * (Premium card unlocker). Monitoring allowlist stays CORE trio only —
- * never auto-add Mega/Ali.
+ * MEGA-3 / ALI-3 / MVIDEO-3: Scrappey allowlist may include `megamarket` +
+ * `aliexpress` + `mvideo` (Premium card unlocker). Monitoring allowlist stays
+ * CORE trio only — never auto-add Mega/Ali/M.Video.
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
-/** Telegram / update-prices cron — Mega/Ali never here without a separate RFC. */
+/** Telegram / update-prices cron — Mega/Ali/M.Video never here without a separate RFC. */
 export type MonitoringMarketplace = 'wildberries' | 'ozon' | 'yandex_market';
 
-/** Scrappey unlocker / fetch-product-price — Mega + Ali allowed for card-only Premium. */
-export type ScrappeyMarketplace = MonitoringMarketplace | 'megamarket' | 'aliexpress';
+/** Scrappey unlocker / fetch-product-price — Mega + Ali + M.Video allowed for card-only Premium. */
+export type ScrappeyMarketplace =
+  | MonitoringMarketplace
+  | 'megamarket'
+  | 'aliexpress'
+  | 'mvideo';
 
 const MONITORING_ALLOWED: readonly MonitoringMarketplace[] = [
   'wildberries',
@@ -28,6 +32,7 @@ const SCRAPPEY_ALLOWED: readonly ScrappeyMarketplace[] = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ];
 
 export interface CostGuards {

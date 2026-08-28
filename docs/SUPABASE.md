@@ -165,6 +165,8 @@ supabase secrets set GROK_API_KEY=... OPENAI_API_KEY=...
 supabase secrets set TELEGRAM_BOT_TOKEN=...
 supabase secrets set TELEGRAM_CHAT_ID=...
 supabase secrets set WB_SUCCESS_RATE_ALERT_THRESHOLD=85
+# Optional override (same meaning, applies to all MPs in search-alerts):
+# supabase secrets set SEARCH_SUCCESS_RATE_ALERT_THRESHOLD=85
 # Админы дашборда (email через запятую)
 supabase secrets set METRICS_ADMIN_EMAILS=you@example.com
 
@@ -185,7 +187,7 @@ supabase functions deploy metrics-dashboard search-alerts
 - Или `chrome.runtime.openOptionsPage()`
 - Требуется вход в аккаунт (вкладка «Аккаунт» в popup)
 
-Views: `vw_search_metrics_daily`, `vw_search_metrics_weekly`, `vw_ai_requests`, `vw_wb_success_rate_24h`
+Views: `vw_search_metrics_daily`, `vw_search_metrics_weekly`, `vw_ai_requests`, `vw_search_success_rate_24h` (WB alias: `vw_wb_success_rate_24h`)
 
 ## Синхронизация товаров
 
@@ -229,7 +231,7 @@ supabase db push
 |---------|------------|
 | `product_cache` | Общий кэш отзывов + AI (TTL 7 дней, `cache_version` 1=отзывы, 2=полный анализ) |
 | `tracked_products` | Синхронизация отслеживаемых товаров по `device_id` |
-| `search_metrics` | Телеметрия поиска (регрессии WB/Ozon/YM) |
+| `search_metrics` | Телеметрия поиска (регрессии WB/Ozon/YM/Mega/Ali) |
 | `ai_request_log` | Лог AI-прокси + rate limiting |
 
 RLS включён на всех таблицах **без публичных политик** — доступ только через Edge Functions с `service_role`.

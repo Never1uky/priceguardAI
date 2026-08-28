@@ -15,7 +15,7 @@ function product(partial: Partial<CompareProduct> = {}): CompareProduct {
 }
 
 describe('offersFromCompareProduct selected marketplaces', () => {
-  it('defaults to DEFAULT_SEARCH (trio + Mega + Ali) and keeps source', () => {
+  it('defaults to DEFAULT_SEARCH (trio + Mega + Ali + M.Video) and keeps source', () => {
     const offers = offersFromCompareProduct(product());
     expect(offers.map((o) => o.marketplace)).toEqual([
       'wildberries',
@@ -23,6 +23,7 @@ describe('offersFromCompareProduct selected marketplaces', () => {
       'yandex_market',
       'megamarket',
       'aliexpress',
+      'mvideo',
     ]);
   });
 
@@ -42,7 +43,14 @@ describe('offersFromCompareProduct selected marketplaces', () => {
       marketplaces: ['wildberries', 'ozon', 'yandex_market'],
     });
     expect(offers.map((o) => o.marketplace)).not.toContain('lamoda');
-    expect(offers.map((o) => o.marketplace)).not.toContain('mvideo');
+    expect(offers.map((o) => o.marketplace)).not.toContain('dns');
+  });
+
+  it('mvideo in selected list appears; source always present', () => {
+    const offers = offersFromCompareProduct(product(), {
+      marketplaces: ['mvideo'],
+    });
+    expect(offers.map((o) => o.marketplace)).toEqual(['ozon', 'mvideo']);
   });
 
   it('aliexpress in selected list appears; source always present', () => {

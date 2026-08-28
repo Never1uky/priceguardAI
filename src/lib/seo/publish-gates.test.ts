@@ -94,9 +94,10 @@ describe('seo publish gates', () => {
     ).toBe('insufficient_reviews');
   });
 
-  it('MEGA-8 / ALI-8: Mega+Ali allowlisted but gates still block thin analyses (no fake publish)', () => {
+  it('MVIDEO-8 / MEGA-8 / ALI-8: Mega+Ali+M.Video allowlisted but gates still block thin analyses (no fake publish)', () => {
     expect(isSeoPublishableMp('megamarket')).toBe(true);
     expect(isSeoPublishableMp('aliexpress')).toBe(true);
+    expect(isSeoPublishableMp('mvideo')).toBe(true);
     expect(
       evaluateSeoPublishGates({
         analysis: goodAnalysis,
@@ -124,6 +125,28 @@ describe('seo publish gates', () => {
         reviewCount: 0,
       }),
     ).toEqual({ ok: true });
+  });
+
+  it('Ali/Mega dry-run style: reject thin / pass after ≥80 webOverview (gates unchanged)', () => {
+    const thin = evaluateSeoPublishGates({
+      analysis: goodAnalysis,
+      reviewCount: 0,
+      title: 'Наушники Sony WH-1000XM5',
+    });
+    expect(thin).toEqual({ ok: false, reason: 'insufficient_reviews' });
+
+    const pass = evaluateSeoPublishGates({
+      analysis: {
+        ...goodAnalysis,
+        webOverview:
+          'По отзывам звук детальный, шумодав сильный; микрофон средние. ' +
+          'Брать на скидке, если важна автономность и комфорт надолго.',
+      },
+      reviewCount: 0,
+      title: 'Наушники Sony WH-1000XM5',
+    });
+    expect(pass).toEqual({ ok: true });
+    expect(pass.ok && goodAnalysis.source !== 'local').toBe(true);
   });
 
   it('rejects thin pros/cons', () => {

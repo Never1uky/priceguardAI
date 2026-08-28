@@ -49,6 +49,17 @@ export function toCanonicalProductUrl(url: string, marketplace?: Marketplace | n
       return `https://aliexpress.ru${path}`;
     }
 
+    // MVIDEO-1: keep host (mvideo.ru vs eldorado.ru); strip query/hash; prefer www.
+    if (mp === 'mvideo') {
+      let origin = parsed.origin;
+      if (/mvideo\.ru/i.test(parsed.hostname) && !/^www\./i.test(parsed.hostname)) {
+        origin = `${parsed.protocol}//www.mvideo.ru`;
+      } else if (/eldorado\.ru/i.test(parsed.hostname) && !/^www\./i.test(parsed.hostname)) {
+        origin = `${parsed.protocol}//www.eldorado.ru`;
+      }
+      return `${origin}${path}`;
+    }
+
     return `${parsed.origin}${path}`;
   } catch {
     return url.split('?')[0].split('#')[0];

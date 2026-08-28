@@ -11,6 +11,7 @@ import { requireAuthUser } from '../_shared/auth.ts';
 import {
   extractAliExpressProductId,
   extractMegamarketProductId,
+  extractMvideoProductId,
   fetchMarketplacePriceDetailed,
   type Marketplace,
 } from '../_shared/marketplace-prices.ts';
@@ -25,6 +26,7 @@ const VALID: Marketplace[] = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ];
 
 function extractProductId(marketplace: Marketplace, url: string): string {
@@ -43,6 +45,9 @@ function extractProductId(marketplace: Marketplace, url: string): string {
   }
   if (marketplace === 'aliexpress') {
     return extractAliExpressProductId(url);
+  }
+  if (marketplace === 'mvideo') {
+    return extractMvideoProductId(url);
   }
   return url.match(/\/product\/(\d+)/i)?.[1] ?? '';
 }

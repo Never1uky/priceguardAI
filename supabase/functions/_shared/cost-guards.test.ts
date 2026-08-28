@@ -15,8 +15,10 @@ describe('cost-guards', () => {
     expect(g.scrappeyEnabled).toBe(true);
     expect(g.scrappeyMarketplaces).toContain('megamarket');
     expect(g.scrappeyMarketplaces).toContain('aliexpress');
+    expect(g.scrappeyMarketplaces).toContain('mvideo');
     expect(g.monitoringMarketplaces).not.toContain('megamarket');
     expect(g.monitoringMarketplaces).not.toContain('aliexpress');
+    expect(g.monitoringMarketplaces).not.toContain('mvideo');
     expect(g.source).toBe('defaults');
   });
 
@@ -90,5 +92,25 @@ describe('cost-guards', () => {
     expect(g.monitoringMarketplaces).not.toContain('aliexpress');
     expect(isScrappeyMarketplace(g, 'aliexpress')).toBe(true);
     expect(scraperForMarketplace(g, 'aliexpress', { apiKey: 'k' })).toEqual({ apiKey: 'k' });
+  });
+
+  it('MVIDEO-3: scrappey may include mvideo; monitoring never via parse', () => {
+    const g = mergeCostGuards(DEFAULT_COST_GUARDS, {
+      scrappey_marketplaces: [
+        'wildberries',
+        'ozon',
+        'yandex_market',
+        'megamarket',
+        'aliexpress',
+        'mvideo',
+        'lamoda',
+      ],
+      monitoring_marketplaces: ['wildberries', 'ozon', 'yandex_market', 'mvideo'],
+    }, {});
+    expect(g.scrappeyMarketplaces).toContain('mvideo');
+    expect(g.scrappeyMarketplaces).not.toContain('lamoda');
+    expect(g.monitoringMarketplaces).not.toContain('mvideo');
+    expect(isScrappeyMarketplace(g, 'mvideo')).toBe(true);
+    expect(scraperForMarketplace(g, 'mvideo', { apiKey: 'k' })).toEqual({ apiKey: 'k' });
   });
 });

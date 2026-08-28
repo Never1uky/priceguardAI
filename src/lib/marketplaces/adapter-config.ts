@@ -190,14 +190,18 @@ export function isTabSearchMarketplace(id: MarketplaceId): boolean {
 
 /**
  * Generic JSON-LD/DOM card + SERP.
- * Megamarket and AliExpress use dedicated parsers (card + SERP).
+ * Megamarket, AliExpress, and M.Video use dedicated parsers (card + SERP).
  */
 export function isGenericCardMarketplace(id: MarketplaceId): boolean {
-  return isTabSearchMarketplace(id) && id !== 'megamarket' && id !== 'aliexpress';
+  return (
+    isTabSearchMarketplace(id) &&
+    id !== 'megamarket' &&
+    id !== 'aliexpress' &&
+    id !== 'mvideo'
+  );
 }
 
 export const TEST_MARKETPLACE_IDS = [
-  'mvideo',
   'dns',
   'citilink',
   'lamoda',

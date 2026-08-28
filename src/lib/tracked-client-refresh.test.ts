@@ -12,12 +12,13 @@ function tracked(mp: string, scrapedAt: number) {
   return { marketplace: mp, scrapedAt };
 }
 
-describe('selectTrackedForClientRefresh (MEGA-6 / ALI-6)', () => {
-  it('always includes Mega/Ali when server monitoring is on (cron does not scrape them)', () => {
+describe('selectTrackedForClientRefresh (MEGA-6 / ALI-6 / MVIDEO-6)', () => {
+  it('always includes Mega/Ali/M.Video when server monitoring is on (cron does not scrape them)', () => {
     const rows = [
       tracked('wildberries', NOW - HOUR),
       tracked('megamarket', NOW - HOUR),
       tracked('aliexpress', NOW - HOUR),
+      tracked('mvideo', NOW - HOUR),
       tracked('ozon', NOW - 9 * HOUR),
     ];
     const out = selectTrackedForClientRefresh(rows, {
@@ -27,6 +28,7 @@ describe('selectTrackedForClientRefresh (MEGA-6 / ALI-6)', () => {
     expect(out.map((r) => r.marketplace).sort()).toEqual([
       'aliexpress',
       'megamarket',
+      'mvideo',
       'ozon',
     ]);
   });
@@ -36,21 +38,22 @@ describe('selectTrackedForClientRefresh (MEGA-6 / ALI-6)', () => {
       tracked('wildberries', NOW),
       tracked('megamarket', NOW),
       tracked('aliexpress', NOW),
+      tracked('mvideo', NOW),
     ];
     expect(
       selectTrackedForClientRefresh(rows, { serverMonitoringActive: false, now: NOW }),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       selectTrackedForClientRefresh(rows, {
         force: true,
         serverMonitoringActive: true,
         now: NOW,
       }),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
   });
 });
 
-describe('compareProductNeedsClientRefresh (MEGA-6 / ALI-6)', () => {
+describe('compareProductNeedsClientRefresh (MEGA-6 / ALI-6 / MVIDEO-6)', () => {
   const base: Pick<
     CompareProduct,
     'sourceMarketplace' | 'comparedAt' | 'marketplaceUrls' | 'marketplaceOffers'
@@ -96,7 +99,21 @@ describe('compareProductNeedsClientRefresh (MEGA-6 / ALI-6)', () => {
     ).toBe(true);
   });
 
-  it('always refreshes Mega/Ali source card', () => {
+  it('always refreshes when M.Video is bound', () => {
+    expect(
+      compareProductNeedsClientRefresh(
+        {
+          ...base,
+          marketplaceUrls: {
+            mvideo: 'https://www.mvideo.ru/products/smartfon-30066712',
+          },
+        },
+        { serverMonitoringActive: true, now: NOW },
+      ),
+    ).toBe(true);
+  });
+
+  it('always refreshes Mega/Ali/M.Video source card', () => {
     expect(
       compareProductNeedsClientRefresh(
         { ...base, sourceMarketplace: 'megamarket' },
@@ -106,6 +123,12 @@ describe('compareProductNeedsClientRefresh (MEGA-6 / ALI-6)', () => {
     expect(
       compareProductNeedsClientRefresh(
         { ...base, sourceMarketplace: 'aliexpress' },
+        { serverMonitoringActive: true, now: NOW },
+      ),
+    ).toBe(true);
+    expect(
+      compareProductNeedsClientRefresh(
+        { ...base, sourceMarketplace: 'mvideo' },
         { serverMonitoringActive: true, now: NOW },
       ),
     ).toBe(true);

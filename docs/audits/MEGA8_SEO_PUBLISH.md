@@ -16,7 +16,19 @@
 
 - Migration applied on prod (`ihlfvpocwobvcpxbypsd`) as `megamarket_seo_publish`.
 - Deployed: `seo-publish`, `seo-refresh-offers` (both pick up Mega allowlist + product-id).
+- 2026-08-27 volume addendum: redeployed `seo-publish` + `product-intel` (webOverview compose + prompt).
 
 ## Ops note
 
-Do **not** expect a flood of Mega SEO pages: MEGA-7 reviews SKIP → most Mega analyses need long `webOverview` to pass gates. Rejected/draft rows are expected until content quality is real.
+Do **not** expect a flood of Mega SEO pages: MEGA-7 reviews remain **SKIP** (antibot) → almost always `reviewCount < SEO_MIN_REVIEWS` → need `webOverview` ≥ `SEO_MIN_WEB_OVERVIEW_LEN`. Rejected/draft rows are expected until content quality is real. No fake `reviewCount`.
+
+## Addendum — volume strategy (webOverview, 2026-08-27)
+
+Same path as ALI-8 addendum (`docs/audits/ALI8_SEO_PUBLISH.md`):
+
+1. Prompt asks for ≥80-char synthesis `webOverview` without inventing web reviews.
+2. Client normalize pads short overview from analysis fields.
+3. `seo-publish-run` enriches `webOverview` before gates (compose from qualitySummary / verdict / pros / cons / keySpecs / category axes).
+4. Gates / allowlist unchanged — Mega stays publishAllowed; mvideo/dns/… stay off; no product Telegram; no Scrappey reviews for SEO fill.
+
+**Expect:** Mega volume grows only when cloud analysis already has non-thin content; SKIP reviews alone does not invent publishable pages.

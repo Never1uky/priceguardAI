@@ -48,4 +48,14 @@ describe('monitoring-key', () => {
       }),
     ).toBeNull();
   });
+
+  it('mvideo is not a monitoring key (MVIDEO-6 / no Telegram)', () => {
+    expect(
+      resolveMonitoringKey({
+        marketplace: 'mvideo',
+        productId: '30066712',
+        productUrl: 'https://www.mvideo.ru/products/smartfon-30066712',
+      }),
+    ).toBeNull();
+  });
 });

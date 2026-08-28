@@ -19,6 +19,7 @@ import {
   pickSeoImageUrl,
   sanitizeSeoProductTitle,
 } from './seo-gates.ts';
+import { enrichAnalysisWebOverviewForSeo } from './seo-web-overview.ts';
 import {
   brandOrCategorySlug,
   buildSeoProductSlug,
@@ -162,8 +163,23 @@ export async function runSeoPublish(
   const qualityScore = normalizeQualityScoreForSeo(
     typeof analysis.qualityScore === 'number' ? analysis.qualityScore : null,
   );
+  const categoryGuess = inferSeoCategoryFromTitle(cache.title ?? '');
+  const enriched = enrichAnalysisWebOverviewForSeo(
+    {
+      webOverview: (analysis.webOverview as string) ?? '',
+      qualitySummary: (analysis.qualitySummary as string) ?? '',
+      verdictExplanation: (analysis.verdictExplanation as string) ?? '',
+      priceInsight: (analysis.priceInsight as string) ?? '',
+      pros: analysis.pros,
+      cons: analysis.cons,
+      keySpecs: analysis.keySpecs,
+      focusNotes: analysis.focusNotes as string | undefined,
+    },
+    { categorySlug: categoryGuess?.slug ?? null },
+  );
   const analysisForStore: Record<string, unknown> = {
     ...analysis,
+    webOverview: enriched.webOverview,
     ...(qualityScore != null ? { qualityScore } : {}),
   };
 
@@ -174,7 +190,7 @@ export async function runSeoPublish(
       verdictExplanation: analysis.verdictExplanation as string,
       verdict: analysis.verdict as string,
       fakeRisk: analysis.fakeRisk as string,
-      webOverview: (analysis.webOverview as string) ?? '',
+      webOverview: enriched.webOverview,
       source: (analysis.source as string) ?? '',
       pros: analysis.pros,
       cons: analysis.cons,

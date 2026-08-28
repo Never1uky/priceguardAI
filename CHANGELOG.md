@@ -4,6 +4,20 @@
 
 ---
 
+## Unreleased — M.Video MVIDEO-1…MVIDEO-9 (READY)
+
+- MVIDEO-1: dedicated M.Video card + SERP parsers; dual-host canonical; OOS (`MVIDEO1_CARD_SERP.md`).
+- MVIDEO-2: M.Video **on by default** in «Где искать»; Telegram/monitoring still OFF (`MVIDEO2_DEFAULT_ON.md`).
+- MVIDEO-3: Premium Scrappey unlocker **card-only** for M.Video (`MVIDEO3_COST_RFC_UNLOCKER.md`).
+- MVIDEO-4: shared `price_scrape_cache` for M.Video (`MVIDEO4_PRICE_SCRAPE_CACHE_DEPLOY.md`).
+- MVIDEO-5: Edge `compare-research` includes M.Video (HTML SERP; Scrappey verify OFF) (`MVIDEO5_COMPARE_RESEARCH_DEPLOY.md`).
+- MVIDEO-6: `mv-` identity, tracked CHECK/sync, client refresh, no Telegram alerts (`MVIDEO6_CLIENT_TRACKED.md`).
+- MVIDEO-7: reviews feasibility **SKIP** — `capabilities.reviews` stays false (`MVIDEO7_REVIEWS_FEASIBILITY.md`).
+- MVIDEO-8: SEO `publishAllowed` + `offersAllowed` for M.Video; DB CHECK (`MVIDEO8_SEO_PUBLISH.md`).
+- MVIDEO-9: verdict **READY**; regression pack `npm run test:mvideo` + `mvideo-core-parity.regression.test.ts` (`MVIDEO_FULL_INTEGRATION_NO_TELEGRAM.md`).
+
+---
+
 ## Unreleased — AliExpress ALI-1…ALI-9 (READY)
 
 - ALI-1: dedicated Ali card + SERP parsers; junk filter parity with Mega (`ALI1_CARD_SERP.md`).

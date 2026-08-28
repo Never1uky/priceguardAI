@@ -59,6 +59,14 @@ const OZON_REVIEW_SELECTORS = [
   'div[data-review-uuid]',
 ];
 
+/** AliExpress.ru card — live 2026-08-27: RedReviews* clamped text (no Scrappey). */
+const ALI_REVIEW_SELECTORS = [
+  '[class*="RedReviewsProductFeedbackList_ReviewContent__clampedText"]',
+  '[class*="RedReviewsProductFeedbackList_ReviewContent__"]',
+  '[class*="red-review-item-components_Container__container"]',
+  '[class*="RedReviewsProductFeedbackList_ReviewListItem__wrapper"]',
+];
+
 const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
 function inferRating(text: string): number {
@@ -153,6 +161,7 @@ const REVIEW_SECTION_ANCHORS = [
   '[data-zone-name="reviews"]',
   '[data-auto="reviews"]',
   '[data-auto="review-list"]',
+  '[class*="RedReviewsProductFeedbackList"]',
   'a[href*="/feedbacks"]',
   'a[href*="/reviews"]',
   'a[href*="comments"]',
@@ -281,6 +290,24 @@ function scrapeYandexReviewsFromJson(): ScrapedReview[] {
   return results;
 }
 
+async function openAliExpressReviewsSection(allowNavigation: boolean): Promise<void> {
+  if (!allowNavigation) return;
+
+  const onReviewsPage = /\/reviews(?:\/|$|\?)/i.test(window.location.pathname);
+  if (!onReviewsPage) {
+    const link = document.querySelector<HTMLElement>(
+      'a[href*="/reviews"], a[href$="/reviews"]',
+    );
+    if (link) {
+      link.click();
+      await delay(2_000);
+    }
+  }
+
+  scrollToReviewsSection();
+  await delay(onReviewsPage ? 800 : 2_000);
+}
+
 async function openWildberriesReviewsSection(allowNavigation: boolean): Promise<void> {
   if (!allowNavigation) return;
 
@@ -371,6 +398,14 @@ export async function scrapeReviews(
         return merged;
       },
       4,
+    );
+  } else if (marketplace === 'aliexpress') {
+    // Tab DOM only — no Scrappey / no HiddenBrowser (antibot). Prefer open card.
+    await openAliExpressReviewsSection(allowNavigation);
+    allReviews = await waitForMoreReviews(
+      allowNavigation,
+      () => scrapeReviewsFromDom(ALI_REVIEW_SELECTORS),
+      3,
     );
   }
 

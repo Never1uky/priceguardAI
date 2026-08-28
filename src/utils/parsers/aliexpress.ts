@@ -240,6 +240,106 @@ function parseArticleFromDom(url: string): string {
   return plausibleAliArticle(meta) || '';
 }
 
+/** Shipping / courier fee context — must not win over «цена сейчас». */
+const ALI_SHIPPING_CTX =
+  /доставк|курьер|пункт\s*выдач|почт(ой|а|ью|ой)|shipping|freight|logistic|delivery|стоимость\s*доставк/i;
+
+const ALI_DELIVERY_CLOSEST =
+  '[class*="deliver" i], [class*="shipping" i], [class*="logistic" i], [class*="freight" i], [data-spm*="ship" i], [data-spm*="logistics" i]';
+
+export function isAliShippingPriceContext(raw: string): boolean {
+  return ALI_SHIPPING_CTX.test(raw);
+}
+
+/**
+ * Drop courier fees when a product-price cluster exists.
+ * 637₽ mail vs 1999₽ dummy, 280₽ courier vs 16489₽ phone → keep retail cluster.
+ */
+export function filterAliProductPrices(candidates: number[]): number[] {
+  const nums = [
+    ...new Set(
+      candidates
+        .filter((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)
+        .map((n) => Math.round(n)),
+    ),
+  ].sort((a, b) => a - b);
+  if (nums.length <= 1) return nums;
+  const max = nums[nums.length - 1]!;
+  if (max < 1_000) return nums;
+  // Mid retail (1–5k): shipping often 30–40% of price → need ~0.4 floor.
+  // High retail (5k+): shipping is tiny → 0.12 floor enough.
+  const floor =
+    max >= 5_000
+      ? Math.max(500, Math.floor(max * 0.12))
+      : Math.max(400, Math.floor(max * 0.4));
+  const kept = nums.filter((n) => n >= floor);
+  return kept.length ? kept : nums;
+}
+
+/** Prefer product price over shipping: filter then lowest retail (sale vs strike). */
+export function pickAliExpressCardPrice(
+  candidates: Array<number | null | undefined>,
+): number | null {
+  const filtered = filterAliProductPrices(
+    candidates.filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0),
+  );
+  return pickBestCardPrice(filtered);
+}
+
+/** «16 489 ₽» immediately above «цена сейчас» on AE.ru cards. */
+export function parseAliPriceNowFromText(raw: string): number | null {
+  const m =
+    raw.match(/(\d[\d\s\u00a0]{2,})\s*₽\s*цена\s*сейчас/i) ||
+    raw.match(/цена\s*сейчас\s*(\d[\d\s\u00a0]{2,})\s*₽/i);
+  if (!m?.[1]) return null;
+  return parseRub(m[1]);
+}
+
+const ALI_LD_RETAIL_FLOOR = 500;
+
+/**
+ * Resolve final card price: цена сейчас → LD (if DOM is a fee) → filtered DOM.
+ * Optional referencePrice: if picked price ≪ ref but page has цена сейчас / LD, prefer those.
+ */
+export function resolveAliExpressProductPrice(input: {
+  priceNow?: number | null;
+  ldPrice?: number | null;
+  domPrice?: number | null;
+  referencePrice?: number | null;
+}): number | null {
+  const priceNow = input.priceNow != null && input.priceNow >= 100 ? Math.round(input.priceNow) : null;
+  const ld =
+    input.ldPrice != null && input.ldPrice >= ALI_LD_RETAIL_FLOOR
+      ? Math.round(input.ldPrice)
+      : null;
+  const dom = input.domPrice != null && input.domPrice > 0 ? Math.round(input.domPrice) : null;
+  const ref =
+    input.referencePrice != null && input.referencePrice > 0
+      ? Math.round(input.referencePrice)
+      : null;
+
+  // DOM fee must not beat structured LD (280 vs 16489).
+  let picked: number | null = null;
+  if (priceNow != null) {
+    picked = priceNow;
+  } else if (ld != null && (dom == null || dom < ld * 0.15)) {
+    picked = ld;
+  } else {
+    picked = pickAliExpressCardPrice([ld, dom, priceNow]);
+  }
+
+  if (ref != null && picked != null && picked < ref * 0.15) {
+    if (priceNow != null && priceNow >= ref * 0.15) return priceNow;
+    if (ld != null && ld >= ref * 0.15) return ld;
+  }
+  return picked;
+}
+
+function isInsideAliDeliveryBlock(el: Element): boolean {
+  // Semantic delivery containers only — do not use body/sidebar text (mixes price + shipping).
+  return Boolean(el.closest?.(ALI_DELIVERY_CLOSEST));
+}
+
 function collectDomPriceCandidates(): number[] {
   const out: number[] = [];
   const selectors = [
@@ -253,11 +353,22 @@ function collectDomPriceCandidates(): number[] {
   for (const sel of selectors) {
     for (const el of document.querySelectorAll(sel)) {
       if (sel.includes('class*') && (el.textContent?.length ?? 0) > 120) continue;
+      if (isInsideAliDeliveryBlock(el)) continue;
+      // Only self / class hints — not ancestor sidebar text (mixes price + «почтой»).
+      const selfText = text(el);
+      const cls = `${el.getAttribute('class') ?? ''} ${el.getAttribute('data-spm') ?? ''}`;
+      if (
+        (isAliShippingPriceContext(selfText) || isAliShippingPriceContext(cls)) &&
+        !/цена\s*сейчас/i.test(selfText)
+      ) {
+        continue;
+      }
       const content =
         el.getAttribute('content') ||
         el.getAttribute('data-price') ||
         el.getAttribute('value') ||
-        text(el);
+        selfText;
+      if (/курьер|почт|доставк/i.test(content) && !/цена\s*сейчас/i.test(content)) continue;
       const price = parseRub(content);
       if (price != null && price > 0) out.push(price);
     }
@@ -265,10 +376,10 @@ function collectDomPriceCandidates(): number[] {
   return out;
 }
 
+/** DOM prices only — never raw body.innerText (shipping fees live there). */
 function parsePriceFromDom(): number | null {
   const structured = collectDomPriceCandidates();
-  const bodyPrice = parseRub(document.body?.innerText?.slice(0, 3500) ?? '');
-  return pickBestCardPrice([...structured, bodyPrice]);
+  return pickAliExpressCardPrice(structured);
 }
 
 function parseTitleFromDom(): string {
@@ -325,7 +436,7 @@ function mergeLd(primary: LdProduct | null, secondary: LdProduct | null): LdProd
   };
 }
 
-export function parseAliExpressProduct(): Product | null {
+export function parseAliExpressProduct(opts?: { referencePrice?: number }): Product | null {
   const url = toCanonicalProductUrl(window.location.href, 'aliexpress');
   if (!/\/item\/\d+/i.test(url)) return null;
 
@@ -334,7 +445,16 @@ export function parseAliExpressProduct(): Product | null {
   if (!rawTitle || rawTitle.length < 2) return null;
   const title = titleWithBrand(rawTitle, ld?.brand);
 
-  const price = pickBestCardPrice([ld?.price, parsePriceFromDom()]) ?? 0;
+  const bodySnippet = document.body?.innerText?.slice(0, 8_000) ?? '';
+  const priceNow = parseAliPriceNowFromText(bodySnippet);
+  const domPrice = parsePriceFromDom();
+  const price =
+    resolveAliExpressProductPrice({
+      priceNow,
+      ldPrice: ld?.price,
+      domPrice,
+      referencePrice: opts?.referencePrice,
+    }) ?? 0;
   const oos = Boolean(ld?.outOfStock) || (price <= 0 && isOutOfStock());
   const article =
     plausibleAliArticle(ld?.sku) || parseArticleFromDom(url) || plausibleAliArticle(url) || '';

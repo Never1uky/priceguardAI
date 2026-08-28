@@ -328,6 +328,7 @@ describe('megamarket matching / cache / defaults / unlocker', () => {
       'yandex_market',
       'megamarket',
       'aliexpress',
+      'mvideo',
     ]);
     expect(isPremiumUnlockerMarketplace('megamarket')).toBe(true);
     expect(isPremiumUnlockerMarketplace('lamoda')).toBe(false);

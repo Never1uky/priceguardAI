@@ -35,6 +35,7 @@ const COMPARE_RESEARCH_VALID = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ] as const;
 
 describe('MEGA-9 CORE-parity matrix (no Telegram)', () => {
@@ -64,7 +65,7 @@ describe('MEGA-9 CORE-parity matrix (no Telegram)', () => {
   });
 
   describe('SERP / compare / research', () => {
-    it('defaults «Где искать» include Mega + Ali with CORE trio', () => {
+    it('defaults «Где искать» include Mega + Ali + M.Video with CORE trio', () => {
       expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toEqual(
         expect.arrayContaining([
           'wildberries',
@@ -72,9 +73,10 @@ describe('MEGA-9 CORE-parity matrix (no Telegram)', () => {
           'yandex_market',
           'megamarket',
           'aliexpress',
+          'mvideo',
         ]),
       );
-      expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toHaveLength(5);
+      expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toHaveLength(6);
     });
 
     it('Premium unlocker allowlist includes Mega (card-only Scrappey path)', () => {

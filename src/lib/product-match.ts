@@ -6,12 +6,13 @@ import {
   inferProductCategory,
   shouldIgnoreSizeMismatch,
   shouldPenalizeStorageMismatch,
+  shouldRejectAccessoryVsPrimaryDevice,
   isSoftFeature,
   SOFT_MODEL_MATCH_CATEGORIES,
   type ProductCategory,
 } from '@/lib/match-category';
 import { areEntityRolesIncompatible } from '@/lib/entity-extract';
-import { extractScentVariant, storageCompatible } from '@/lib/attr-normalize';
+import { extractScentVariant, isCopyLikeAuthenticity, storageCompatible } from '@/lib/attr-normalize';
 import { areBrandsCompatible, extractProductModel, variantMismatchPenalty } from '@/lib/model-extract';
 import {
   areLineageGenerationsCompatible,
@@ -63,6 +64,45 @@ export const DEFAULT_MAX_PRICE_RATIO = 1.3;
 export const ELECTRONICS_MAX_PRICE_RATIO = 1.35;
 
 /**
+ * Ali/Mega SERP: allow ~30%+ cheaper cross-border deals (ratio 2.0),
+ * still drop dummy 2k vs phone 12k (ratio 6).
+ */
+export const ALI_MEGA_SERP_MAX_PRICE_RATIO = 2;
+/** Post-card: reject verified if card price &lt; 20% of source (dummy / fee leak). */
+export const ALI_MEGA_CARD_MIN_FRACTION_OF_REF = 0.2;
+
+export function isAliMegaMarketplace(marketplace: string): boolean {
+  // Tab SERP junk / price-outlier gates (Mega, Ali, M.Video)
+  return (
+    marketplace === 'megamarket' ||
+    marketplace === 'aliexpress' ||
+    marketplace === 'mvideo'
+  );
+}
+
+/** Both prices known and ratio exceeds Ali/Mega SERP allowance. */
+export function isAliMegaSerpPriceOutlier(
+  referencePrice: number | undefined | null,
+  candidatePrice: number | null | undefined,
+  maxRatio = ALI_MEGA_SERP_MAX_PRICE_RATIO,
+): boolean {
+  if (referencePrice == null || referencePrice <= 0) return false;
+  if (candidatePrice == null || candidatePrice <= 0) return false;
+  return !arePricesCompatible(referencePrice, candidatePrice, maxRatio);
+}
+
+/** Card price absurdly low vs source reference. */
+export function isAliMegaCardPriceTooCheap(
+  referencePrice: number | undefined | null,
+  cardPrice: number | null | undefined,
+  minFraction = ALI_MEGA_CARD_MIN_FRACTION_OF_REF,
+): boolean {
+  if (referencePrice == null || referencePrice <= 0) return false;
+  if (cardPrice == null || cardPrice <= 0) return false;
+  return cardPrice < referencePrice * minFraction;
+}
+
+/**
  * UI warning kinds (не auto-pick). Не меняет MIN_COMPARE / AUTO_PICK.
  * - category: hard incompatible OR generic↔specific with weak signal
  * - confidence: low confidence AND low title similarity (not near-identical titles)
@@ -80,6 +120,24 @@ function isAuthenticityHardConflict(refValue: string, candValue: string): boolea
   if (originalLike.has(ref) && copyLike.has(cand)) return true;
   if (copyLike.has(ref) && originalLike.has(cand)) return true;
   return false;
+}
+
+/**
+ * Asymmetric: dummy/replica candidate must not match a real primary device
+ * even when the reference title has no explicit «оригинал».
+ * Skip when ref itself is copy-like or accessories (cases / props search).
+ * Uses replica/analog only — not «compatible» (noisy in device titles).
+ */
+function shouldRejectReplicaCandidate(params: {
+  refAuthenticity?: string;
+  candAuthenticity?: string;
+  refCategory: ProductCategory;
+}): boolean {
+  const cand = params.candAuthenticity?.toLowerCase();
+  if (cand !== 'replica' && cand !== 'analog') return false;
+  if (isCopyLikeAuthenticity(params.refAuthenticity)) return false;
+  if (params.refCategory === 'accessories') return false;
+  return true;
 }
 
 function isRegionHardConflict(refValue: string, candValue: string): boolean {
@@ -457,6 +515,12 @@ export function scoreProductMatch(
   if (areCategoriesIncompatible(earlyCategory, candidateCategory)) {
     return 0;
   }
+  // Asymmetric: EN/RU accessory SKU vs primary device (Ali wholesale common fail)
+  if (
+    shouldRejectAccessoryVsPrimaryDevice(referenceTitle, candidateTitle, earlyCategory)
+  ) {
+    return 0;
+  }
   // Role-relation hard block (accessory/consumable ↔ host primary, same family)
   if (areEntityRolesIncompatible(referenceTitle, candidateTitle, referenceSpecs)) {
     return 0;
@@ -548,6 +612,16 @@ export function scoreProductMatch(
     refFeatures.authenticity &&
     candFeatures.authenticity &&
     isAuthenticityHardConflict(refFeatures.authenticity, candFeatures.authenticity)
+  ) {
+    return 0;
+  }
+  // Asymmetric: муляж/реплика vs real phone (ref often has no «оригинал» marker).
+  if (
+    shouldRejectReplicaCandidate({
+      refAuthenticity: refFeatures.authenticity,
+      candAuthenticity: candFeatures.authenticity,
+      refCategory: earlyCategory,
+    })
   ) {
     return 0;
   }

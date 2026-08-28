@@ -70,8 +70,8 @@ export const SEO_MARKETPLACES: readonly SeoMarketplaceEntry[] = [
     shortSlug: 'mvideo',
     label: 'М.Видео',
     titleStripAliases: ['mvideo', 'м.видео', 'мвидео', 'eldorado', 'эльдорадо'],
-    publishAllowed: false,
-    offersAllowed: false,
+    publishAllowed: true,
+    offersAllowed: true,
     hostSuffixes: ['mvideo.ru', 'eldorado.ru'],
   },
   {

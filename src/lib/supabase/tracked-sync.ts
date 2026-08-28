@@ -40,7 +40,7 @@ interface RemoteTrackedRow {
   updated_at?: string;
 }
 
-/** Локальный id как у content-парсеров: wb- / ozon- / yandex- / mm- / ae- */
+/** Локальный id как у content-парсеров: wb- / ozon- / yandex- / mm- / ae- / mv- */
 export function localTrackedProductId(marketplace: Marketplace, productId: string): string {
   return prefixedStorageId(marketplace, productId);
 }
@@ -76,6 +76,10 @@ export function reconstructTrackedProductUrl(
   if (marketplace === 'aliexpress') {
     const id = productId.replace(/\D/g, '') || productId;
     return toCanonicalProductUrl(`https://aliexpress.ru/item/${id}.html`, 'aliexpress');
+  }
+  if (marketplace === 'mvideo') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return toCanonicalProductUrl(`https://www.mvideo.ru/products/${id}`, 'mvideo');
   }
   return reconstructYmUrl(productId, productUrl);
 }

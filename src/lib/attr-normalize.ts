@@ -411,8 +411,27 @@ const AUTHENTICITY_ALIASES: Array<{ re: RegExp; value: AuthenticityType }> = [
   { re: /\b(?:oem)\b/i, value: 'oem' },
   { re: /(?:compatible|совместим[а-яёa-z]*|compatible[\s\-]?copy)/i, value: 'compatible' },
   { re: /(?:analog|аналог[а-яёa-z]*)/i, value: 'analog' },
+  // Dummies / photo props / non-functional models (Ali-heavy) → replica
+  {
+    re: /муляж|имитац[а-яёa-z]*|реквизит|нефункционал[а-яёa-z]*|не\s*рабоч[а-яёa-z]*|игрушк[а-яёa-z]*|\bdummy\b|\bmockup\b|display\s*model|\bprops?\b/i,
+    value: 'replica',
+  },
   { re: /(?:replica|реплик[а-яёa-z]*|копия)/i, value: 'replica' },
 ];
+
+const COPY_LIKE_AUTHENTICITY = new Set<AuthenticityType>(['replica', 'analog', 'compatible']);
+
+export function isCopyLikeAuthenticity(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return COPY_LIKE_AUTHENTICITY.has(value.toLowerCase() as AuthenticityType);
+}
+
+/** Title marks a dummy / replica / non-functional prop (not a working primary device). */
+export function isNonFunctionalReplicaTitle(title: string, specs?: string): boolean {
+  const a = extractNormalizedAuthenticity(title, specs);
+  // «compatible» is too noisy in device titles («совместим с 5G») — asymmetric gate uses replica/analog only.
+  return a === 'replica' || a === 'analog';
+}
 
 export function normalizeAuthenticity(raw: string | null | undefined): AuthenticityType | undefined {
   if (!raw) return undefined;

@@ -16,15 +16,16 @@ describe('seo-marketplaces allowlist', () => {
     expect(new Set(shorts).size).toBe(shorts.length);
   });
 
-  it('publishable + offers include CORE trio + megamarket + aliexpress (MEGA-8 / ALI-8)', () => {
+  it('publishable + offers include CORE trio + megamarket + aliexpress + mvideo (MEGA-8 / ALI-8 / MVIDEO-8)', () => {
     expect(seoPublishableIds().sort()).toEqual(
-      ['aliexpress', 'megamarket', 'ozon', 'wildberries', 'yandex_market'].sort(),
+      ['aliexpress', 'megamarket', 'mvideo', 'ozon', 'wildberries', 'yandex_market'].sort(),
     );
     expect(seoOffersIds().sort()).toEqual(
-      ['aliexpress', 'megamarket', 'ozon', 'wildberries', 'yandex_market'].sort(),
+      ['aliexpress', 'megamarket', 'mvideo', 'ozon', 'wildberries', 'yandex_market'].sort(),
     );
     expect(isSeoPublishableMp('megamarket')).toBe(true);
     expect(isSeoPublishableMp('aliexpress')).toBe(true);
+    expect(isSeoPublishableMp('mvideo')).toBe(true);
     expect(isSeoPublishableMp('lamoda')).toBe(false);
     expect(isSeoPublishableMp('wildberries')).toBe(true);
   });
@@ -44,7 +45,7 @@ describe('seo-marketplaces allowlist', () => {
 });
 
 describe('seo slug collision with new shorts', () => {
-  it('fallback slug uses mm/ae for Mega/Ali', () => {
+  it('fallback slug uses mm/ae/mvideo for Mega/Ali/M.Video', () => {
     expect(
       buildSeoProductSlug({
         marketplace: 'megamarket',
@@ -57,17 +58,25 @@ describe('seo slug collision with new shorts', () => {
         productId: '1005001234567890',
       }),
     ).toBe('ae-1005001234567890');
+    expect(
+      buildSeoProductSlug({
+        marketplace: 'mvideo',
+        productId: '30066712',
+      }),
+    ).toBe('mvideo-30066712');
   });
 
-  it('collision append distinguishes wb vs mm vs ae', () => {
+  it('collision append distinguishes wb vs mm vs ae vs mvideo', () => {
     const base = 'samsung-galaxy';
     const wb = resolveSeoSlugCollision(base, true, 'wildberries', '111', 0);
     const mm = resolveSeoSlugCollision(base, true, 'megamarket', '222', 0);
     const ae = resolveSeoSlugCollision(base, true, 'aliexpress', '333', 0);
+    const mv = resolveSeoSlugCollision(base, true, 'mvideo', '444', 0);
     expect(wb).toBe('samsung-galaxy-wb');
     expect(mm).toBe('samsung-galaxy-mm');
     expect(ae).toBe('samsung-galaxy-ae');
-    expect(new Set([wb, mm, ae]).size).toBe(3);
+    expect(mv).toBe('samsung-galaxy-mvideo');
+    expect(new Set([wb, mm, ae, mv]).size).toBe(4);
   });
 });
 

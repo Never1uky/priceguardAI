@@ -13,6 +13,7 @@ import {
   buildMatchProfiles,
   inferCategoryFromPlugins,
   areCategoriesIncompatible as areCategoriesIncompatibleImpl,
+  shouldRejectAccessoryVsPrimaryDevice,
 } from '@/lib/category-plugins';
 import { areEntityRolesIncompatible } from '@/lib/entity-extract';
 
@@ -24,6 +25,8 @@ export {
   cameraBodyMismatchPenalty,
   getCategoryMismatchPenalty,
   getCategoryPlugin,
+  hasAccessorySkuMarker,
+  shouldRejectAccessoryVsPrimaryDevice,
   stripQueryNoiseForCategory,
   type CategoryPlugin,
 } from '@/lib/category-plugins';
@@ -111,6 +114,9 @@ export function isTitleCategoryCompatible(
   const a = inferProductCategory(referenceTitle, referenceSpecs);
   const b = inferProductCategory(candidateTitle);
   if (areCategoriesIncompatibleImpl(a, b)) return false;
+  if (shouldRejectAccessoryVsPrimaryDevice(referenceTitle, candidateTitle, a)) {
+    return false;
+  }
   if (areEntityRolesIncompatible(referenceTitle, candidateTitle, referenceSpecs)) {
     return false;
   }

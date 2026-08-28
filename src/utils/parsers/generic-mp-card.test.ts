@@ -33,14 +33,14 @@ describe('generic-mp image/price helpers', () => {
     expect(normalizeImageCandidate(logo)).toBeNull();
   });
 
-  it('parses og:image //cdn and JSON-LD price over body junk', () => {
+  it('parses og:image //cdn and JSON-LD price over body junk (dns generic)', () => {
     document.documentElement.innerHTML = `
       <html><head>
         <meta property="og:image" content="//a.lmcdn.ru/img/product.jpg" />
         <script type="application/ld+json">${JSON.stringify({
           '@type': 'Product',
           name: 'Смартфон Xiaomi REDMI Note 15',
-          image: ['//cdn.mvideo.ru/big.jpg', 'https://cdn.mvideo.ru/big2.jpg'],
+          image: ['//cdn.dns-shop.ru/big.jpg'],
           offers: { '@type': 'Offer', price: '24990', priceCurrency: 'RUB' },
           sku: '400522544',
         })}</script>
@@ -50,12 +50,11 @@ describe('generic-mp image/price helpers', () => {
         <div>Бонусы 6 ₽</div>
       </body></html>
     `;
-    // Fake mvideo product URL for isProductPage
     Object.defineProperty(window, 'location', {
-      value: new URL('https://www.mvideo.ru/products/smartfon-xiaomi-400522544'),
+      value: new URL('https://www.dns-shop.ru/product/abcdef123'),
       writable: true,
     });
-    const product = parseGenericMarketplaceProduct('mvideo');
+    const product = parseGenericMarketplaceProduct('dns');
     expect(product).not.toBeNull();
     expect(product!.price).toBe(24990);
     expect(product!.imageUrl).toMatch(/^https:\/\//);

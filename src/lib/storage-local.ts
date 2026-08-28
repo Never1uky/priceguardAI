@@ -165,10 +165,12 @@ export async function updateTrackedProductPrice(product: Product): Promise<Price
       ...product,
       id: item.id.startsWith('yandex_market-')
         ? item.id.replace(/^yandex_market-/, 'yandex-')
-        : item.id.startsWith('yandex-') ||
+        :             item.id.startsWith('yandex-') ||
             item.id.startsWith('ozon-') ||
             item.id.startsWith('wb-') ||
-            item.id.startsWith('mm-')
+            item.id.startsWith('mm-') ||
+            item.id.startsWith('ae-') ||
+            item.id.startsWith('mv-')
           ? item.id
           : stableId,
       article: identity.article || product.article || item.article,

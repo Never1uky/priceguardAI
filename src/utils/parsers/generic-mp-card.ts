@@ -115,14 +115,9 @@ function parseJsonLdProduct(): {
   return null;
 }
 
-function collectDomPriceCandidates(marketplace?: Marketplace): number[] {
+function collectDomPriceCandidates(): number[] {
   const out: number[] = [];
-  const preferred =
-    marketplace === 'mvideo'
-      ? ['.price__main-value', '.price__sale-value', '[class*="price__main"]']
-      : [];
   const selectors = [
-    ...preferred,
     '[itemprop="price"]',
     'meta[itemprop="price"]',
     'meta[property="product:price:amount"]',
@@ -133,14 +128,6 @@ function collectDomPriceCandidates(marketplace?: Marketplace): number[] {
   ];
   for (const sel of selectors) {
     for (const el of document.querySelectorAll(sel)) {
-      // Prefer leaf price nodes: skip huge wrappers for mvideo after preferred hits
-      if (
-        marketplace === 'mvideo' &&
-        sel.includes('class*="price"') &&
-        (el.textContent?.length ?? 0) > 80
-      ) {
-        continue;
-      }
       const content =
         el.getAttribute('content') ||
         el.getAttribute('data-price') ||
@@ -148,10 +135,6 @@ function collectDomPriceCandidates(marketplace?: Marketplace): number[] {
         text(el);
       const price = parseRub(content);
       if (price != null && price > 0) out.push(price);
-      // Early exit: trusted main value
-      if (marketplace === 'mvideo' && sel === '.price__main-value' && price != null && price >= 100) {
-        return [price];
-      }
     }
   }
   return out;
@@ -174,11 +157,8 @@ export function pickBestCardPrice(candidates: Array<number | null | undefined>):
   return aboveFloor[0]!;
 }
 
-function parsePriceFromDom(marketplace: Marketplace): number | null {
-  const structured = collectDomPriceCandidates(marketplace);
-  if (marketplace === 'mvideo') {
-    return pickBestCardPrice(structured);
-  }
+function parsePriceFromDom(_marketplace: Marketplace): number | null {
+  const structured = collectDomPriceCandidates();
   const bodyPrice = parseRub(document.body?.innerText?.slice(0, 2500) ?? '');
   return pickBestCardPrice([...structured, bodyPrice]);
 }

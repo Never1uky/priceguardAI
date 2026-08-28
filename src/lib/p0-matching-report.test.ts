@@ -55,6 +55,34 @@ describe('P0 matching-report golden pairs', () => {
     expect(scoreProductMatch(ref, cand, undefined, 'accessories')).toBe(0);
   });
 
+  it('asymmetric: real phone vs муляж/имитация/реквизит → score 0 (no «оригинал» on ref)', () => {
+    const ref = 'Смартфон Xiaomi Redmi 15C 8/256';
+    expect(
+      scoreProductMatch(
+        ref,
+        'Муляж телефона Samsung Galaxy Z Fold8 с нефункциональным дисплеем, реквизит для фотосъемки',
+      ),
+    ).toBe(0);
+    expect(scoreProductMatch(ref, 'Имитация смартфона Redmi 15C игрушка-копия')).toBe(0);
+    expect(scoreProductMatch(ref, 'Реквизит для фото Samsung Galaxy dummy phone')).toBe(0);
+  });
+
+  it('real Redmi vs compatible color/storage still matches', () => {
+    const score = scoreProductMatch(
+      'Смартфон Xiaomi Redmi 15C 8/256 ГБ черный',
+      'Смартфон Xiaomi Redmi 15C 8 ГБ/256ГБ синий',
+    );
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('CORE ozon-style titles still match without replica false positive', () => {
+    const score = scoreProductMatch(
+      'Смартфон Google Pixel 10 128GB',
+      'Смартфон Google Pixel 10 128 ГБ Indigo',
+    );
+    expect(score).toBeGreaterThan(0);
+  });
+
   it('global vs ru and esim-only vs physical sim are hard mismatches when explicit', () => {
     expect(
       scoreProductMatch('Apple iPhone 17 Global Version', 'Apple iPhone 17 RU Ростест', undefined, 'smartphones'),

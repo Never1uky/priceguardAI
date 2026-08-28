@@ -9,6 +9,7 @@ import {
   extractComparisonArticle,
   normalizeCompareUrl,
 } from '@/utils/comparison-url';
+import { getMarketplaceEntry } from '@/lib/marketplaces/registry';
 import { buildWildberriesUrl, detectMarketplace } from '@/utils/marketplace';
 import { toCanonicalProductUrl } from '@/utils/product-url';
 
@@ -36,7 +37,12 @@ export function classifyReviewInput(raw: string): ReviewInputKind {
 export function targetFromUrl(url: string): ResolvedReviewTarget {
   const marketplace = detectComparisonMarketplace(url) ?? detectMarketplace(url);
   if (!marketplace) {
-    throw new Error('Поддерживаются ссылки Wildberries, Ozon и Яндекс.Маркет');
+    throw new Error('Поддерживаются ссылки Wildberries, Ozon, Яндекс.Маркет и AliExpress');
+  }
+  if (getMarketplaceEntry(marketplace)?.capabilities.reviews !== true) {
+    throw new Error(
+      'Отзывы для этой площадки пока недоступны. Используйте ссылку WB, Ozon, Я.Маркет или AliExpress.',
+    );
   }
 
   const canonical = normalizeCompareUrl(url);
@@ -83,7 +89,7 @@ export async function resolveReviewTarget(
   if (kind === 'article') return targetFromWbArticle(trimmed);
 
   throw new Error(
-    'Поиск по модели отключён. Вставьте ссылку на карточку или артикул Wildberries.',
+    'Поиск по модели отключён. Вставьте ссылку на карточку (WB / Ozon / YM / AliExpress) или артикул Wildberries.',
   );
 }
 

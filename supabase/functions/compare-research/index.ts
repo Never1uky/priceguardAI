@@ -3,8 +3,9 @@
  * POST { title, sourceMarketplace, referencePrice?, sourceUrl?, targetMarketplaces? }
  * → { ok, results: { marketplace, candidates: [...] }[] }
  *
- * Scrappey top-1 verify: Premium only for CORE. Mega/Ali: OFF (card unlocker only, not research verify).
- * Targets: VALID (trio + megamarket + aliexpress) ∩ client targetMarketplaces (fallback = VALID \ source).
+ * Scrappey top-1 verify: Premium only for CORE. Mega/Ali/M.Video: OFF (card unlocker only).
+ * Targets: VALID (trio + megamarket + aliexpress + mvideo) ∩ client targetMarketplaces
+ * (fallback = VALID \ source).
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
@@ -13,6 +14,7 @@ import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import {
   extractAliExpressProductId,
   extractMegamarketProductId,
+  extractMvideoProductId,
   fetchMarketplacePriceDetailed,
 } from '../_shared/marketplace-prices.ts';
 import { projectScraperCredentials } from '../_shared/reviews-common.ts';
@@ -31,12 +33,13 @@ const VALID = COMPARE_RESEARCH_VALID;
 const SERVER_VERIFY_MIN_CONFIDENCE = 70;
 
 /**
- * MEGA-3 / ALI-3 approved = card unlocker only. Research Scrappey verify for Mega/Ali stays OFF
- * (tab-or-available SERP; client HiddenBrowser / card unlocker handle priced cards).
+ * MEGA-3 / ALI-3 / MVIDEO-3 approved = card unlocker only. Research Scrappey verify for
+ * Mega/Ali/M.Video stays OFF (tab-or-available SERP; client HiddenBrowser / card unlocker).
  * Set true only after an explicit cost RFC for research verify.
  */
 const MEGA_RESEARCH_SCRAPPEY_VERIFY = false;
 const ALI_RESEARCH_SCRAPPEY_VERIFY = false;
+const MVIDEO_RESEARCH_SCRAPPEY_VERIFY = false;
 
 interface Candidate extends SearchCandidate {
   serverVerified?: boolean;
@@ -70,6 +73,7 @@ function priceSanityOk(
 function productIdForVerify(mp: Marketplace, url: string): string {
   if (mp === 'megamarket') return extractMegamarketProductId(url);
   if (mp === 'aliexpress') return extractAliExpressProductId(url);
+  if (mp === 'mvideo') return extractMvideoProductId(url);
   return extractProductId(url, mp);
 }
 
@@ -84,6 +88,9 @@ async function verifyTopCandidate(
     return { ...candidate, serverVerified: false };
   }
   if (mp === 'aliexpress' && !ALI_RESEARCH_SCRAPPEY_VERIFY) {
+    return { ...candidate, serverVerified: false };
+  }
+  if (mp === 'mvideo' && !MVIDEO_RESEARCH_SCRAPPEY_VERIFY) {
     return { ...candidate, serverVerified: false };
   }
 
@@ -179,8 +186,8 @@ Deno.serve(async (req) => {
           return pa - pb;
         });
       }
-      // Mega/Ali: drop residual junk after sort (identity gate already in searcher)
-      if (mp === 'megamarket' || mp === 'aliexpress') {
+      // Mega/Ali/M.Video: drop residual junk after sort (identity gate already in searcher)
+      if (mp === 'megamarket' || mp === 'aliexpress' || mp === 'mvideo') {
         candidates = candidates.filter((c) => c.matchConfidence > 0);
       }
       const top = candidates.slice(0, 5);

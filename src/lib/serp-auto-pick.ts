@@ -9,6 +9,8 @@ import {
 } from '@/lib/match-status';
 import {
   AUTO_PICK_CONFIDENCE_THRESHOLD,
+  isAliMegaMarketplace,
+  isAliMegaSerpPriceOutlier,
   isCloseMatchTie,
   isProductPageUrl,
 } from '@/lib/product-match';
@@ -63,7 +65,16 @@ export function serpVerifiedFromCandidate(
 export function tryUnambiguousSerpVerified(
   marketplace: ComparisonMarketplace,
   ranked: SerpAutoPickCandidate[],
+  opts?: { referencePrice?: number },
 ): MarketplaceOffer | null {
   if (!isUnambiguousSerpTop(ranked)) return null;
-  return serpVerifiedFromCandidate(marketplace, ranked[0]!);
+  const best = ranked[0]!;
+  // Null price already blocked above; Ali/Mega also reject SERP price outliers vs source.
+  if (
+    isAliMegaMarketplace(marketplace) &&
+    isAliMegaSerpPriceOutlier(opts?.referencePrice, best.price)
+  ) {
+    return null;
+  }
+  return serpVerifiedFromCandidate(marketplace, best);
 }

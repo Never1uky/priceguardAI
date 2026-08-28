@@ -89,10 +89,11 @@ alternatives — только реальные модели; 0 лучше, че�
 
 Задача:
 1. Отзывы → qualityScore, pros/cons, fakeRisk, hiddenProblems, reviewThemes.
-2. Блок «Данные из интернета» (если есть) → webOverview + alternatives; иначе не выдумывай обзоры.
-3. Короткая рекомендация (verdict + explanation) — вывод отдельно от фактов отзывов.
-4. audienceFit / audienceAvoid — только если обосновано данными.
-5. priceInsight — одна фраза без прогноза будущей цены.
+2. Блок «Данные из интернета» (если есть) → webOverview + alternatives.
+3. Если веб-блока нет: всё равно заполни webOverview 2–4 предложениями (≥80 символов) как синтез из отзывов, названия и осей категории — без выдуманных «обзоров из сети» и без фейковых цитат.
+4. Короткая рекомендация (verdict + explanation) — вывод отдельно от фактов отзывов.
+5. audienceFit / audienceAvoid — только если обосновано данными.
+6. priceInsight — одна фраза без прогноза будущей цены.
 
 Схема:
 ${schemaToPromptBlock(FULL_ANALYSIS_JSON_SCHEMA)}

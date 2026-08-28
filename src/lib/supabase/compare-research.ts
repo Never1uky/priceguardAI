@@ -26,7 +26,7 @@ export async function researchCompareViaEdge(input: {
   sourceMarketplace: ComparisonMarketplace;
   referencePrice?: number;
   sourceUrl?: string;
-  /** Selected / pending MPs — server intersects with VALID (trio + megamarket + aliexpress) */
+  /** Selected / pending MPs — server intersects with VALID (trio + mega + ali + mvideo) */
   targetMarketplaces?: ComparisonMarketplace[];
 }): Promise<Partial<Record<ComparisonMarketplace, MarketplaceOffer>> | null> {
   if (!getSupabaseConfig().configured) return null;
@@ -59,8 +59,12 @@ export async function researchCompareViaEdge(input: {
       } satisfies MarketplaceOffer,
       confidence: c.matchConfidence,
     }));
-    // Mega/Ali: Edge already gates junk; drop residual score≤0 so client falls back to tab
-    if (row.marketplace === 'megamarket' || row.marketplace === 'aliexpress') {
+    // Mega/Ali/M.Video: Edge already gates junk; drop residual score≤0 so client falls back to tab
+    if (
+      row.marketplace === 'megamarket' ||
+      row.marketplace === 'aliexpress' ||
+      row.marketplace === 'mvideo'
+    ) {
       ranked = ranked.filter((r) => r.confidence > 0);
       if (!ranked.length) continue;
     }
@@ -70,6 +74,7 @@ export async function researchCompareViaEdge(input: {
       searchUrl,
       ranked,
       input.title,
+      input.referencePrice,
     );
   }
 

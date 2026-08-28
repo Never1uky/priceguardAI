@@ -36,6 +36,7 @@ const COMPARE_RESEARCH_VALID = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ] as const;
 
 describe('ALI-9 CORE-parity matrix (no Telegram)', () => {
@@ -51,21 +52,21 @@ describe('ALI-9 CORE-parity matrix (no Telegram)', () => {
       expect(isGenericCardMarketplace('aliexpress')).toBe(false);
     });
 
-    it('registry: card+search on, reviews OFF', () => {
+    it('registry: card+search on, reviews tab-DOM on', () => {
       const ali = getMarketplaceEntry('aliexpress');
       expect(ali?.supported).toBe(true);
       expect(ali?.enabledByDefault).toBe(true);
       expect(ali?.capabilities).toEqual({
         search: true,
         card: true,
-        reviews: false,
+        reviews: true,
         costTier: 'tab',
       });
     });
   });
 
   describe('SERP / compare / research', () => {
-    it('defaults «Где искать» include Ali + Mega with CORE trio', () => {
+    it('defaults «Где искать» include Ali + Mega + M.Video with CORE trio', () => {
       expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toEqual(
         expect.arrayContaining([
           'wildberries',
@@ -73,9 +74,10 @@ describe('ALI-9 CORE-parity matrix (no Telegram)', () => {
           'yandex_market',
           'megamarket',
           'aliexpress',
+          'mvideo',
         ]),
       );
-      expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toHaveLength(5);
+      expect(DEFAULT_SEARCH_MARKETPLACE_IDS).toHaveLength(6);
     });
 
     it('Premium unlocker allowlist includes Ali (card-only Scrappey path)', () => {
@@ -141,9 +143,9 @@ describe('ALI-9 CORE-parity matrix (no Telegram)', () => {
     });
   });
 
-  describe('reviews (SKIP)', () => {
-    it('capabilities.reviews stays false — no fake review scraper', () => {
-      expect(getMarketplaceEntry('aliexpress')?.capabilities.reviews).toBe(false);
+  describe('reviews (tab DOM)', () => {
+    it('capabilities.reviews true — Ali card DOM path (no Scrappey)', () => {
+      expect(getMarketplaceEntry('aliexpress')?.capabilities.reviews).toBe(true);
     });
   });
 

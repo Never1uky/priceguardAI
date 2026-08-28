@@ -1,7 +1,7 @@
 /**
  * Shared price scrape cache (TTL 6h) for update-prices / Scrappey / client unlocker.
  * Keys are always bare product_id (no wb-/ozon-/ym- prefix) so cron + /add share hits.
- * Megamarket / AliExpress: bare digits goods/item id (no marketplace prefix).
+ * Megamarket / AliExpress / M.Video: bare digits goods/item id (no marketplace prefix).
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
@@ -10,7 +10,7 @@ import type { Marketplace as CoreMarketplace } from './product-url.ts';
 
 export const PRICE_SCRAPE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-export type CacheMarketplace = CoreMarketplace | 'megamarket' | 'aliexpress';
+export type CacheMarketplace = CoreMarketplace | 'megamarket' | 'aliexpress' | 'mvideo';
 export type CacheWriteSource = 'scrappey' | 'legacy';
 
 export interface CachedFetchedPrice {
@@ -25,7 +25,7 @@ export function bareCacheProductId(
   marketplace: CacheMarketplace,
   productId: string,
 ): string {
-  if (marketplace === 'megamarket') {
+  if (marketplace === 'megamarket' || marketplace === 'mvideo') {
     const digits = productId.replace(/\D/g, '');
     return digits.length >= 6 ? digits : productId.trim();
   }
@@ -37,7 +37,11 @@ export function bareCacheProductId(
 }
 
 function cacheLookupIds(marketplace: CacheMarketplace, productId: string): string[] {
-  if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+  if (
+    marketplace === 'megamarket' ||
+    marketplace === 'aliexpress' ||
+    marketplace === 'mvideo'
+  ) {
     const bare = bareCacheProductId(marketplace, productId);
     return bare ? [bare] : [];
   }

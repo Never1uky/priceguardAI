@@ -47,6 +47,11 @@ export function bareProductArticle(
     const digits = stripped.replace(/\D/g, '');
     return digits.length >= 8 ? digits : stripped;
   }
+  if (marketplace === 'mvideo') {
+    const stripped = raw.replace(/^(mvideo:|mv-|eldorado:)/i, '');
+    const digits = stripped.replace(/\D/g, '');
+    return digits.length >= 6 ? digits : stripped;
+  }
   if (marketplace === 'yandex_market') {
     return raw.replace(/^(yandex_market|yandex|ym)-/i, '');
   }
@@ -90,6 +95,7 @@ export function prefixedStorageId(marketplace: Marketplace, article: string): st
   if (marketplace === 'ozon') return `ozon-${article}`;
   if (marketplace === 'megamarket') return `mm-${article}`;
   if (marketplace === 'aliexpress') return `ae-${article}`;
+  if (marketplace === 'mvideo') return `mv-${article}`;
   if (marketplace === 'yandex_market') return `yandex-${article}`;
   return `${marketplace}-${article}`;
 }

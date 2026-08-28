@@ -1,5 +1,6 @@
 /**
- * Парсинг ссылок WB / Ozon / Яндекс.Маркет для Telegram-бота.
+ * Парсинг ссылок WB / Ozon / Яндекс.Маркет (+ Mega/Ali/M.Video for track sync helpers).
+ * Telegram /add uses detectMarketplace — mvideo intentionally omitted there (MVIDEO OUT OF SCOPE).
  */
 
 export type Marketplace =
@@ -7,7 +8,8 @@ export type Marketplace =
   | 'ozon'
   | 'yandex_market'
   | 'megamarket'
-  | 'aliexpress';
+  | 'aliexpress'
+  | 'mvideo';
 
 export interface ParsedProductLink {
   marketplace: Marketplace;
@@ -31,6 +33,7 @@ export function detectMarketplace(url: string): Marketplace | null {
   if (/market\.yandex\.ru/i.test(url)) return 'yandex_market';
   if (/megamarket\.ru|sbermegamarket\.ru/i.test(url)) return 'megamarket';
   if (/aliexpress\.ru/i.test(url)) return 'aliexpress';
+  // MVIDEO-6: do NOT detect mvideo.ru / eldorado.ru here — keeps Telegram /add OFF.
   return null;
 }
 
@@ -66,6 +69,19 @@ export function extractProductId(url: string, marketplace: Marketplace): string 
     }
     case 'aliexpress': {
       return url.match(/\/item\/(\d{8,})(?:\.html)?/i)?.[1] ?? '';
+    }
+    case 'mvideo': {
+      if (/eldorado\.ru/i.test(url)) {
+        const item = url.match(/\/item\/(\d{6,})/i)?.[1];
+        if (item) return item;
+        const trailing = url.match(
+          /\/(?:cat\/detail|catalog\/product)\/[^/?#]*?(\d{5,})\/?(?:[?#]|$)/i,
+        )?.[1];
+        if (trailing) return trailing;
+      }
+      const fromSlug = url.match(/\/products\/[^/?#]*?(\d{6,})\/?(?:[?#]|$)/i)?.[1];
+      if (fromSlug) return fromSlug;
+      return url.match(/\/products\/(\d{6,})\/?/i)?.[1] ?? '';
     }
     default:
       return '';
@@ -146,6 +162,24 @@ export function normalizeStoredProductUrl(
       return `https://aliexpress.ru/item/${id}.html`;
     }
 
+    if (marketplace === 'mvideo') {
+      u.search = '';
+      const path = u.pathname.replace(/\/$/, '');
+      const host = /eldorado\.ru/i.test(u.hostname)
+        ? `${u.protocol}//${/^www\./i.test(u.hostname) ? u.hostname : `www.${u.hostname}`}`
+        : 'https://www.mvideo.ru';
+      if (/eldorado\.ru/i.test(u.hostname)) {
+        if (/\/(?:cat\/detail|item|catalog\/product)\//i.test(path)) {
+          return `${host}${path}`;
+        }
+        return `${host}/cat/detail/${productId}`;
+      }
+      if (/\/products\//i.test(path)) {
+        return `${host}${path}`;
+      }
+      return `${host}/products/${productId}`;
+    }
+
     // yandex_market
     u.search = '';
     const path = u.pathname.replace(/\/$/, '');
@@ -175,6 +209,10 @@ export function reconstructFallbackUrl(marketplace: Marketplace, productId: stri
   if (marketplace === 'aliexpress') {
     const id = productId.replace(/\D/g, '') || productId;
     return `https://aliexpress.ru/item/${id}.html`;
+  }
+  if (marketplace === 'mvideo') {
+    const id = productId.replace(/\D/g, '') || productId;
+    return `https://www.mvideo.ru/products/${id}`;
   }
   // Без slug карточки /product/{id} часто бесполезен — оставляем как last resort
   return `https://market.yandex.ru/product/${productId}`;

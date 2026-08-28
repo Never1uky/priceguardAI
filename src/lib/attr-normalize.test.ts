@@ -9,6 +9,7 @@ import {
   extractNormalizedRegion,
   extractNormalizedStorage,
   extractNormalizedVolumeMl,
+  isNonFunctionalReplicaTitle,
   normalizeAuthenticity,
   normalizeCondition,
   normalizeConnector,
@@ -94,6 +95,12 @@ describe('attr-normalize', () => {
     expect(normalizeAuthenticity('совместимый')).toBe('compatible');
     expect(normalizeAuthenticity('аналог')).toBe('analog');
     expect(normalizeAuthenticity('реплика')).toBe('replica');
+    expect(normalizeAuthenticity('Муляж телефона Fold8')).toBe('replica');
+    expect(normalizeAuthenticity('имитация смартфона')).toBe('replica');
+    expect(normalizeAuthenticity('реквизит для фотосъемки')).toBe('replica');
+    expect(normalizeAuthenticity('dummy phone mockup')).toBe('replica');
+    expect(isNonFunctionalReplicaTitle('Муляж Samsung Galaxy Z Fold8')).toBe(true);
+    expect(isNonFunctionalReplicaTitle('Смартфон Xiaomi Redmi 15C 8/256')).toBe(false);
 
     expect(normalizeRegion('Global Version')).toBe('global');
     expect(normalizeRegion('Ростест')).toBe('ru');

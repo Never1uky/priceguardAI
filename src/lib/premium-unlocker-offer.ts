@@ -11,13 +11,14 @@ import { trackScrapeCacheHit, trackScrapeRequest } from '@/lib/telemetry/ops';
 import type { ComparisonMarketplace, MarketplaceOffer } from '@/types/comparison';
 import { extractComparisonArticle } from '@/utils/comparison-url';
 
-/** Only these MPs may hit Scrappey (never test MPs / DNS / …). Mega + Ali = card unlocker only. */
+/** Only these MPs may hit Scrappey (never test MPs / DNS / …). Mega/Ali/M.Video = card unlocker. */
 export const PREMIUM_UNLOCKER_MARKETPLACES = [
   'wildberries',
   'ozon',
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ] as const satisfies readonly ComparisonMarketplace[];
 
 export type PremiumUnlockerDenyReason = 'not_core' | 'not_premium' | 'not_selected';
@@ -85,7 +86,7 @@ export async function fetchOfferViaPremiumUnlocker(
     url,
     productId,
     // Prefer shared price_scrape_cache before Scrappey (TTL-gated server-side).
-    // Mega + Ali after MEGA-4 / ALI-4 CHECK widen.
+    // Mega + Ali + M.Video after MEGA-4 / ALI-4 / MVIDEO-4 CHECK widen.
     skipCache: false,
     selectedMarketplaces: selected,
   });

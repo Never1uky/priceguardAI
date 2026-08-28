@@ -9,16 +9,21 @@ import type {
   SearchCandidateOffer,
 } from '@/types/comparison';
 import { MAX_CANDIDATE_POOL } from '@/lib/candidate-pool';
+import { dedupeByCandidateIdentity } from '@/lib/candidate-dedupe';
 import { normalizeMarketplaceRating } from '@/lib/compare-offers';
 import {
   hasLargePriceSpreadAmongClose,
   reorderPickerCandidates,
 } from '@/lib/match-status';
 import { resolveCandidateDisplayTitle } from '@/lib/serp-title';
-import { isProductPageUrl } from '@/lib/product-match';
+import { isProductPageUrl, isAliMegaMarketplace, isAliMegaSerpPriceOutlier } from '@/lib/product-match';
 import { isTitleCategoryCompatible } from '@/lib/match-category';
 import { sanitizeCandidateTitle } from '@/lib/serp-title';
 import { tryUnambiguousSerpVerified } from '@/lib/serp-auto-pick';
+
+/** Honest not_found — do not promise a similar-variants picker. */
+export const NO_CONFIDENT_MATCH_ERROR =
+  'Подходящий товар не найден. Укажите ссылку вручную или измените запрос.';
 
 function notFoundOffer(
   marketplace: ComparisonMarketplace,
@@ -35,7 +40,7 @@ function notFoundOffer(
     url: searchUrl,
     found: false,
     matchStatus: 'not_found',
-    error: error ?? 'Товар не найден',
+    error: error ?? NO_CONFIDENT_MATCH_ERROR,
   };
 }
 
@@ -46,6 +51,7 @@ export function buildOfferFromRankedCandidates(
   searchUrl: string,
   ranked: Array<{ offer: MarketplaceOffer; confidence: number }>,
   referenceTitle?: string,
+  referencePrice?: number,
 ): MarketplaceOffer {
   if (!ranked.length) {
     return notFoundOffer(marketplace, query, searchUrl, 'Подходящий товар не найден в выдаче');
@@ -56,10 +62,21 @@ export function buildOfferFromRankedCandidates(
       ? referenceTitle
       : query;
 
-  const categoryFiltered = ranked.filter((r) =>
+  let categoryFiltered = ranked.filter((r) =>
     isTitleCategoryCompatible(refTitle, r.offer.title ?? ''),
   );
+  // Drop hard score-0 rejects (accessories / junk) before auto-pick / picker
+  categoryFiltered = categoryFiltered.filter((r) => (r.confidence ?? 0) > 0);
+  if (isAliMegaMarketplace(marketplace) && referencePrice != null && referencePrice > 0) {
+    categoryFiltered = categoryFiltered.filter((r) => {
+      const p = r.offer.price;
+      if (p == null || p <= 0) return true;
+      return !isAliMegaSerpPriceOutlier(referencePrice, p);
+    });
+  }
   if (!categoryFiltered.length) {
+    // Prefer needs_choice only when something survived category filter but all scored 0 —
+    // here nothing compatible remains → honest not_found.
     return notFoundOffer(
       marketplace,
       query,
@@ -73,8 +90,18 @@ export function buildOfferFromRankedCandidates(
     confidence: r.confidence,
     price: r.offer.price,
   }));
+  const unique = dedupeByCandidateIdentity(
+    marketplace,
+    withPrice.filter((r) => r.offer.url && isProductPageUrl(r.offer.url)),
+    (r) => r.offer.url,
+    (r) => r.confidence,
+    (r, canonicalUrl) => ({
+      ...r,
+      offer: { ...r.offer, url: canonicalUrl },
+    }),
+  );
   const reordered = reorderPickerCandidates(
-    withPrice,
+    unique,
     refTitle,
     (r) => r.offer.title ?? '',
     (r) => r.confidence,
@@ -84,7 +111,6 @@ export function buildOfferFromRankedCandidates(
 
   const searchCandidates: SearchCandidateOffer[] = reordered
     .slice(0, MAX_CANDIDATE_POOL)
-    .filter((r) => r.offer.url && isProductPageUrl(r.offer.url))
     .map((r, i) => ({
       title: resolveCandidateDisplayTitle({
         serpTitle: sanitizeCandidateTitle(r.offer.title ?? '', undefined, r.offer.url),
@@ -120,6 +146,7 @@ export function buildOfferFromRankedCandidates(
             imageUrl: c.imageUrl,
             rating: c.rating,
           })),
+          { referencePrice },
         )
       : null;
   if (unambiguous) return unambiguous;

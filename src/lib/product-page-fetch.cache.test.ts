@@ -221,4 +221,24 @@ describe('fetchOfferWithFallback cache hygiene', () => {
     expect(fetchOfferViaPremiumUnlocker).not.toHaveBeenCalled();
     expect(safeSendMessage).not.toHaveBeenCalled();
   });
+
+  it('MVIDEO-4: mvideo fresh shared cache skips HiddenBrowser tab', async () => {
+    getSharedPriceCache.mockResolvedValue({
+      price: 24_990,
+      title: 'Mvideo cached phone',
+      url: 'https://www.mvideo.ru/products/smartfon-30066712',
+    });
+
+    const offer = await fetchOfferWithFallback(
+      'https://www.mvideo.ru/products/smartfon-30066712',
+      'mvideo',
+    );
+
+    expect(offer?.price).toBe(24_990);
+    expect(offer?.title).toBe('Mvideo cached phone');
+    expect(getSharedPriceCache).toHaveBeenCalledWith('mvideo', '30066712');
+    expect(acquireHiddenBrowser).not.toHaveBeenCalled();
+    expect(fetchOfferViaPremiumUnlocker).not.toHaveBeenCalled();
+    expect(safeSendMessage).not.toHaveBeenCalled();
+  });
 });

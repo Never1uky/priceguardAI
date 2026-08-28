@@ -61,7 +61,7 @@ export function formatOfferErrorForDisplay(error: string): {
   const queryMatch = trimmed.match(/\(запрос:\s*«([^»]+)»\)/i);
   if (queryMatch || /не найден подходящий|не найден в выдаче|в выдаче не найден/i.test(trimmed)) {
     return {
-      text: 'Точного совпадения нет. Проверьте похожие варианты: название, цвет и память.',
+      text: 'Подходящий товар не найден. Укажите ссылку вручную или измените запрос.',
       title: queryMatch ? `Запрос: ${queryMatch[1]}` : trimmed,
       kind: 'no_confident_match',
       vpnHint: errorSuggestsVpnHint(trimmed),

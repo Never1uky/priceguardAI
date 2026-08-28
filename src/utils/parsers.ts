@@ -6,6 +6,7 @@ import { parseWildberriesProduct } from '@/utils/parsers/wildberries';
 import { parseYandexMarketProduct, scrapeYandexMarketSpecs } from '@/utils/parsers/yandex-market';
 import { parseMegamarketProduct } from '@/utils/parsers/megamarket';
 import { parseAliExpressProduct } from '@/utils/parsers/aliexpress';
+import { parseMvideoProduct } from '@/utils/parsers/mvideo';
 import { parseGenericMarketplaceProduct } from '@/utils/parsers/generic-mp-card';
 import { isGenericCardMarketplace } from '@/lib/marketplaces/adapter-config';
 
@@ -39,6 +40,10 @@ export async function scrapeCurrentPage(): Promise<Product | null> {
 
   if (/aliexpress\.ru/i.test(url)) {
     return parseAliExpressProduct();
+  }
+
+  if (/mvideo\.ru|eldorado\.ru/i.test(url)) {
+    return parseMvideoProduct();
   }
 
   const mp = detectMarketplace(url);

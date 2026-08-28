@@ -4,9 +4,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildAliExpressItemUrl,
+  filterAliProductPrices,
   isAliExpressOutOfStockText,
   parseAliExpressProduct,
+  parseAliPriceNowFromText,
+  pickAliExpressCardPrice,
   plausibleAliArticle,
+  resolveAliExpressProductPrice,
   titleWithBrand,
 } from '@/utils/parsers/aliexpress';
 import { scrapeAliExpressCandidates, pickSearchFromCandidates } from '@/utils/parsers/search-results';
@@ -48,6 +52,42 @@ describe('aliexpress helpers', () => {
   it('OOS text detection', () => {
     expect(isAliExpressOutOfStockText('Товар недоступен')).toBe(true);
     expect(isAliExpressOutOfStockText('В корзину')).toBe(false);
+  });
+
+  it('filterAliProductPrices drops courier fee vs phone price', () => {
+    expect(filterAliProductPrices([280, 16_489, 26_355, 12_713])).toEqual([
+      12_713, 16_489, 26_355,
+    ]);
+    expect(pickAliExpressCardPrice([280, 16_489, 26_355])).toBe(16_489);
+    // Mid-price card: 637 mail must not beat 1999 product
+    expect(filterAliProductPrices([637, 1_999])).toEqual([1_999]);
+    expect(pickAliExpressCardPrice([637, 1_999])).toBe(1_999);
+  });
+
+  it('parseAliPriceNowFromText reads label under current price', () => {
+    expect(
+      parseAliPriceNowFromText('Смартфон\n16 489 ₽\nцена сейчас\nкурьером 280 ₽'),
+    ).toBe(16_489);
+  });
+
+  it('resolveAliExpressProductPrice: LD beats DOM fee; ref recovers price-now', () => {
+    expect(
+      resolveAliExpressProductPrice({ ldPrice: 16_489, domPrice: 280 }),
+    ).toBe(16_489);
+    expect(
+      resolveAliExpressProductPrice({
+        domPrice: 280,
+        priceNow: 16_489,
+        referencePrice: 12_000,
+      }),
+    ).toBe(16_489);
+    expect(
+      resolveAliExpressProductPrice({
+        ldPrice: 16_489,
+        domPrice: 280,
+        referencePrice: 12_000,
+      }),
+    ).toBe(16_489);
   });
 });
 
@@ -144,6 +184,59 @@ describe('parseAliExpressProduct', () => {
     expect(p!.price).toBe(4990);
     expect(p!.article).toBe('1005009999888777');
   });
+
+  it('prefers «цена сейчас» over courier delivery fee', () => {
+    setLocation('https://aliexpress.ru/item/1005008888777666.html');
+    document.body.innerHTML = `
+      <h1>Смартфон Xiaomi Redmi 15C, 8/256ГБ</h1>
+      <div class="product-price">16 489 ₽</div>
+      <div>цена сейчас</div>
+      <div class="price-old">26 355 ₽</div>
+      <div class="delivery-block">
+        <div class="shipping-price">3–5 сентября курьером</div>
+        <div class="price">280 ₽</div>
+      </div>
+    `;
+    const p = parseAliExpressProduct();
+    expect(p!.price).toBe(16_489);
+    expect(p!.price).not.toBe(280);
+  });
+
+  it('product 1999 + mail 637 → 1999 (not shipping)', () => {
+    setLocation('https://aliexpress.ru/item/1005012699704571.html');
+    document.body.innerHTML = `
+      <h1>Муляж телефона Samsung Galaxy Z Fold8</h1>
+      <div class="price">1 999 ₽</div>
+      <div class="shipping">
+        <span>9–14 сентября почтой</span>
+        <span class="price">637 ₽</span>
+      </div>
+    `;
+    const p = parseAliExpressProduct();
+    expect(p!.price).toBe(1_999);
+    expect(p!.price).not.toBe(637);
+  });
+
+  it('JSON-LD retail beats DOM courier fee', () => {
+    setLocation('https://aliexpress.ru/item/1005006123456789.html');
+    document.head.innerHTML = `
+      <script type="application/ld+json">
+      ${JSON.stringify({
+        '@type': 'Product',
+        name: 'Смартфон Xiaomi Redmi 15C',
+        sku: '1005006123456789',
+        offers: { '@type': 'Offer', price: '16489', priceCurrency: 'RUB' },
+      })}
+      </script>
+    `;
+    document.body.innerHTML = `
+      <h1>Смартфон Xiaomi Redmi 15C</h1>
+      <div class="shipping-price price">280 ₽</div>
+      <div>курьером</div>
+    `;
+    const p = parseAliExpressProduct();
+    expect(p!.price).toBe(16_489);
+  });
 });
 
 describe('scrapeAliExpressCandidates', () => {
@@ -228,6 +321,61 @@ describe('aliexpress SERP junk filter (parity with Mega)', () => {
     expect(titles).toMatch(/Pixel\s*10/i);
     expect(titles).not.toMatch(/комод|крабов|чехол/i);
   });
+
+  it('drops Fold муляж when ref is a real phone', () => {
+    const result = pickSearchFromCandidates(
+      'aliexpress',
+      'Xiaomi Redmi 15C',
+      'Смартфон Xiaomi Redmi 15C 8/256',
+      [
+        cand(
+          'Муляж телефона Samsung Galaxy Z Fold8 реквизит для фотосъемки',
+          '1005012699704571',
+          1_999,
+        ),
+        cand('Смартфон Xiaomi Redmi 15C 8/256ГБ', '1005008888777666', 9_200),
+      ],
+      { referencePrice: 9_450 },
+    );
+    const titles = [
+      result.offer.title,
+      ...(result.offer.searchCandidates?.map((c) => c.title) ?? []),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    expect(titles).not.toMatch(/муляж|реквизит|Fold8/i);
+    expect(titles).toMatch(/Redmi\s*15C/i);
+  });
+
+  it('Layer D: among compatible Ali phones, cheaper ranks first in picker', () => {
+    const ref = 'Смартфон Xiaomi Redmi 15C 8/256';
+    const { offer, ranked } = pickSearchFromCandidates(
+      'aliexpress',
+      'Redmi 15C',
+      ref,
+      [
+        cand('Смартфон Xiaomi Redmi 15C 8/256ГБ чёрный', '1005008888777661', 10_800),
+        cand('Смартфон Xiaomi Redmi 15C 8 ГБ/256 ГБ синий', '1005008888777662', 9_200),
+      ],
+      { referencePrice: 9_450 },
+    );
+    expect(offer.matchStatus).not.toBe('not_found');
+    const pool = offer.searchCandidates?.length
+      ? offer.searchCandidates
+      : ranked.map((r) => ({
+          title: r.candidate.title,
+          price: r.candidate.price,
+          url: r.candidate.url,
+        }));
+    expect(pool.length).toBeGreaterThanOrEqual(1);
+    // Cheapest compatible should be first after reorder / priority
+    const priced = pool.filter((c) => c.price != null && c.price > 0);
+    if (priced.length >= 2) {
+      expect(priced[0]!.price).toBeLessThanOrEqual(priced[1]!.price!);
+    }
+    expect(priced.some((c) => c.price === 9_200)).toBe(true);
+    expect(priced.every((c) => c.price !== 1_999)).toBe(true);
+  });
 });
 
 describe('ALI-1/2/3/6 policy guards', () => {
@@ -237,7 +385,7 @@ describe('ALI-1/2/3/6 policy guards', () => {
     expect(getMarketplaceEntry('megamarket')?.enabledByDefault).toBe(true);
     expect(getMarketplaceEntry('lamoda')?.enabledByDefault).toBe(false);
     expect(isGenericCardMarketplace('aliexpress')).toBe(false);
-    expect(isGenericCardMarketplace('mvideo')).toBe(true);
+    expect(isGenericCardMarketplace('mvideo')).toBe(false);
     expect(isPremiumUnlockerMarketplace('aliexpress')).toBe(true);
     expect(isPremiumUnlockerMarketplace('megamarket')).toBe(true);
     expect(prefixedStorageId('aliexpress', '1005001234567890')).toBe('ae-1005001234567890');
@@ -250,6 +398,6 @@ describe('ALI-1/2/3/6 policy guards', () => {
     expect(skipsTelegramAlertsForMarketplace('aliexpress')).toBe(true);
     expect(skipsTelegramAlertsForMarketplace('megamarket')).toBe(true);
     expect(skipsTelegramAlertsForMarketplace('wildberries')).toBe(false);
-    expect(getMarketplaceEntry('aliexpress')?.capabilities.reviews).toBe(false);
+    expect(getMarketplaceEntry('aliexpress')?.capabilities.reviews).toBe(true);
   });
 });

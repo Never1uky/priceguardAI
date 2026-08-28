@@ -149,11 +149,15 @@ async function shouldSkipTelegramForUrl(url: string | undefined): Promise<boolea
 }
 
 /**
- * Megamarket / AliExpress: Chrome/local notifications only — never client Telegram
- * (server monitoring cron also excludes them; MEGA-6 / ALI-6).
+ * Megamarket / AliExpress / M.Video: Chrome/local notifications only — never client Telegram
+ * (server monitoring cron also excludes them; MEGA-6 / ALI-6 / MVIDEO-6).
  */
 export function skipsTelegramAlertsForMarketplace(marketplace: string): boolean {
-  return marketplace === 'megamarket' || marketplace === 'aliexpress';
+  return (
+    marketplace === 'megamarket' ||
+    marketplace === 'aliexpress' ||
+    marketplace === 'mvideo'
+  );
 }
 
 /** Падение цены отслеживаемого товара */

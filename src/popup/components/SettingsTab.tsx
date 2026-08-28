@@ -483,10 +483,10 @@ export function SettingsTab({ onOpenPremium, theme = 'light', onThemeChange }: S
         <SectionLabel>Где искать товары</SectionLabel>
         <Surface className="space-y-2 p-3">
           <p className="pg-caption text-muted-foreground">
-            Выберите площадки для сравнения цен. WB, Ozon, Я.Маркет, Мегамаркет и AliExpress — по
-            умолчанию; остальные — тестовый режим (opt-in). Больше площадок = дольше поиск
+            Выберите площадки для сравнения цен. WB, Ozon, Я.Маркет, Мегамаркет, AliExpress и М.Видео
+            — по умолчанию; остальные — тестовый режим (opt-in). Больше площадок = дольше поиск
             (вкладки). Lamoda — только одежда/обувь; М.Видео включает Эльдорадо. Мониторинг/Telegram
-            для Мегамаркета и AliExpress пока выключен.
+            для Мегамаркета, AliExpress и М.Видео пока выключен.
           </p>
           <ul className="max-h-48 space-y-1.5 overflow-y-auto">
             {MARKETPLACES.map((mp) => {

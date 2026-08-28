@@ -184,4 +184,37 @@ describe('price-identity', () => {
       ).ok,
     ).toBe(true);
   });
+
+  it('mvideo uses mv- storage id and strips mvideo: / products URL', () => {
+    expect(
+      resolveProductArticle({
+        marketplace: 'mvideo',
+        article: '',
+        url: 'https://www.mvideo.ru/products/smartfon-30066712?utm=1',
+        id: 'mvideo:x',
+      }),
+    ).toBe('30066712');
+    expect(
+      stableProductStorageId({
+        marketplace: 'mvideo',
+        article: '30066712',
+        url: 'https://www.mvideo.ru/products/smartfon-30066712',
+        id: 'mvideo:30066712',
+      }),
+    ).toBe('mv-30066712');
+    expect(
+      productsIdentityMatch(
+        {
+          marketplace: 'mvideo',
+          article: '30066712',
+          url: 'https://www.mvideo.ru/products/smartfon-30066712',
+        },
+        {
+          marketplace: 'mvideo',
+          id: 'mv-30066712',
+          url: 'https://www.eldorado.ru/cat/detail/phone-30066712/',
+        },
+      ).ok,
+    ).toBe(true);
+  });
 });

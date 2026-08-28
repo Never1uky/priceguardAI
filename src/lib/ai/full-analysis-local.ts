@@ -9,6 +9,7 @@ import type { FakeRiskLevel, PurchaseVerdict } from '@/types/review-analysis';
 import { VERDICT_LABELS } from '@/types/review-analysis';
 import { analyzeReviewsLocally } from '@/lib/ai/local-fallback';
 import { buildPriceInsightOverlay } from '@/lib/price-insight-overlay';
+import { composeWebOverviewFromAnalysis } from '@/lib/seo/web-overview-enrich';
 
 function normalizeAlternatives(raw?: AnalysisAlternative[]): AnalysisAlternative[] {
   if (!Array.isArray(raw)) return [];
@@ -31,11 +32,26 @@ export function normalizeFullAnalysisResponse(raw: RawFullAnalysisResponse): Ful
 
   const pros = (raw.pros ?? raw.keySpecs ?? []).slice(0, 5);
   const cons = (raw.cons ?? raw.hiddenProblems ?? []).slice(0, 5);
+  const qualitySummary = raw.qualitySummary || 'Недостаточно данных для оценки качества.';
+  const verdictExplanation = raw.verdictExplanation || VERDICT_LABELS[verdict];
+  const keySpecs = (raw.keySpecs ?? pros).slice(0, 5);
+  const priceInsight = raw.priceInsight || 'Анализ цены ограничен.';
+  // Pad short AI webOverview from existing fields (no invented reviews) so SEO gates
+  // can clear when reviewCount is low (Ali/Mega SKIP or sparse reviews).
+  const webOverview = composeWebOverviewFromAnalysis({
+    webOverview: raw.webOverview?.trim() || qualitySummary || '',
+    qualitySummary,
+    verdictExplanation,
+    priceInsight,
+    pros,
+    cons,
+    keySpecs,
+  });
 
   return {
     qualityScore: Math.min(10, Math.max(1, Number(raw.qualityScore) || 5)),
-    qualitySummary: raw.qualitySummary || 'Недостаточно данных для оценки качества.',
-    webOverview: raw.webOverview?.trim() || raw.qualitySummary || '',
+    qualitySummary,
+    webOverview,
     pros,
     cons,
     fakeRisk,
@@ -43,10 +59,10 @@ export function normalizeFullAnalysisResponse(raw: RawFullAnalysisResponse): Ful
     analogComparison: raw.analogComparison || 'Сравнение с аналогами недоступно.',
     alternatives: normalizeAlternatives(raw.alternatives),
     verdict,
-    verdictExplanation: raw.verdictExplanation || VERDICT_LABELS[verdict],
-    keySpecs: (raw.keySpecs ?? pros).slice(0, 5),
+    verdictExplanation,
+    keySpecs,
     hiddenProblems: (raw.hiddenProblems ?? cons).slice(0, 5),
-    priceInsight: raw.priceInsight || 'Анализ цены ограничен.',
+    priceInsight,
     source: 'local',
     providerLabel: 'Локальный анализ',
     analyzedAt: Date.now(),

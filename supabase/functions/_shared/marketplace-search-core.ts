@@ -2,8 +2,8 @@
  * Shared marketplace SERP fetch used by compare-research and the shopping agent.
  * Logic moved out of compare-research/index.ts — do not fork a second search engine.
  *
- * Megamarket / AliExpress: no invented HTTP search API — try public SERP HTML when available;
- * otherwise [] so the client falls back to HiddenBrowser tab (tab-or-available).
+ * Megamarket / AliExpress / M.Video: no invented HTTP search API — try public SERP HTML when
+ * available; otherwise [] so the client falls back to HiddenBrowser tab (tab-or-available).
  */
 
 export type Marketplace =
@@ -11,7 +11,8 @@ export type Marketplace =
   | 'ozon'
   | 'yandex_market'
   | 'megamarket'
-  | 'aliexpress';
+  | 'aliexpress'
+  | 'mvideo';
 
 export type CoreResearchMarketplace = 'wildberries' | 'ozon' | 'yandex_market';
 
@@ -21,6 +22,7 @@ export const COMPARE_RESEARCH_VALID: Marketplace[] = [
   'yandex_market',
   'megamarket',
   'aliexpress',
+  'mvideo',
 ];
 
 export interface SearchCandidate {
@@ -49,14 +51,19 @@ export function megaSerpMatchConfidence(ref: string, cand: string): number {
   const c = cand.trim();
   if (!r || !c) return 0;
 
-  const phoneish = /смартфон|телефон|iphone|pixel|galaxy|redmi|xiaomi|poco|realme|honor|huawei|samsung/i;
+  const phoneish = /смартфон|телефон|iphone|pixel|galaxy|redmi|xiaomi|poco|realme|honor|huawei|samsung|smartphone|ноутбук|laptop|macbook|notebook/i;
   const accessoryJunk =
-    /чехол|стекл[оа]\s*защит|кабель|провод|адаптер|наушник|кейc|\bcase\b|плёнк|пленк/i;
+    /чехол|стекл[оа]\s*защит|кабель|провод|адаптер|наушник|кейc|\bcase\b|\bcover\b|\bsleeve\b|\bpouch\b|\bcharger\b|\badapter\b|\btempered\s+glass\b|\bscreen\s+protector\b|\bcharging\s+cable\b|плёнк|пленк|защитн\w*\s+(?:стекл|плёнк|пленк)|держатель|подставк|сумк\w*\s+для\s+(?:ноут|laptop)|\blaptop\s+(?:sleeve|bag|case)\b/i;
   const furnitureFoodJunk =
     /комод|диван|кровать|шкаф|стол\b|стул|крабов|палочк|йогурт|молоко/i;
-  // Accessories / furniture / food are never a phone SKU match (even if model token overlaps).
-  if (accessoryJunk.test(c) || furnitureFoodJunk.test(c)) {
-    if (phoneish.test(r) || /смартфон|телефон/i.test(r)) return 0;
+  const replicaJunk =
+    /муляж|имитац|реквизит|нефункционал|не\s*рабоч|игрушк|dummy|mockup|display\s*model|реплик|копия/i;
+  // Accessories / furniture / food / dummies are never a phone/laptop SKU match.
+  if (accessoryJunk.test(c) || furnitureFoodJunk.test(c) || replicaJunk.test(c)) {
+    if (phoneish.test(r) || /смартфон|телефон|ноутбук|laptop/i.test(r)) {
+      // Allow when reference itself is a dummy/replica or accessory search
+      if (!replicaJunk.test(r) && !accessoryJunk.test(r)) return 0;
+    }
   }
 
   const storages = (s: string): number[] => {
@@ -90,7 +97,11 @@ export function matchConfidenceForMarketplace(
   referenceTitle: string,
   candidateTitle: string,
 ): number {
-  if (marketplace === 'megamarket' || marketplace === 'aliexpress') {
+  if (
+    marketplace === 'megamarket' ||
+    marketplace === 'aliexpress' ||
+    marketplace === 'mvideo'
+  ) {
     return megaSerpMatchConfidence(referenceTitle, candidateTitle);
   }
   return scoreTitle(referenceTitle, candidateTitle);
@@ -302,6 +313,126 @@ export async function searchAliExpress(
   }
 }
 
+/** Parse M.Video / Eldorado SERP HTML for product tiles (Edge-safe regex). */
+export function parseMvideoSerpHtml(
+  html: string,
+  referenceTitle: string,
+): SearchCandidate[] {
+  if (!html || html.length < 200) return [];
+  const out: SearchCandidate[] = [];
+  const seen = new Set<string>();
+
+  const push = (id: string, titleHint: string, price: number | null, hrefHint?: string) => {
+    const digits = id.replace(/\D/g, '');
+    if (digits.length < 6) return;
+    if (seen.has(digits)) return;
+    const title = (titleHint || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (title.length < 3) return;
+    const matchConfidence = megaSerpMatchConfidence(referenceTitle, title);
+    if (matchConfidence <= 0) return;
+    seen.add(digits);
+    const eldorado = hrefHint && /eldorado\.ru/i.test(hrefHint);
+    const url = eldorado
+      ? `https://www.eldorado.ru/cat/detail/${digits}/`
+      : `https://www.mvideo.ru/products/${digits}`;
+    out.push({
+      title,
+      url,
+      price: price && price > 0 ? price : null,
+      matchConfidence,
+    });
+  };
+
+  // /products/…{id} anchors (mvideo.ru)
+  for (const m of html.matchAll(
+    /href=["']([^"']*\/products\/[^"'?#]+(?:\?[^"']*)?)["'][^>]*>([\s\S]{0,500}?)<\/a>/gi,
+  )) {
+    const href = m[1] ?? '';
+    if (/product-list-page|\/search/i.test(href)) continue;
+    const id = href.match(/\/products\/[^/?#]*?(\d{6,})/i)?.[1];
+    if (!id) continue;
+    const inner = (m[2] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const before = html.slice(Math.max(0, (m.index ?? 0) - 280), m.index ?? 0);
+    const titleAttr =
+      before.match(/title=["']([^"']{4,180})["']/i)?.[1] ||
+      before.match(/alt=["']([^"']{4,180})["']/i)?.[1];
+    const priceRaw =
+      (m[2] ?? '').match(/(\d[\d\s]{1,})\s*(?:₽|руб|RUB)/i)?.[1] ||
+      before.match(/(\d[\d\s]{1,})\s*(?:₽|руб|RUB)/i)?.[1];
+    const price = priceRaw ? Number(priceRaw.replace(/\s/g, '')) : null;
+    push(id, titleAttr || inner, price && Number.isFinite(price) ? price : null, href);
+    if (out.length >= 8) return out;
+  }
+
+  // Eldorado /item/{id} or /cat/detail/…
+  for (const m of html.matchAll(
+    /href=["']([^"']*(?:\/item\/\d+|\/cat\/detail\/[^"'?#]+|\/catalog\/product\/[^"'?#]+)(?:\?[^"']*)?)["'][^>]*>([\s\S]{0,500}?)<\/a>/gi,
+  )) {
+    const href = m[1] ?? '';
+    const id =
+      href.match(/\/item\/(\d{6,})/i)?.[1] ||
+      href.match(/\/(?:cat\/detail|catalog\/product)\/[^/?#]*?(\d{5,})/i)?.[1];
+    if (!id) continue;
+    const inner = (m[2] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const before = html.slice(Math.max(0, (m.index ?? 0) - 280), m.index ?? 0);
+    const titleAttr =
+      before.match(/title=["']([^"']{4,180})["']/i)?.[1] ||
+      before.match(/alt=["']([^"']{4,180})["']/i)?.[1];
+    push(id, titleAttr || inner, null, href);
+    if (out.length >= 8) break;
+  }
+
+  // Bare /products/…{id} without rich anchor body
+  for (const m of html.matchAll(/\/products\/[^/?#]*?(\d{6,})/gi)) {
+    const id = m[1]!;
+    if (seen.has(id)) continue;
+    const start = Math.max(0, (m.index ?? 0) - 120);
+    const window = html.slice(start, (m.index ?? 0) + 220);
+    const title =
+      window.match(/title=["']([^"']{4,180})["']/i)?.[1] ||
+      window.match(/alt=["']([^"']{4,180})["']/i)?.[1] ||
+      '';
+    if (title.length < 3) continue;
+    push(id, title, null);
+    if (out.length >= 8) break;
+  }
+
+  return out.slice(0, 8);
+}
+
+/**
+ * M.Video SERP: attempt public product-list HTML. Antibot → [] (client tab).
+ * Never calls Scrappey for search listings.
+ */
+export async function searchMvideo(
+  query: string,
+  referenceTitle: string,
+): Promise<SearchCandidate[]> {
+  const url = `https://www.mvideo.ru/product-list-page?q=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'ru-RU,ru;q=0.9',
+        'User-Agent': SERP_UA,
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    if (
+      (/captcha|access.?denied|cf-browser-verification|robot.?check/i.test(html) &&
+        html.length < 50_000) ||
+      html.length < 200
+    ) {
+      return [];
+    }
+    return parseMvideoSerpHtml(html, referenceTitle || query);
+  } catch {
+    return [];
+  }
+}
+
 export async function searchWb(query: string, referenceTitle: string): Promise<SearchCandidate[]> {
   const apiUrl =
     `https://search.wb.ru/exactmatch/ru/common/v5/search` +
@@ -431,4 +562,5 @@ export const MARKETPLACE_SEARCHERS: Record<
   yandex_market: searchYm,
   megamarket: searchMegamarket,
   aliexpress: searchAliExpress,
+  mvideo: searchMvideo,
 };
