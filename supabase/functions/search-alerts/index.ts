@@ -1,8 +1,15 @@
-// PriceGuard AI — search-alerts с подробным логированием Telegram.
+// PriceGuard AI — search-alerts (ops Reliability, multi-MP).
+// Ops Telegram only (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID). Not product MP Telegram.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { authorizeCronOrServiceRole } from '../_shared/cron-auth.ts';
+import {
+  evaluateSearchSuccessAlerts,
+  formatSearchSuccessAlertTelegramHtml,
+  resolveSearchSuccessAlertThreshold,
+  type SearchSuccessRate24hRow,
+} from '../_shared/search-success-alerts.ts';
 
 function serviceClient() {
   return createClient(
@@ -82,41 +89,44 @@ Deno.serve(async (req) => {
 
   try {
     const supabase = serviceClient();
-    const threshold = Number(Deno.env.get('WB_SUCCESS_RATE_ALERT_THRESHOLD') ?? '85');
+    const threshold = resolveSearchSuccessAlertThreshold(Deno.env);
 
     const { data, error } = await supabase
-      .from('vw_wb_success_rate_24h')
-      .select('*')
-      .maybeSingle();
+      .from('vw_search_success_rate_24h')
+      .select('*');
 
     if (error) {
-      console.error('[search-alerts] vw_wb_success_rate_24h', error);
+      console.error('[search-alerts] vw_search_success_rate_24h', error);
       return jsonResponse({ ok: false, error: 'Read failed' }, 500);
     }
 
-    const total = Number(data?.total_requests ?? 0);
-    const rate = Number(data?.success_rate_pct ?? 100);
-    const alert = total >= 5 && rate < threshold;
+    const rows = (data ?? []) as SearchSuccessRate24hRow[];
+    const evaluated = evaluateSearchSuccessAlerts(rows, threshold);
+    const wb = evaluated.byMarketplace.find((r) => r.marketplace === 'wildberries');
 
     console.info(
-      `[search-alerts] WB 24h: rate=${rate}% total=${total} threshold=${threshold}% alert=${alert}`,
+      `[search-alerts] 24h threshold=${threshold}% alert=${evaluated.alert} ` +
+        `alerting=[${evaluated.alerting.map((a) => a.marketplace).join(',')}] ` +
+        evaluated.byMarketplace
+          .map((r) => `${r.marketplace}:${r.successRatePct}%(${r.totalRequests})`)
+          .join(' '),
     );
 
     let telegram: TelegramResult = { sent: false, skipped: true };
-    if (alert) {
-      const message =
-        `⚠️ <b>PriceGuard AI</b>\n` +
-        `Поиск Wildberries: success rate <b>${rate}%</b> за 24ч ` +
-        `(порог ${threshold}%, запросов: ${total})`;
+    if (evaluated.alert) {
+      const message = formatSearchSuccessAlertTelegramHtml(evaluated.alerting, threshold);
       telegram = await sendTelegramAlert(message);
     }
 
     return jsonResponse({
       ok: true,
-      alert,
-      wbSuccessRatePct: rate,
-      totalRequests: total,
+      alert: evaluated.alert,
       thresholdPct: threshold,
+      byMarketplace: evaluated.byMarketplace,
+      alertingMarketplaces: evaluated.alerting.map((a) => a.marketplace),
+      // Legacy WB fields for older cron/log consumers
+      wbSuccessRatePct: wb?.successRatePct ?? 100,
+      totalRequests: wb?.totalRequests ?? 0,
       telegramSent: telegram.sent,
       telegramSkipped: telegram.skipped,
       telegramError: telegram.error ?? null,

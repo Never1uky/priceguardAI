@@ -1,6 +1,6 @@
 // PriceGuard AI — дашборд метрик (админ: расширение + landing /ops).
 //
-// Views: vw_search_metrics_daily/weekly, vw_ai_requests, vw_wb_success_rate_24h
+// Views: vw_search_metrics_daily/weekly, vw_ai_requests, vw_search_success_rate_24h
 // Extra aggregates: scrape sources, SEO pages, premium/trial, edge endpoint counts
 //
 // Access: JWT + email in METRICS_ADMIN_EMAILS (fail-closed if unset).
@@ -13,6 +13,11 @@ import {
   buildEconomicsDashboard,
   countScrappeyMonitorScrapes,
 } from '../_shared/economics-dashboard.ts';
+import {
+  evaluateSearchSuccessAlerts,
+  resolveSearchSuccessAlertThreshold,
+  type SearchSuccessRate24hRow,
+} from '../_shared/search-success-alerts.ts';
 
 function serviceClient() {
   return createClient(
@@ -487,7 +492,7 @@ Deno.serve(async (req) => {
       daily,
       weekly,
       ai,
-      wb24h,
+      search24h,
       scrapeRaw,
       seoPublished,
       premiumActive,
@@ -500,7 +505,7 @@ Deno.serve(async (req) => {
       supabase.from('vw_search_metrics_daily').select('*').limit(200),
       supabase.from('vw_search_metrics_weekly').select('*').limit(50),
       supabase.from('vw_ai_requests').select('*').limit(200),
-      supabase.from('vw_wb_success_rate_24h').select('*').maybeSingle(),
+      supabase.from('vw_search_success_rate_24h').select('*'),
       supabase
         .from('price_scrape_cache')
         .select('source')
@@ -540,7 +545,7 @@ Deno.serve(async (req) => {
     if (daily.error) console.error('vw_search_metrics_daily', daily.error);
     if (weekly.error) console.error('vw_search_metrics_weekly', weekly.error);
     if (ai.error) console.error('vw_ai_requests', ai.error);
-    if (wb24h.error) console.error('vw_wb_success_rate_24h', wb24h.error);
+    if (search24h.error) console.error('vw_search_success_rate_24h', search24h.error);
     if (scrapeRaw.error) console.error('price_scrape_cache', scrapeRaw.error);
     if (seoPublished.error) console.error('seo_product_pages', seoPublished.error);
     if (premiumActive.error) console.error('user_premium', premiumActive.error);
@@ -572,9 +577,14 @@ Deno.serve(async (req) => {
       .sort((a, b) => b.count - a.count)
       .slice(0, 12);
 
-    const wbRate = Number(wb24h.data?.success_rate_pct ?? 100);
-    const alertThreshold = Number(Deno.env.get('WB_SUCCESS_RATE_ALERT_THRESHOLD') ?? '85');
-    const wbAlert = wbRate < alertThreshold && Number(wb24h.data?.total_requests ?? 0) >= 5;
+    const alertThreshold = resolveSearchSuccessAlertThreshold(Deno.env);
+    const searchSuccess24h = evaluateSearchSuccessAlerts(
+      (search24h.data ?? []) as SearchSuccessRate24hRow[],
+      alertThreshold,
+    );
+    const wb = searchSuccess24h.byMarketplace.find((r) => r.marketplace === 'wildberries');
+    const wbRate = wb?.successRatePct ?? 100;
+    const wbAlert = Boolean(wb?.alert);
 
     const opsRows = (opsRaw.data ?? []) as OpsRow[];
     const operational = aggregateOperationalMetrics(opsRows);
@@ -605,7 +615,16 @@ Deno.serve(async (req) => {
       searchDaily: daily.data ?? [],
       searchWeekly: weekly.data ?? [],
       aiRequests: ai.data ?? [],
-      wbSuccessRate24h: wb24h.data ?? null,
+      searchSuccessRate24h: searchSuccess24h.byMarketplace,
+      // Legacy WB card shape for older clients
+      wbSuccessRate24h: wb
+        ? {
+            total_requests: wb.totalRequests,
+            successful_requests: wb.successfulRequests,
+            success_rate_pct: wb.successRatePct,
+            avg_response_time_ms: wb.avgResponseTimeMs,
+          }
+        : null,
       scrape: {
         total: scrapeTotal,
         bySource: scrapeBySource,
@@ -624,9 +643,12 @@ Deno.serve(async (req) => {
         sampleCapped: (edgeRaw.data?.length ?? 0) >= 5000,
       },
       alerts: {
+        lowSearchSuccessRate: searchSuccess24h.alert,
+        alertingMarketplaces: searchSuccess24h.alerting.map((a) => a.marketplace),
+        thresholdPct: alertThreshold,
+        // Legacy WB-only flags
         wbLowSuccessRate: wbAlert,
         wbSuccessRatePct: wbRate,
-        thresholdPct: alertThreshold,
       },
       productFunnel: aggregateProductFunnel((funnelRaw.data ?? []) as FunnelRow[]),
       operational,

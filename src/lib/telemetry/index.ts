@@ -26,7 +26,14 @@ export {
 export { readTelemetryEvents, clearTelemetryRing, countTelemetryByLevel } from './ring';
 export { hashQuery, redactUrl, truncateTitle } from './redact';
 export { buildDiagnosticsPackage, diagnosticsJsonString } from './export';
-export { flushRemoteTelemetry, reportSearchMetric, enqueueRemoteTelemetry } from './flush';
+export {
+  flushRemoteTelemetry,
+  reportSearchMetric,
+  enqueueRemoteTelemetry,
+  SEARCH_METRICS_ALLOWED_MARKETPLACES,
+  isSearchMetricsMarketplace,
+} from './flush';
+export type { SearchMetricsMarketplace } from './flush';
 export { telemetry } from './log';
 export type { TelemetryLogInput } from './log';
 export { trackCompareMpAttempt } from './compare-mp-attempt';

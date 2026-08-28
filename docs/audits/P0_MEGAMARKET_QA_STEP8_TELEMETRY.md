@@ -14,9 +14,9 @@
 | Funnel allowlist | `COMPARISON_MARKETPLACE_IDS` → includes `megamarket` | Events keep `marketplace: 'megamarket'` |
 | Ops allowlist (client + Edge `_shared/ops-telemetry`) | Explicit set includes `megamarket` | Search/scrape ops tagged Mega |
 | `telemetry-ingest` `ALLOWED_MARKETPLACES` | Includes `megamarket` | Remote insert keeps label (not null) |
-| Legacy `reportSearchMetric` / `search_metrics` | **Trio only** — Mega early-return | Mega **not** in legacy table (by design) |
+| Legacy `reportSearchMetric` / `search_metrics` | **Trio + Mega + Ali** (2026-08-27) | Reliability rows via `vw_search_metrics_*` |
 
-**Verdict:** Funnel + ops + ingest correctly mark Mega. Legacy search_metrics intentionally omits Mega (no silent mislabel as WB/Ozon/YM).
+**Verdict (updated 2026-08-27):** Funnel + ops + ingest correctly mark Mega. Legacy `search_metrics` now includes `megamarket` / `aliexpress` (same truncated query + URL-slice contract as CORE). Migration `20260827180000_search_metrics_mega_ali.sql`.
 
 ---
 
@@ -34,7 +34,7 @@ Mega uses the **same** funnel/ops paths as CORE — no Mega-specific leak channe
 
 ### Compared to CORE legacy path
 
-`reportSearchMetric` still sends truncated `searchQuery` + `foundProductId` (URL slice) for **trio only**. Mega is **excluded** → Mega avoids that richer legacy payload (privacy-positive vs CORE).
+`reportSearchMetric` sends truncated `searchQuery` (≤300) + `foundProductId` (URL slice ≤64 on Edge) for **trio + Mega + Ali** — same contract as CORE (no title / full browsing history).
 
 ### Residual (pre-existing, not Mega-specific)
 
@@ -57,7 +57,7 @@ Mega uses the **same** funnel/ops paths as CORE — no Mega-specific leak channe
 | Ops `marketplace_search_failed` + `errorCode` / `reason` | e.g. `search_failed`, serp reasons — filterable by MP |
 | Ops `scrape_request` / cache hit-miss | `marketplace` + `source` (`tab` for Mega; Scrappey gated off) |
 | Funnel `comparison_failed` / `failure_reason` | Enum reasons + marketplace string |
-| Legacy `search_metrics` | Mega absent → use `telemetry_events` / ops for Mega ops dashboards |
+| Legacy `search_metrics` | Mega/Ali included → Reliability dashboard + ops `telemetry_events` |
 
 **Verdict:** Mega failures are filterable and not conflated with CORE in allowlisted remote events.
 
@@ -88,7 +88,7 @@ vitest: funnel, ops, redact, browser-label, store-config, ops-telemetry
 ## Gaps / P2 notes (do not block Step 8)
 
 1. No dedicated unit asserting `allowedMarketplace('megamarket')` / ingest remaps — coverage is via registry + shared allowlists.  
-2. Mega ops metrics are invisible in legacy `search_metrics` — query `telemetry_events` where `marketplace = 'megamarket'`.  
+2. ~~Mega invisible in legacy `search_metrics`~~ — **done 2026-08-27** (`SEARCH_METRICS_ALLOWED_MARKETPLACES` + DB CHECK widen).  
 3. Live remote batch with Mega card open **not** exercised (automation antibot / load-extension blocked earlier).
 
 ---
@@ -98,7 +98,7 @@ vitest: funnel, ops, redact, browser-label, store-config, ops-telemetry
 | Gate | Result |
 |------|--------|
 | Mega correctly labeled | **PASS** (funnel/ops/ingest) |
-| No extra URL/title/product vs rules | **PASS** (funnel/ops); Mega skips legacy search_metrics |
+| No extra URL/title/product vs rules | **PASS** (funnel/ops); legacy search_metrics = same truncated contract as CORE |
 | Unexpected PII leakage | **PASS** (none Mega-specific) |
 | Mega errors ≠ CORE | **PASS** |
 | Browser/store labels | **PASS** |

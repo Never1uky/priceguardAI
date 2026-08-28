@@ -5,7 +5,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 
-const VALID_MARKETPLACES = ['wildberries', 'ozon', 'yandex_market'];
+/** Keep in sync with client `SEARCH_METRICS_ALLOWED_MARKETPLACES` (flush.ts). */
+const VALID_MARKETPLACES = [
+  'wildberries',
+  'ozon',
+  'yandex_market',
+  'megamarket',
+  'aliexpress',
+];
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {

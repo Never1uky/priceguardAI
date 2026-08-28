@@ -54,6 +54,15 @@ export interface EconomicsDashboardBlock {
   };
 }
 
+export interface SearchSuccessRate24hRow {
+  marketplace: string;
+  successRatePct: number;
+  totalRequests: number;
+  successfulRequests: number;
+  avgResponseTimeMs: number | null;
+  alert: boolean;
+}
+
 export interface MetricsDashboardData {
   ok: boolean;
   generatedAt: string;
@@ -61,16 +70,22 @@ export interface MetricsDashboardData {
   searchDaily: SearchMetricDailyRow[];
   searchWeekly: SearchMetricDailyRow[];
   aiRequests: AiRequestRow[];
+  /** Per-MP Reliability 24h (WB/Ozon/YM/Mega/Ali). */
+  searchSuccessRate24h?: SearchSuccessRate24hRow[];
+  /** @deprecated Prefer searchSuccessRate24h — WB-only legacy card. */
   wbSuccessRate24h: {
     total_requests: number;
     successful_requests: number;
     success_rate_pct: number;
-    avg_response_time_ms: number;
+    avg_response_time_ms: number | null;
   } | null;
   alerts: {
+    lowSearchSuccessRate?: boolean;
+    alertingMarketplaces?: string[];
+    thresholdPct: number;
+    /** @deprecated Prefer lowSearchSuccessRate / alertingMarketplaces */
     wbLowSuccessRate: boolean;
     wbSuccessRatePct: number;
-    thresholdPct: number;
   };
   economics?: EconomicsDashboardBlock;
   monitoringInventory?: {

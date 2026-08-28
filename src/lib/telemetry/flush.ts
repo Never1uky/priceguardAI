@@ -14,6 +14,21 @@ import {
 
 const BATCH = 20;
 
+/** Legacy Reliability / search_metrics allowlist (trio + Mega + Ali). */
+export const SEARCH_METRICS_ALLOWED_MARKETPLACES = [
+  'wildberries',
+  'ozon',
+  'yandex_market',
+  'megamarket',
+  'aliexpress',
+] as const;
+
+export type SearchMetricsMarketplace = (typeof SEARCH_METRICS_ALLOWED_MARKETPLACES)[number];
+
+export function isSearchMetricsMarketplace(mp: string): mp is SearchMetricsMarketplace {
+  return (SEARCH_METRICS_ALLOWED_MARKETPLACES as readonly string[]).includes(mp);
+}
+
 export async function enqueueRemoteTelemetry(event: TelemetryEvent): Promise<void> {
   await enqueueRemoteTelemetryLocal(event);
   void flushRemoteTelemetry();
@@ -29,7 +44,7 @@ export async function reportSearchMetric(input: {
   deviceId?: string | null;
 }): Promise<void> {
   const mp = input.marketplace;
-  if (mp !== 'wildberries' && mp !== 'ozon' && mp !== 'yandex_market') return;
+  if (!isSearchMetricsMarketplace(mp)) return;
   void callEdgeSafe('search-metrics', {
     marketplace: mp,
     searchQuery: input.searchQuery ? String(input.searchQuery).slice(0, 300) : null,
@@ -90,7 +105,7 @@ export async function flushRemoteTelemetry(): Promise<{ sent: number }> {
         failed.push(item);
         continue;
       }
-      if (e.marketplace === 'wildberries' || e.marketplace === 'ozon' || e.marketplace === 'yandex_market') {
+      if (e.marketplace && isSearchMetricsMarketplace(e.marketplace)) {
         const r = await callEdgeSafe('search-metrics', {
           marketplace: e.marketplace,
           searchQuery: e.queryHash ?? e.name,

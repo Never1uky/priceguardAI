@@ -60,7 +60,9 @@ When **Анонимная аналитика продукта** / cloud toggle i
 2. Batch POST → Edge `telemetry-ingest` → table `telemetry_events` (funnel payloads stripped server-side; `product_id` null for funnel)
 3. Fallback: legacy `search-metrics` for non-funnel marketplace-tagged events only
 
-Also: each search `FINAL_RESULT` soft-writes `search-metrics` (success/latency) without requiring opt-in — reliability metrics, not product funnel.
+Also: each search `FINAL_RESULT` soft-writes `search-metrics` (success/latency) without requiring opt-in — reliability metrics, not product funnel. Allowed marketplaces: `wildberries`, `ozon`, `yandex_market`, `megamarket`, `aliexpress` (`SEARCH_METRICS_ALLOWED_MARKETPLACES`).
+
+Ops cron `search-alerts` watches 24h success for the same five MPs via `vw_search_success_rate_24h` (threshold: `SEARCH_SUCCESS_RATE_ALERT_THRESHOLD` or legacy `WB_SUCCESS_RATE_ALERT_THRESHOLD`, default 85%; min 5 requests). Ops Telegram only — not product MP alerts.
 
 Ops dashboard (`/ops`) section **PRODUCT FUNNEL** aggregates funnel rows via `metrics-dashboard` for 1/7/30d. Does not replace Reliability / Scrappey / Edge AI token cards.
 

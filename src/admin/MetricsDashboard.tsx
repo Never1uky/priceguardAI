@@ -166,9 +166,10 @@ export function MetricsDashboard() {
         return;
       }
       setData(result);
-      if (result.alerts?.wbLowSuccessRate) {
+      const alerting = result.alerts?.alertingMarketplaces ?? [];
+      if (result.alerts?.lowSearchSuccessRate || result.alerts?.wbLowSuccessRate) {
         console.warn(
-          `[PriceGuard Metrics] WB success rate ${result.alerts.wbSuccessRatePct}% < ${result.alerts.thresholdPct}%`,
+          `[PriceGuard Metrics] Search success rate alert: ${alerting.join(',') || 'wildberries'} < ${result.alerts.thresholdPct}%`,
         );
       }
     } catch (err) {
@@ -221,13 +222,14 @@ export function MetricsDashboard() {
           <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
         )}
 
-        {data?.alerts?.wbLowSuccessRate && (
+        {(data?.alerts?.lowSearchSuccessRate || data?.alerts?.wbLowSuccessRate) && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <div>
-              <p className="font-medium">Алерт: поиск Wildberries</p>
+              <p className="font-medium">Алерт: поиск (24ч)</p>
               <p className="text-xs">
-                Success rate {data.alerts.wbSuccessRatePct}% за 24ч (порог {data.alerts.thresholdPct}%)
+                Low success rate: {(data.alerts.alertingMarketplaces ?? ['wildberries']).join(', ')}{' '}
+                (порог {data.alerts.thresholdPct}%, min 5 запросов)
               </p>
             </div>
           </div>
@@ -237,19 +239,23 @@ export function MetricsDashboard() {
           <>
             {data.economics ? <EconomicsSection eco={data.economics} /> : null}
 
-            {data.wbSuccessRate24h && (
-              <Card className="shadow-none">
-                <CardContent className="p-3">
-                  <p className="text-xs font-semibold">WB — последние 24 часа</p>
-                  <p className="mt-1 text-2xl font-bold text-indigo-600">
-                    {data.wbSuccessRate24h.success_rate_pct}%
-                    <span className="ml-2 text-sm font-normal text-muted-foreground">
-                      ({data.wbSuccessRate24h.successful_requests}/{data.wbSuccessRate24h.total_requests})
-                    </span>
-                  </p>
-                </CardContent>
-              </Card>
-            )}
+            <MetricTable
+              title="Reliability — поиск 24ч"
+              rows={(data.searchSuccessRate24h ?? []).map((r) => ({
+                marketplace: r.marketplace,
+                success_rate_pct: r.successRatePct,
+                n: `${r.successfulRequests}/${r.totalRequests}`,
+                avg_ms: r.avgResponseTimeMs ?? '—',
+                alert: r.alert ? '⚠' : '',
+              }))}
+              columns={[
+                { key: 'marketplace', label: 'МП' },
+                { key: 'success_rate_pct', label: 'OK%' },
+                { key: 'n', label: 'n' },
+                { key: 'avg_ms', label: 'avg ms' },
+                { key: 'alert', label: '' },
+              ]}
+            />
 
             <MetricTable
               title="Поиск — по дням (30 дней)"
