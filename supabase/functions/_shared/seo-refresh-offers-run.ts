@@ -16,6 +16,19 @@ import type { SeoOfferSnapshot } from './seo-publish-core.ts';
 import { seoRevalidatePaths } from './seo-publish-core.ts';
 import { seoPublishableIds } from './seo-marketplaces.ts';
 
+
+/** Count offers with a positive price in a snapshot (array or unknown). */
+export function countPricedOffers(offers: unknown): number {
+  if (!Array.isArray(offers)) return 0;
+  let n = 0;
+  for (const o of offers) {
+    if (!o || typeof o !== 'object') continue;
+    const price = (o as { price?: unknown }).price;
+    if (price != null && Number(price) > 0) n += 1;
+  }
+  return n;
+}
+
 const VALID_MPS = new Set(seoPublishableIds());
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 100;
@@ -24,7 +37,7 @@ export interface SeoRefreshOffersItemResult {
   slug: string;
   productKey: string;
   updated: boolean;
-  skipped?: 'unchanged' | 'bad_marketplace' | 'alias';
+  skipped?: 'unchanged' | 'bad_marketplace' | 'alias' | 'worse_offers';
   error?: string;
 }
 
@@ -131,6 +144,20 @@ export async function refreshOffersForRow(
     offers: loaded,
   });
 
+  const oldPriced = countPricedOffers(row.offers_snapshot);
+  const newPriced = countPricedOffers(offers);
+  const oldPriceOk = row.price_current != null && Number(row.price_current) > 0;
+  const newPriceOk = scrape.price != null && Number(scrape.price) > 0;
+  // Never wipe a priced snapshot with an empty/null-price refresh (stale cache / missing mappings).
+  if ((oldPriced > 0 || oldPriceOk) && newPriced === 0 && !newPriceOk) {
+    return {
+      slug: row.slug,
+      productKey: row.product_key,
+      updated: false,
+      skipped: 'worse_offers',
+    };
+  }
+
   const before = offersFingerprint(row.offers_snapshot, row.price_current, row.product_url);
   const after = offersFingerprint(offers, scrape.price, scrape.url ?? row.product_url);
   if (before === after) {
@@ -143,9 +170,13 @@ export async function refreshOffersForRow(
   }
 
   const nowIso = new Date().toISOString();
+  const nextPrice =
+    scrape.price != null && Number(scrape.price) > 0
+      ? Number(scrape.price)
+      : row.price_current;
   const patch: Record<string, unknown> = {
     offers_snapshot: offers,
-    price_current: scrape.price,
+    price_current: nextPrice,
     updated_at: nowIso,
   };
   if (scrape.url) patch.product_url = scrape.url;

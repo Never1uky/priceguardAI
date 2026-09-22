@@ -61,7 +61,8 @@ export async function loadOffersSnapshot(
   const offers: SeoOfferSnapshot[] = [];
 
   const source = await loadSourcePrice(supabase, marketplace, bare);
-  if (source.url || (source.price != null && source.price > 0)) {
+  // Only keep source offer when we have a real price (url-only rows wipe SEO tables).
+  if (source.price != null && source.price > 0) {
     offers.push({
       marketplace,
       productId: bare,
@@ -122,6 +123,10 @@ export async function loadOffersSnapshot(
           break;
         }
         if (data?.url && !url) url = String(data.url);
+      }
+      // Prefer priced offers only; url-without-price pollutes SEO tables.
+      if (!(price != null && price > 0)) {
+        continue;
       }
       offers.push({
         marketplace: target,

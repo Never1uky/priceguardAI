@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeSeoOffers, SEO_MAX_OFFERS, type SeoOfferSnapshot } from './seo-publish-core.ts';
+import { countPricedOffers } from './seo-refresh-offers-run.ts';
 
 describe('mergeSeoOffers', () => {
   it('CASE 1: single marketplace offer', () => {
@@ -90,5 +91,22 @@ describe('mergeSeoOffers', () => {
       price: i,
     }));
     expect(mergeSeoOffers(many).length).toBeLessThanOrEqual(SEO_MAX_OFFERS);
+  });
+});
+
+describe('countPricedOffers', () => {
+  it('counts only positive prices', () => {
+    expect(
+      countPricedOffers([
+        { marketplace: 'ozon', productId: '1', url: 'u', price: 100 },
+        { marketplace: 'wildberries', productId: '2', url: 'u2', price: null },
+        { marketplace: 'yandex_market', productId: '3', url: 'u3', price: 0 },
+      ]),
+    ).toBe(1);
+  });
+
+  it('returns 0 for non-arrays', () => {
+    expect(countPricedOffers(null)).toBe(0);
+    expect(countPricedOffers({})).toBe(0);
   });
 });
