@@ -272,7 +272,7 @@ export async function runSeoRefreshOffersBatch(
         .range(offset, offset + limit - 1);
     }
     const retry = await fallback;
-    data = retry.data;
+    data = retry.data as typeof data;
     error = retry.error;
   }
 

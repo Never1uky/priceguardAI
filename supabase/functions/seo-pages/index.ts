@@ -78,7 +78,7 @@ function clientKey(req: Request): string {
 }
 
 function listItem(row: Record<string, unknown>) {
-  const snap = row.analysis_snapshot as Record<string, unknown> | null | undefined;
+  const snap = row.analysis_snapshot as unknown as Record<string, unknown> | null | undefined;
   const summary =
     typeof snap?.qualitySummary === 'string' ? snap.qualitySummary.slice(0, 220) : null;
   const rawTitle = String(row.title ?? '');
@@ -289,9 +289,14 @@ Deno.serve(async (req) => {
       }
       if (!data) return jsonResponse({ ok: false, error: 'Not found' }, 404);
 
+      const row = data as unknown as {
+        is_primary?: boolean | null;
+        primary_slug?: string | null;
+        [k: string]: unknown;
+      };
       const primarySlug =
-        data.is_primary === false && data.primary_slug
-          ? String(data.primary_slug)
+        row.is_primary === false && row.primary_slug
+          ? String(row.primary_slug)
           : null;
       if (primarySlug && primarySlug !== slug) {
       const { data: primary } = await supabase
@@ -301,7 +306,7 @@ Deno.serve(async (req) => {
           .eq('publish_status', 'published')
           .maybeSingle();
         if (primary) {
-          const page = detailItem(primary as Record<string, unknown>);
+          const page = detailItem(primary as unknown as Record<string, unknown>);
           return jsonResponse({
             ok: true,
             page,
@@ -311,7 +316,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      const page = detailItem(data as Record<string, unknown>) as {
+      const page = detailItem(row as unknown as Record<string, unknown>) as {
         slug: string;
         analysis: Record<string, unknown> | null;
         [k: string]: unknown;
@@ -359,7 +364,7 @@ Deno.serve(async (req) => {
         console.error('[seo-pages] brand', error);
         return jsonResponse({ ok: false, error: 'Read failed' }, 500);
       }
-      const items = (data ?? []).map((r) => listItem(r as Record<string, unknown>));
+      const items = (data ?? []).map((r) => listItem(r as unknown as Record<string, unknown>));
       return jsonResponse({ ok: true, brandSlug, items });
     }
 
@@ -396,7 +401,7 @@ Deno.serve(async (req) => {
         console.error('[seo-pages] category', error);
         return jsonResponse({ ok: false, error: 'Read failed' }, 500);
       }
-      const items = (data ?? []).map((r) => listItem(r as Record<string, unknown>));
+      const items = (data ?? []).map((r) => listItem(r as unknown as Record<string, unknown>));
       return jsonResponse({ ok: true, categorySlug, items });
     }
 
@@ -426,11 +431,11 @@ Deno.serve(async (req) => {
           console.error('[seo-pages] search fallback', fbErr);
           return jsonResponse({ ok: false, error: 'Search failed' }, 500);
         }
-        const items = (fallback ?? []).map((r) => listItem(r as Record<string, unknown>));
+        const items = (fallback ?? []).map((r) => listItem(r as unknown as Record<string, unknown>));
         return jsonResponse({ ok: true, q, items, fallback: true });
       }
 
-      const items = (data ?? []).map((r) => listItem(r as Record<string, unknown>));
+      const items = (data ?? []).map((r) => listItem(r as unknown as Record<string, unknown>));
       return jsonResponse({ ok: true, q, items });
     }
 
@@ -483,7 +488,7 @@ Deno.serve(async (req) => {
           return jsonResponse({ ok: false, error: 'Read failed' }, 500);
         }
         for (const r of data ?? []) {
-          const item = listItem(r as Record<string, unknown>);
+          const item = listItem(r as unknown as Record<string, unknown>);
           bySlug.set(String(item.slug), item);
         }
       }
@@ -513,7 +518,7 @@ Deno.serve(async (req) => {
           if (useCanonColumns) peerQuery = peerQuery.eq('is_primary', true);
           const { data: peer } = await peerQuery.maybeSingle();
           if (peer) {
-            const item = listItem(peer as Record<string, unknown>);
+            const item = listItem(peer as unknown as Record<string, unknown>);
             bySlug.set(String(item.slug), item);
           }
         }
@@ -556,7 +561,7 @@ Deno.serve(async (req) => {
         console.error('[seo-pages] latest', error);
         return jsonResponse({ ok: false, error: 'Read failed' }, 500);
       }
-      const items = (data ?? []).map((r) => listItem(r as Record<string, unknown>));
+      const items = (data ?? []).map((r) => listItem(r as unknown as Record<string, unknown>));
       return jsonResponse({ ok: true, items });
     }
 

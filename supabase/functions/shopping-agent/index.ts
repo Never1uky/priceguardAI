@@ -7,7 +7,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-import { isAgentDailyCapped } from '../_shared/agent-budget.ts';
+import { isAgentDailyCapped, type AgentBudgetCountClient } from '../_shared/agent-budget.ts';
 import { runAgentSearch } from '../_shared/agent-orchestrator.ts';
 import { requireAuthUser } from '../_shared/auth.ts';
 import { corsHeaders, jsonResponse } from '../_shared/utils.ts';
@@ -75,7 +75,7 @@ async function handlePost(req: Request, userId: string): Promise<Response> {
 
   const supabase = serviceClient();
 
-  if (await isAgentDailyCapped(supabase, userId)) {
+  if (await isAgentDailyCapped(supabase as unknown as AgentBudgetCountClient, userId)) {
     return jsonResponse(
       {
         ok: false,
@@ -105,7 +105,7 @@ async function handlePost(req: Request, userId: string): Promise<Response> {
 
   const searchId = String(data.id);
   runInBackground(
-    runAgentSearch(supabase, userId, query, searchId).catch((err) => {
+    runAgentSearch(supabase as unknown as Parameters<typeof runAgentSearch>[0], userId, query, searchId).catch((err) => {
       console.error('[shopping-agent] run', err);
     }),
   );
